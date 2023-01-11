@@ -49,7 +49,7 @@ pub fn fetch_item<I: StorageItem, S: NorFlash>(
             // To recover, we will just erase all the flash.
             flash
                 .erase(flash_range.start, flash_range.end)
-                .map_err(|e| Error::Storage(e))?;
+                .map_err(Error::Storage)?;
             return Ok(None);
         }
     }
@@ -139,7 +139,7 @@ pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
 
                 flash
                     .write(last_start_address, &buffer[..used_bytes])
-                    .map_err(|e| Error::Storage(e))?;
+                    .map_err(Error::Storage)?;
                 return Ok(());
             }
             Err(e) if e.is_buffer_too_small() => {
@@ -175,13 +175,13 @@ pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
                         calculate_page_address::<S>(flash_range.clone(), next_page_to_use),
                         &mut page_cache_buffer,
                     )
-                    .map_err(|e| Error::Storage(e))?;
+                    .map_err(Error::Storage)?;
                 flash
                     .erase(
                         calculate_page_address::<S>(flash_range.clone(), next_page_to_use),
                         calculate_page_end_address::<S>(flash_range.clone(), next_page_to_use),
                     )
-                    .map_err(|e| Error::Storage(e))?;
+                    .map_err(Error::Storage)?;
 
                 partial_close_page::<I, S>(flash, flash_range.clone(), next_page_to_use)?;
 
@@ -194,7 +194,7 @@ pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
 
                 while !old_data_slice.iter().all(|b| *b == 0xFF) {
                     let (item, mut used_bytes) =
-                        I::deserialize_from(old_data_slice).map_err(|e| Error::Item(e))?;
+                        I::deserialize_from(old_data_slice).map_err(Error::Item)?;
 
                     if fetch_item::<I, S>(flash, flash_range.clone(), item.key())?.is_none() {
                         store_item::<I, S, PAGE_BUFFER_SIZE>(flash, flash_range.clone(), item)?;
@@ -221,7 +221,7 @@ pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
                         // Let's recover
                         flash
                             .erase(flash_range.start, flash_range.end)
-                            .map_err(|e| Error::Storage(e))?;
+                            .map_err(Error::Storage)?;
 
                         0
                     }
@@ -232,7 +232,7 @@ pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
     }
 
     // If we get here, we just freshly partially closed a new page, so this should succeed
-    store_item::<I, S, PAGE_BUFFER_SIZE>(flash, flash_range.clone(), item)
+    store_item::<I, S, PAGE_BUFFER_SIZE>(flash, flash_range, item)
 }
 
 fn find_first_page<I: StorageItem, S: NorFlash>(
@@ -296,7 +296,7 @@ fn get_page_state<I: StorageItem, S: NorFlash>(
     let mut buffer = [0; 16];
     flash
         .read(page_address, &mut buffer[..S::READ_SIZE])
-        .map_err(|e| Error::Storage(e))?;
+        .map_err(Error::Storage)?;
     let start_marker = buffer[0];
 
     if start_marker != MARKER {
@@ -312,7 +312,7 @@ fn get_page_state<I: StorageItem, S: NorFlash>(
             page_address + (S::ERASE_SIZE - S::READ_SIZE) as u32,
             &mut buffer[..S::READ_SIZE],
         )
-        .map_err(|e| Error::Storage(e))?;
+        .map_err(Error::Storage)?;
     let end_marker = buffer[S::READ_SIZE - 1];
 
     if end_marker != MARKER {
@@ -321,7 +321,7 @@ fn get_page_state<I: StorageItem, S: NorFlash>(
     }
 
     // Both start and end are marked, so this page is closed
-    return Ok(PageState::Closed);
+    Ok(PageState::Closed)
 }
 
 fn read_page_items<I: StorageItem, S: NorFlash>(
@@ -344,7 +344,7 @@ fn read_page_items<I: StorageItem, S: NorFlash>(
             page_data_start_address,
             &mut read_buffer[0..(page_data_end_address - page_data_start_address) as usize],
         )
-        .map_err(|e| Error::Storage(e))?;
+        .map_err(Error::Storage)?;
 
     Ok(core::iter::from_fn(move || {
         // Now we deserialize the items from the buffer one by one
@@ -385,7 +385,7 @@ fn read_page_items<I: StorageItem, S: NorFlash>(
 
                 if let Err(e) = flash
                     .read(replenish_start_address, read_slice)
-                    .map_err(|e| Error::Storage(e))
+                    .map_err(Error::Storage)
                 {
                     return Some(Err(e));
                 }
@@ -399,7 +399,7 @@ fn read_page_items<I: StorageItem, S: NorFlash>(
                 // To recover, we erase the flash.
                 if let Err(e) = flash
                     .erase(flash_range.start, flash_range.end)
-                    .map_err(|e| Error::Storage(e))
+                    .map_err(Error::Storage)
                 {
                     return Some(Err(e));
                 }
@@ -423,14 +423,14 @@ fn close_page<I: StorageItem, S: NorFlash>(
         return Ok(());
     }
 
-    let mut buffer = [MARKER; 16];
+    let buffer = [MARKER; 16];
     // Close the end marker
     flash
         .write(
-            calculate_page_end_address::<S>(flash_range.clone(), page_index) - S::WRITE_SIZE as u32,
-            &mut buffer[..S::WRITE_SIZE],
+            calculate_page_end_address::<S>(flash_range, page_index) - S::WRITE_SIZE as u32,
+            &buffer[..S::WRITE_SIZE],
         )
-        .map_err(|e| Error::Storage(e))?;
+        .map_err(Error::Storage)?;
 
     Ok(())
 }
@@ -447,14 +447,14 @@ fn partial_close_page<I: StorageItem, S: NorFlash>(
         return Ok(());
     }
 
-    let mut buffer = [MARKER; 16];
+    let buffer = [MARKER; 16];
     // Close the start marker
     flash
         .write(
-            calculate_page_address::<S>(flash_range.clone(), page_index),
-            &mut buffer[..S::WRITE_SIZE],
+            calculate_page_address::<S>(flash_range, page_index),
+            &buffer[..S::WRITE_SIZE],
         )
-        .map_err(|e| Error::Storage(e))?;
+        .map_err(Error::Storage)?;
 
     Ok(())
 }
@@ -518,10 +518,7 @@ mod tests {
 
     impl StorageItemError for MockStorageItemError {
         fn is_buffer_too_small(&self) -> bool {
-            match self {
-                MockStorageItemError::BufferTooSmall => true,
-                _ => false,
-            }
+            matches!(self, MockStorageItemError::BufferTooSmall)
         }
     }
 
