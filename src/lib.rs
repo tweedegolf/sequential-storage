@@ -386,7 +386,7 @@ fn read_page_items<I: StorageItem, S: NorFlash>(
                 let (read_slice, fill_slice) = replenish_slice
                     .split_at_mut((unread_bytes_left_in_page as usize).min(replenish_slice.len()));
 
-                if read_slice.len() > 0 {
+                if !read_slice.is_empty() {
                     if let Err(e) = flash
                         .read(replenish_start_address, read_slice)
                         .map_err(Error::Storage)
