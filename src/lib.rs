@@ -129,7 +129,7 @@ pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
         let available_bytes_in_page = (page_data_end_address - last_start_address) as usize;
 
         let mut buffer = [0xFF; MAX_STORAGE_ITEM_SIZE];
-        match item.serialize_into(&mut buffer[..available_bytes_in_page]) {
+        match item.serialize_into(&mut buffer[..MAX_STORAGE_ITEM_SIZE.min(available_bytes_in_page)]) {
             Ok(mut used_bytes) => {
                 // The item fits, so let's write it to flash
                 // We must round up the used size because we can only write with full words
@@ -342,7 +342,7 @@ fn read_page_items<I: StorageItem, S: NorFlash>(
     flash
         .read(
             page_data_start_address,
-            &mut read_buffer[0..(page_data_end_address - page_data_start_address) as usize],
+            &mut read_buffer[0..MAX_STORAGE_ITEM_SIZE.min((page_data_end_address - page_data_start_address) as usize)],
         )
         .map_err(Error::Storage)?;
 
@@ -378,16 +378,18 @@ fn read_page_items<I: StorageItem, S: NorFlash>(
                     + MAX_STORAGE_ITEM_SIZE as u32
                     - used_bytes as u32;
 
-                let unread_bytes_left_in_page = page_data_end_address - replenish_start_address;
+                let unread_bytes_left_in_page = page_data_end_address.saturating_sub(replenish_start_address);
 
                 let (read_slice, fill_slice) = replenish_slice
                     .split_at_mut((unread_bytes_left_in_page as usize).min(replenish_slice.len()));
 
-                if let Err(e) = flash
-                    .read(replenish_start_address, read_slice)
-                    .map_err(Error::Storage)
-                {
-                    return Some(Err(e));
+                if read_slice.len() > 0 {
+                    if let Err(e) = flash
+                        .read(replenish_start_address, read_slice)
+                        .map_err(Error::Storage)
+                    {
+                        return Some(Err(e));
+                    }
                 }
                 fill_slice.fill(0xFF);
 
@@ -504,7 +506,9 @@ mod tests {
     use super::*;
 
     type MockFlash = mock_flash::MockFlashBase<4, 4, 64>;
+    type MockFlashBig = mock_flash::MockFlashBase<4, 4, 256>;
 
+    #[derive(Debug, PartialEq, Eq)]
     struct MockStorageItem {
         key: u8,
         value: u8,
@@ -663,5 +667,58 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn store_and_fetch() {
+        let mut flash = MockFlashBig::new();
+        let flash_range = 0x000..0x1000;
+
+        let item = fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), 0).unwrap();
+        assert_eq!(item, None);
+
+        let item = fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), 60).unwrap();
+        assert_eq!(item, None);
+
+        let item = fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), 0xFF).unwrap();
+        assert_eq!(item, None);
+
+
+        store_item::<_, _, 1024>(&mut flash, flash_range.clone(), MockStorageItem { key: 0, value: 5 }).unwrap();
+        store_item::<_, _, 1024>(&mut flash, flash_range.clone(), MockStorageItem { key: 0, value: 6 }).unwrap();
+
+        let item = fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), 0).unwrap().unwrap();
+        assert_eq!(item.key, 0);
+        assert_eq!(item.value, 6);
+
+        store_item::<_, _, 1024>(&mut flash, flash_range.clone(), MockStorageItem { key: 1, value: 2 }).unwrap();
+
+        let item = fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), 0).unwrap().unwrap();
+        assert_eq!(item.key, 0);
+        assert_eq!(item.value, 6);
+
+        let item = fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), 1).unwrap().unwrap();
+        assert_eq!(item.key, 1);
+        assert_eq!(item.value, 2);
+
+        for index in 0..4000 {
+            store_item::<_, _, 1024>(&mut flash, flash_range.clone(), MockStorageItem { key: (index % 10) as u8, value: (index % 10) as u8 * 2 }).unwrap();
+        }
+
+        for i in 0..10 {
+            let item = fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), i).unwrap().unwrap();
+            assert_eq!(item.key, i);
+            assert_eq!(item.value, i * 2);
+        }
+
+        for _ in 0..4000 {
+            store_item::<_, _, 1024>(&mut flash, flash_range.clone(), MockStorageItem { key: 11, value: 0 }).unwrap();
+        }
+
+        for i in 0..10 {
+            let item = fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), i).unwrap().unwrap();
+            assert_eq!(item.key, i);
+            assert_eq!(item.value, i * 2);
+        }
     }
 }
