@@ -1,4 +1,6 @@
 #![cfg_attr(not(test), no_std)]
+#![deny(missing_docs)]
+#![doc = include_str!("../README.md")]
 
 // Assumptions made in this crate:
 //
@@ -12,6 +14,10 @@ use embedded_storage::nor_flash::NorFlash;
 #[cfg(test)]
 mod mock_flash;
 
+/// Get a storage item from the flash.
+/// Only the last stored item of the given key is returned.
+///
+/// If no value with the key is found, None is returned.
 pub fn fetch_item<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
@@ -89,6 +95,11 @@ pub fn fetch_item<I: StorageItem, S: NorFlash>(
     Ok(newest_found_item)
 }
 
+/// Store an item into flash memory.
+/// It will overwrite the last value that has the same key.
+/// 
+/// Because const-generics are not fully done in Rust yet, you will have to provide the `PAGE_BUFFER_SIZE`, which has
+/// to be the same value as the `ERASE_SIZE` of the flash.
 pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
     flash: &mut S,
     flash_range: Range<u32>,
@@ -481,26 +492,41 @@ const MARKER: u8 = 0;
 /// The given buffer to serialize in and deserialize from is never bigger than [MAX_STORAGE_ITEM_SIZE] bytes, so make sure the item is
 /// smaller than that.
 pub trait StorageItem {
+    /// The key type of the key-value pair
     type Key: Eq;
+    /// The error type for serialization and deserialization
     type Error: StorageItemError;
 
+    /// Serialize the key-value item into the given buffer.
+    /// Returns the number of bytes the buffer was filled with or an error.
+    ///
+    /// The serialized bytes must not all be `0xFF`. One way to prevent this is to serialize an extra 0 byte at the end if that is the case.
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, Self::Error>;
+    /// Deserialize the key-value item from the given buffer.
+    /// The buffer is likely bigger than the size of the item.
     fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), Self::Error>
     where
         Self: Sized;
 
+    /// The key of the key-value item. It is used by the storage to know what the key of this item is.
     fn key(&self) -> Self::Key;
 }
 
+/// The maximum size in bytes that a storage item can be
 pub const MAX_STORAGE_ITEM_SIZE: usize = 512;
 
+/// A trait that the storage item error needs to implement
 pub trait StorageItemError: Debug {
+    /// Returns true if the error indicates that the buffer is too small to contain the storage item
     fn is_buffer_too_small(&self) -> bool;
 }
 
+/// The main error type
 #[derive(Debug)]
 pub enum Error<I, S> {
+    /// A storage item error
     Item(I),
+    /// An error in the storage (flash)
     Storage(S),
 }
 
