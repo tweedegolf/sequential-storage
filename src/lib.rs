@@ -97,7 +97,7 @@ pub fn fetch_item<I: StorageItem, S: NorFlash>(
 
 /// Store an item into flash memory.
 /// It will overwrite the last value that has the same key.
-/// 
+///
 /// Because const-generics are not fully done in Rust yet, you will have to provide the `PAGE_BUFFER_SIZE`, which has
 /// to be the same value as the `ERASE_SIZE` of the flash.
 pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
@@ -113,118 +113,141 @@ pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
 
     assert_eq!(PAGE_BUFFER_SIZE, S::ERASE_SIZE);
 
-    let mut next_page_to_use = None;
+    return store_item_inner::<I, S, PAGE_BUFFER_SIZE>(flash, flash_range, item, 0);
 
-    // If there is a partial open page, we try to write in that first if there is enough space
-    if let Some(partial_open_page) =
-        find_first_page::<I, S>(flash, flash_range.clone(), 0, PageState::PartialOpen)?
-    {
-        // We've got to search where the free space is since the page starts with items present already
-
-        let page_data_start_address =
-            calculate_page_address::<S>(flash_range.clone(), partial_open_page)
-                + S::WRITE_SIZE as u32;
-        let page_data_end_address =
-            calculate_page_end_address::<S>(flash_range.clone(), partial_open_page)
-                - S::WRITE_SIZE as u32;
-
-        let mut last_start_address = page_data_start_address;
-
-        for found_item_result in
-            read_page_items::<I, S>(flash, flash_range.clone(), partial_open_page)?
-        {
-            let (_, item_address, item_size) = found_item_result?;
-            last_start_address = item_address + item_size as u32;
+    fn store_item_inner<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
+        flash: &mut S,
+        flash_range: Range<u32>,
+        item: I,
+        recursion_level: usize,
+    ) -> Result<(), Error<I::Error, S::Error>> {
+        // Check if we're in an infinite recursion which happens when
+        if recursion_level == get_pages::<S>(flash_range.clone(), 0).count() {
+            return Err(Error::FullStorage);
         }
 
-        let available_bytes_in_page = (page_data_end_address - last_start_address) as usize;
+        let mut next_page_to_use = None;
 
-        let mut buffer = [0xFF; MAX_STORAGE_ITEM_SIZE];
-        match item.serialize_into(&mut buffer[..MAX_STORAGE_ITEM_SIZE.min(available_bytes_in_page)])
+        // If there is a partial open page, we try to write in that first if there is enough space
+        if let Some(partial_open_page) =
+            find_first_page::<I, S>(flash, flash_range.clone(), 0, PageState::PartialOpen)?
         {
-            Ok(mut used_bytes) => {
-                // The item fits, so let's write it to flash
-                // We must round up the used size because we can only write with full words
-                if used_bytes % S::WRITE_SIZE > 0 {
-                    used_bytes += S::WRITE_SIZE - (used_bytes % S::WRITE_SIZE);
-                }
+            // We've got to search where the free space is since the page starts with items present already
 
-                flash
-                    .write(last_start_address, &buffer[..used_bytes])
-                    .map_err(Error::Storage)?;
-                return Ok(());
+            let page_data_start_address =
+                calculate_page_address::<S>(flash_range.clone(), partial_open_page)
+                    + S::WRITE_SIZE as u32;
+            let page_data_end_address =
+                calculate_page_end_address::<S>(flash_range.clone(), partial_open_page)
+                    - S::WRITE_SIZE as u32;
+
+            let mut last_start_address = page_data_start_address;
+
+            for found_item_result in
+                read_page_items::<I, S>(flash, flash_range.clone(), partial_open_page)?
+            {
+                let (_, item_address, item_size) = found_item_result?;
+                last_start_address = item_address + item_size as u32;
             }
-            Err(e) if e.is_buffer_too_small() => {
-                // The item doesn't fit here, so we need to close this page and move to the next
-                close_page::<I, S>(flash, flash_range.clone(), partial_open_page)?;
-                next_page_to_use = Some(next_page::<S>(flash_range.clone(), partial_open_page));
-            }
-            Err(e) => {
-                return Err(Error::Item(e));
-            }
-        }
-    }
 
-    // If we get here, there was no partial page found or the partial page has now been closed because the item didn't fit.
-    // If there was a partial page, then we need to look at the next page. If it's open we just use it and if it's closed we must erase it.
-    // If there was no partial page, we just use the first open page.
+            let available_bytes_in_page = (page_data_end_address - last_start_address) as usize;
 
-    match next_page_to_use {
-        Some(next_page_to_use) => {
-            let next_page_state =
-                get_page_state::<I, S>(flash, flash_range.clone(), next_page_to_use)?;
-
-            if next_page_state == PageState::Open {
-                partial_close_page::<I, S>(flash, flash_range.clone(), next_page_to_use)?;
-            } else {
-                let mut page_cache_buffer = [0; PAGE_BUFFER_SIZE];
-
-                // So the next page isn't open. We must clear it.
-                // But in that process we can lose information. A value could only be stored once in the page we're now gonna clear.
-                // So we must read the full page into ram, clear the page and then add the now missing value back.
-                flash
-                    .read(
-                        calculate_page_address::<S>(flash_range.clone(), next_page_to_use),
-                        &mut page_cache_buffer,
-                    )
-                    .map_err(Error::Storage)?;
-                flash
-                    .erase(
-                        calculate_page_address::<S>(flash_range.clone(), next_page_to_use),
-                        calculate_page_end_address::<S>(flash_range.clone(), next_page_to_use),
-                    )
-                    .map_err(Error::Storage)?;
-
-                partial_close_page::<I, S>(flash, flash_range.clone(), next_page_to_use)?;
-
-                // Now add back any messages we now miss
-                // Because the page is already cleared, we can just search for the message keys through the normal API
-                // And also because partial page writes go before this, we can just write the items through the normal API
-
-                let mut old_data_slice =
-                    &page_cache_buffer[S::WRITE_SIZE..S::ERASE_SIZE - S::WRITE_SIZE];
-
-                while !old_data_slice.iter().all(|b| *b == 0xFF) {
-                    let (item, mut used_bytes) =
-                        I::deserialize_from(old_data_slice).map_err(Error::Item)?;
-
-                    if fetch_item::<I, S>(flash, flash_range.clone(), item.key())?.is_none() {
-                        store_item::<I, S, PAGE_BUFFER_SIZE>(flash, flash_range.clone(), item)?;
-                    }
-
-                    // Round up to the nearest word
+            let mut buffer = [0xFF; MAX_STORAGE_ITEM_SIZE];
+            match item
+                .serialize_into(&mut buffer[..MAX_STORAGE_ITEM_SIZE.min(available_bytes_in_page)])
+            {
+                Ok(mut used_bytes) => {
+                    // The item fits, so let's write it to flash
+                    // We must round up the used size because we can only write with full words
                     if used_bytes % S::WRITE_SIZE > 0 {
                         used_bytes += S::WRITE_SIZE - (used_bytes % S::WRITE_SIZE);
                     }
 
-                    old_data_slice = &old_data_slice[used_bytes..];
+                    flash
+                        .write(last_start_address, &buffer[..used_bytes])
+                        .map_err(Error::Storage)?;
+                    return Ok(());
+                }
+                Err(e) if e.is_buffer_too_small() => {
+                    // The item doesn't fit here, so we need to close this page and move to the next
+                    close_page::<I, S>(flash, flash_range.clone(), partial_open_page)?;
+                    next_page_to_use = Some(next_page::<S>(flash_range.clone(), partial_open_page));
+                }
+                Err(e) => {
+                    return Err(Error::Item(e));
                 }
             }
         }
-        None => {
-            // There's no partial open page, so we just gotta turn the first open page into a partial open one
-            let first_open_page =
-                match find_first_page::<I, S>(flash, flash_range.clone(), 0, PageState::Open)? {
+
+        // If we get here, there was no partial page found or the partial page has now been closed because the item didn't fit.
+        // If there was a partial page, then we need to look at the next page. If it's open we just use it and if it's closed we must erase it.
+        // If there was no partial page, we just use the first open page.
+
+        match next_page_to_use {
+            Some(next_page_to_use) => {
+                let next_page_state =
+                    get_page_state::<I, S>(flash, flash_range.clone(), next_page_to_use)?;
+
+                if next_page_state == PageState::Open {
+                    partial_close_page::<I, S>(flash, flash_range.clone(), next_page_to_use)?;
+                } else {
+                    let mut page_cache_buffer = [0; PAGE_BUFFER_SIZE];
+
+                    // So the next page isn't open. We must clear it.
+                    // But in that process we can lose information. A value could only be stored once in the page we're now gonna clear.
+                    // So we must read the full page into ram, clear the page and then add the now missing value back.
+                    flash
+                        .read(
+                            calculate_page_address::<S>(flash_range.clone(), next_page_to_use),
+                            &mut page_cache_buffer,
+                        )
+                        .map_err(Error::Storage)?;
+                    flash
+                        .erase(
+                            calculate_page_address::<S>(flash_range.clone(), next_page_to_use),
+                            calculate_page_end_address::<S>(flash_range.clone(), next_page_to_use),
+                        )
+                        .map_err(Error::Storage)?;
+
+                    partial_close_page::<I, S>(flash, flash_range.clone(), next_page_to_use)?;
+
+                    // Now add back any messages we now miss
+                    // Because the page is already cleared, we can just search for the message keys through the normal API
+                    // And also because partial page writes go before this, we can just write the items through the normal API
+
+                    let mut old_data_slice =
+                        &page_cache_buffer[S::WRITE_SIZE..S::ERASE_SIZE - S::WRITE_SIZE];
+
+                    while !old_data_slice.iter().all(|b| *b == 0xFF) {
+                        let (item, mut used_bytes) =
+                            I::deserialize_from(old_data_slice).map_err(Error::Item)?;
+
+                        if fetch_item::<I, S>(flash, flash_range.clone(), item.key())?.is_none() {
+                            store_item_inner::<I, S, PAGE_BUFFER_SIZE>(
+                                flash,
+                                flash_range.clone(),
+                                item,
+                                recursion_level, // We don't need to increase the recursion level here because the old item will always fit on the new page
+                            )?;
+                        }
+
+                        // Round up to the nearest word
+                        if used_bytes % S::WRITE_SIZE > 0 {
+                            used_bytes += S::WRITE_SIZE - (used_bytes % S::WRITE_SIZE);
+                        }
+
+                        old_data_slice = &old_data_slice[used_bytes..];
+                    }
+                }
+            }
+            None => {
+                // There's no partial open page, so we just gotta turn the first open page into a partial open one
+                let first_open_page = match find_first_page::<I, S>(
+                    flash,
+                    flash_range.clone(),
+                    0,
+                    PageState::Open,
+                )? {
                     Some(first_open_page) => first_open_page,
                     None => {
                         // Uh oh, no open pages.
@@ -239,12 +262,13 @@ pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
                     }
                 };
 
-            partial_close_page::<I, S>(flash, flash_range.clone(), first_open_page)?;
+                partial_close_page::<I, S>(flash, flash_range.clone(), first_open_page)?;
+            }
         }
-    }
 
-    // If we get here, we just freshly partially closed a new page, so this should succeed
-    store_item::<I, S, PAGE_BUFFER_SIZE>(flash, flash_range, item)
+        // If we get here, we just freshly partially closed a new page, so this should succeed
+        store_item_inner::<I, S, PAGE_BUFFER_SIZE>(flash, flash_range, item, recursion_level + 1)
+    }
 }
 
 fn find_first_page<I: StorageItem, S: NorFlash>(
@@ -522,12 +546,16 @@ pub trait StorageItemError: Debug {
 }
 
 /// The main error type
-#[derive(Debug)]
+#[non_exhaustive]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Error<I, S> {
     /// A storage item error
     Item(I),
     /// An error in the storage (flash)
     Storage(S),
+    /// The item cannot be stored anymore because the storage is full.
+    /// If you get this error some data may be lost.
+    FullStorage,
 }
 
 #[cfg(test)]
@@ -536,6 +564,7 @@ mod tests {
 
     type MockFlash = mock_flash::MockFlashBase<4, 4, 64>;
     type MockFlashBig = mock_flash::MockFlashBase<4, 4, 256>;
+    type MockFlashTiny = mock_flash::MockFlashBase<2, 1, 32>;
 
     #[derive(Debug, PartialEq, Eq)]
     struct MockStorageItem {
@@ -543,7 +572,7 @@ mod tests {
         value: u8,
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq)]
     enum MockStorageItemError {
         BufferTooSmall,
         InvalidKey,
@@ -785,6 +814,41 @@ mod tests {
                 .unwrap();
             assert_eq!(item.key, i);
             assert_eq!(item.value, i * 2);
+        }
+    }
+
+    #[test]
+    fn store_too_many_items() {
+        let mut tiny_flash = MockFlashTiny::new();
+
+        for i in 0..30 {
+            store_item::<_, _, 32>(
+                &mut tiny_flash,
+                0x00..0x40,
+                MockStorageItem {
+                    key: i as u8,
+                    value: i as u8,
+                },
+            )
+            .unwrap();
+        }
+
+        assert_eq!(
+            store_item::<_, _, 32>(
+                &mut tiny_flash,
+                0x00..0x40,
+                MockStorageItem {
+                    key: 31 as u8,
+                    value: 31 as u8,
+                },
+            ),
+            Err(Error::FullStorage)
+        );
+
+        for i in 0..30 {
+            fetch_item::<MockStorageItem, _>(&mut tiny_flash, 0x00..0x40, i as u8)
+                .unwrap()
+                .unwrap();
         }
     }
 }
