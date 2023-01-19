@@ -66,6 +66,10 @@ if it does add that key-value item back in. In principle you will never lose any
 
 ## Changelog
 
+### 0.2.1 - 19-01-23
+
+- Added defmt behind a feature flag. When enabled, the error type implements Format
+
 ### 0.2.0 - 13-01-23
 
 - Fixed a scenario where an infinite recursion could lead to a stackoverflow.

@@ -548,6 +548,7 @@ pub trait StorageItemError: Debug {
 /// The main error type
 #[non_exhaustive]
 #[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error<I, S> {
     /// A storage item error
     Item(I),

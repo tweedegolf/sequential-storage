@@ -1,6 +1,6 @@
 [package]
 name = "sequential-storage"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "A crate for storing key-value pairs in flash with minimal erase cycles."
@@ -13,3 +13,7 @@ keywords = ["no_std", "embedded", "flash", "storage"]
 
 [dependencies]
 embedded-storage = "0.3.0"
+defmt = { version = "0.3", optional = true }
+
+[features]
+defmt = ["dep:defmt"]
