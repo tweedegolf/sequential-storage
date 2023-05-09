@@ -132,6 +132,9 @@ pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
         if let Some(partial_open_page) =
             find_first_page::<I, S>(flash, flash_range.clone(), 0, PageState::PartialOpen)?
         {
+            #[cfg(feature = "defmt")]
+            defmt::trace!("Partial open page found: {}", partial_open_page);
+        
             // We've got to search where the free space is since the page starts with items present already
 
             let page_data_start_address =
@@ -166,9 +169,16 @@ pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
                     flash
                         .write(last_start_address, &buffer[..used_bytes])
                         .map_err(Error::Storage)?;
+
+                    #[cfg(feature = "defmt")]
+                    defmt::trace!("Item has been written ok");
+            
                     return Ok(());
                 }
                 Err(e) if e.is_buffer_too_small() => {
+                    #[cfg(feature = "defmt")]
+                    defmt::trace!("Partial open page is too small. Closing it now: {}", partial_open_page);
+        
                     // The item doesn't fit here, so we need to close this page and move to the next
                     close_page::<I, S>(flash, flash_range.clone(), partial_open_page)?;
                     next_page_to_use = Some(next_page::<S>(flash_range.clone(), partial_open_page));
