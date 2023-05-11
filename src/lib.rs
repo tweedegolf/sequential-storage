@@ -33,6 +33,9 @@ pub fn fetch_item<I: StorageItem, S: NorFlash>(
     let mut last_used_page =
         find_first_page::<I, S>(flash, flash_range.clone(), 0, PageState::PartialOpen)?;
 
+    #[cfg(feature = "defmt")]
+    defmt::trace!("Fetch item, last used page: {}", last_used_page);
+    
     if last_used_page.is_none() {
         // In the event that all pages are still open or the last used page was just closed, we search for the first open page.
         // If the page one before that is closed, then that's the last used page.
@@ -121,6 +124,9 @@ pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
         item: I,
         recursion_level: usize,
     ) -> Result<(), Error<I::Error, S::Error>> {
+        #[cfg(feature = "defmt")]
+        defmt::trace!("Store item inner. Recursion: {}", recursion_level);
+
         // Check if we're in an infinite recursion which happens when
         if recursion_level == get_pages::<S>(flash_range.clone(), 0).count() {
             return Err(Error::FullStorage);
@@ -193,6 +199,9 @@ pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
         // If there was a partial page, then we need to look at the next page. If it's open we just use it and if it's closed we must erase it.
         // If there was no partial page, we just use the first open page.
 
+        #[cfg(feature = "defmt")]
+        defmt::trace!("Next page to use: {}", next_page_to_use);
+
         match next_page_to_use {
             Some(next_page_to_use) => {
                 let next_page_state =
@@ -260,6 +269,8 @@ pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
                 )? {
                     Some(first_open_page) => first_open_page,
                     None => {
+                        #[cfg(feature = "defmt")]
+                        defmt::error!("No open pages found for sequential storage in the range: {}", flash_range);
                         // Uh oh, no open pages.
                         // Something has gone wrong.
                         // We should never get here.
@@ -346,6 +357,9 @@ fn get_page_state<I: StorageItem, S: NorFlash>(
     let start_marker = buffer[0];
 
     if start_marker != MARKER {
+        #[cfg(feature = "defmt")]
+        defmt::trace!("Page {} is open", page_index);
+    
         // The page start is not marked, so it is unused
         return Ok(PageState::Open);
     }
@@ -362,10 +376,14 @@ fn get_page_state<I: StorageItem, S: NorFlash>(
     let end_marker = buffer[S::READ_SIZE - 1];
 
     if end_marker != MARKER {
+        #[cfg(feature = "defmt")]
+        defmt::trace!("Page {} is partial open", page_index);
         // The page end is not marked, so it is only partially filled and thus open
         return Ok(PageState::PartialOpen);
     }
 
+    #[cfg(feature = "defmt")]
+    defmt::trace!("Page {} is closed", page_index);
     // Both start and end are marked, so this page is closed
     Ok(PageState::Closed)
 }
