@@ -19,6 +19,9 @@ use Writable::*;
 pub struct MockFlashBase<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> {
     writable: Vec<Writable>,
     words: Vec<u32>,
+    pub erases: u32,
+    pub reads: u32,
+    pub writes: u32,
 }
 
 impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> Default
@@ -41,6 +44,9 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
         Self {
             writable: vec![T; Self::CAPACITY_WORDS],
             words: vec![u32::MAX; Self::CAPACITY_WORDS],
+            erases: 0,
+            reads: 0,
+            writes: 0,
         }
     }
 
@@ -74,13 +80,8 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
     ) -> Result<Range<usize>, MockFlashError> {
         let range = Self::validate_read_operation(offset, length)?;
 
-        let start_word = range.start / BYTES_PER_WORD;
-        let end_word = (range.end + BYTES_PER_WORD - 1) / BYTES_PER_WORD;
-
-        let slice = &self.writable[start_word..end_word];
-        let it = (range.start..range.end).zip(slice.iter());
-        for (address, writable) in it {
-            if *writable == Writable::N {
+        for address in range.start..range.end {
+            if self.writable[address / BYTES_PER_WORD] == Writable::N {
                 return Err(MockFlashError::NotWritable(address as u32));
             }
         }
@@ -101,6 +102,8 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> R
     const READ_SIZE: usize = 1;
 
     fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
+        self.reads += 1;
+
         let range = Self::validate_read_operation(offset, bytes.len())?;
 
         bytes.copy_from_slice(&self.as_bytes()[range]);
@@ -126,6 +129,8 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
     const ERASE_SIZE: usize = Self::PAGE_BYTES;
 
     fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
+        self.erases += 1;
+        
         let from = from as usize;
         let to = to as usize;
 
@@ -152,6 +157,10 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
     }
 
     fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
+        self.writes += 1;
+        
+        println!("Writing {:X}..{:X}", offset, offset + bytes.len() as u32);
+
         let range = self.validate_write_operation(offset, bytes.len())?;
 
         if bytes.len() % Self::WRITE_SIZE != 0 {
