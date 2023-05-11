@@ -66,6 +66,10 @@ if it does add that key-value item back in. In principle you will never lose any
 
 ## Changelog
 
+### 0.2.2 - 11-05-23
+
+- Optimized reading items from flash which reduces the amount of reads by ~30% for small items.
+
 ### 0.2.1 - 19-01-23
 
 - Added defmt behind a feature flag. When enabled, the error type implements Format
