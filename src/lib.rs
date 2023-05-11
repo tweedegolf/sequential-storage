@@ -35,7 +35,7 @@ pub fn fetch_item<I: StorageItem, S: NorFlash>(
 
     #[cfg(feature = "defmt")]
     defmt::trace!("Fetch item, last used page: {}", last_used_page);
-    
+
     if last_used_page.is_none() {
         // In the event that all pages are still open or the last used page was just closed, we search for the first open page.
         // If the page one before that is closed, then that's the last used page.
@@ -140,7 +140,7 @@ pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
         {
             #[cfg(feature = "defmt")]
             defmt::trace!("Partial open page found: {}", partial_open_page);
-        
+
             // We've got to search where the free space is since the page starts with items present already
 
             let page_data_start_address =
@@ -178,13 +178,16 @@ pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
 
                     #[cfg(feature = "defmt")]
                     defmt::trace!("Item has been written ok");
-            
+
                     return Ok(());
                 }
                 Err(e) if e.is_buffer_too_small() => {
                     #[cfg(feature = "defmt")]
-                    defmt::trace!("Partial open page is too small. Closing it now: {}", partial_open_page);
-        
+                    defmt::trace!(
+                        "Partial open page is too small. Closing it now: {}",
+                        partial_open_page
+                    );
+
                     // The item doesn't fit here, so we need to close this page and move to the next
                     close_page::<I, S>(flash, flash_range.clone(), partial_open_page)?;
                     next_page_to_use = Some(next_page::<S>(flash_range.clone(), partial_open_page));
@@ -270,7 +273,10 @@ pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
                     Some(first_open_page) => first_open_page,
                     None => {
                         #[cfg(feature = "defmt")]
-                        defmt::error!("No open pages found for sequential storage in the range: {}", flash_range);
+                        defmt::error!(
+                            "No open pages found for sequential storage in the range: {}",
+                            flash_range
+                        );
                         // Uh oh, no open pages.
                         // Something has gone wrong.
                         // We should never get here.
@@ -359,7 +365,7 @@ fn get_page_state<I: StorageItem, S: NorFlash>(
     if start_marker != MARKER {
         #[cfg(feature = "defmt")]
         defmt::trace!("Page {} is open", page_index);
-    
+
         // The page start is not marked, so it is unused
         return Ok(PageState::Open);
     }
@@ -397,6 +403,7 @@ fn read_page_items<I: StorageItem, S: NorFlash>(
     Error<I::Error, S::Error>,
 > {
     let mut read_buffer = [0xFF; MAX_STORAGE_ITEM_SIZE];
+    let mut used_read_buffer = 0;
     let page_data_start_address =
         calculate_page_address::<S>(flash_range.clone(), page_index) + S::WRITE_SIZE as u32;
     let page_data_end_address =
@@ -406,8 +413,9 @@ fn read_page_items<I: StorageItem, S: NorFlash>(
     flash
         .read(
             page_data_start_address,
-            &mut read_buffer[0..MAX_STORAGE_ITEM_SIZE
-                .min((page_data_end_address - page_data_start_address) as usize)],
+            &mut read_buffer[used_read_buffer
+                ..MAX_STORAGE_ITEM_SIZE
+                    .min((page_data_end_address - page_data_start_address) as usize)],
         )
         .map_err(Error::Storage)?;
 
@@ -415,33 +423,16 @@ fn read_page_items<I: StorageItem, S: NorFlash>(
         // Now we deserialize the items from the buffer one by one
         // Every time we proceed, we remove the bytes we used and fill the buffer back up
 
-        if read_buffer.iter().all(|b| *b == 0xFF) {
-            // The entire buffer is in the erased state, so we know that the rest is empty
-            return None;
-        }
-
-        match I::deserialize_from(&read_buffer) {
-            Ok((item, mut used_bytes)) => {
-                // We can only write in whole words, so we round up the used bytes so the math works
-                if used_bytes % S::WRITE_SIZE > 0 {
-                    used_bytes += S::WRITE_SIZE - (used_bytes % S::WRITE_SIZE);
-                }
-
-                let return_item = Ok((
-                    item,
-                    page_data_start_address + read_buffer_start_index_into_page as u32,
-                    used_bytes,
-                ));
-
-                read_buffer_start_index_into_page += used_bytes;
-                read_buffer.copy_within(used_bytes.., 0);
+        macro_rules! replenish_read_buffer {
+            () => {{
+                read_buffer.copy_within(used_read_buffer.., 0);
                 // We need to replenish the used_bytes at the end of the buffer
-                let replenish_slice = &mut read_buffer[MAX_STORAGE_ITEM_SIZE - used_bytes..];
+                let replenish_slice = &mut read_buffer[MAX_STORAGE_ITEM_SIZE - used_read_buffer..];
 
                 let replenish_start_address = page_data_start_address
                     + read_buffer_start_index_into_page as u32
                     + MAX_STORAGE_ITEM_SIZE as u32
-                    - used_bytes as u32;
+                    - used_read_buffer as u32;
 
                 let unread_bytes_left_in_page =
                     page_data_end_address.saturating_sub(replenish_start_address);
@@ -458,20 +449,53 @@ fn read_page_items<I: StorageItem, S: NorFlash>(
                     }
                 }
                 fill_slice.fill(0xFF);
+                used_read_buffer = 0;
+            }};
+        }
 
-                Some(return_item)
-            }
-            Err(e) => {
-                // We can't deserialize an item, so something must have gone wrong.
-                // We shouldn't ever get here.
-                // To recover, we erase the flash.
-                if let Err(e) = flash
-                    .erase(flash_range.start, flash_range.end)
-                    .map_err(Error::Storage)
-                {
-                    return Some(Err(e));
+        if used_read_buffer == read_buffer.len() {
+            replenish_read_buffer!();
+        }
+
+        if read_buffer[used_read_buffer..].iter().all(|b| *b == 0xFF) {
+            // The entire buffer is in the erased state, so we know that the rest is empty
+            return None;
+        }
+
+        loop {
+            match I::deserialize_from(&read_buffer[used_read_buffer..]) {
+                Ok((item, mut used_bytes)) => {
+                    // We can only write in whole words, so we round up the used bytes so the math works
+                    if used_bytes % S::WRITE_SIZE > 0 {
+                        used_bytes += S::WRITE_SIZE - (used_bytes % S::WRITE_SIZE);
+                    }
+
+                    let return_item = Ok((
+                        item,
+                        page_data_start_address + read_buffer_start_index_into_page as u32,
+                        used_bytes,
+                    ));
+
+                    read_buffer_start_index_into_page += used_bytes;
+                    used_read_buffer += used_bytes;
+
+                    break Some(return_item);
                 }
-                Some(Err(Error::Item(e)))
+                Err(e) if e.is_buffer_too_small() && used_read_buffer > 0 => {
+                    replenish_read_buffer!();
+                }
+                Err(e) => {
+                    // We can't deserialize an item, so something must have gone wrong.
+                    // We shouldn't ever get here.
+                    // To recover, we erase the flash.
+                    if let Err(e) = flash
+                        .erase(flash_range.start, flash_range.end)
+                        .map_err(Error::Storage)
+                    {
+                        return Some(Err(e));
+                    }
+                    return Some(Err(Error::Item(e)));
+                }
             }
         }
     }))
@@ -844,6 +868,8 @@ mod tests {
             assert_eq!(item.key, i);
             assert_eq!(item.value, i * 2);
         }
+
+        println!("Erases: {}, reads: {}, writes: {}", flash.erases, flash.reads, flash.writes);
     }
 
     #[test]
