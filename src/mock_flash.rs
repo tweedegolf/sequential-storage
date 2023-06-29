@@ -130,7 +130,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
 
     fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
         self.erases += 1;
-        
+
         let from = from as usize;
         let to = to as usize;
 
@@ -158,7 +158,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
 
     fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
         self.writes += 1;
-        
+
         let range = self.validate_write_operation(offset, bytes.len())?;
 
         if bytes.len() % Self::WRITE_SIZE != 0 {

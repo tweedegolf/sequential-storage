@@ -29,9 +29,7 @@ pub fn fetch_item<I: StorageItem, S: NorFlash>(
             find_first_page(flash, flash_range.clone(), 0, PageState::Open)?
         {
             let previous_page = previous_page::<S>(flash_range.clone(), first_open_page);
-            if get_page_state(flash, flash_range.clone(), previous_page)?
-                == PageState::Closed
-            {
+            if get_page_state(flash, flash_range.clone(), previous_page)?.is_closed() {
                 last_used_page = Some(previous_page);
             } else {
                 // The page before the open page is not closed, so it must be open.
@@ -193,10 +191,9 @@ pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
 
         match next_page_to_use {
             Some(next_page_to_use) => {
-                let next_page_state =
-                    get_page_state(flash, flash_range.clone(), next_page_to_use)?;
+                let next_page_state = get_page_state(flash, flash_range.clone(), next_page_to_use)?;
 
-                if next_page_state == PageState::Open {
+                if next_page_state.is_open() {
                     partial_close_page(flash, flash_range.clone(), next_page_to_use)?;
                 } else {
                     let mut page_cache_buffer = [0; PAGE_BUFFER_SIZE];
@@ -250,30 +247,26 @@ pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
             }
             None => {
                 // There's no partial open page, so we just gotta turn the first open page into a partial open one
-                let first_open_page = match find_first_page(
-                    flash,
-                    flash_range.clone(),
-                    0,
-                    PageState::Open,
-                )? {
-                    Some(first_open_page) => first_open_page,
-                    None => {
-                        #[cfg(feature = "defmt")]
-                        defmt::error!(
-                            "No open pages found for sequential storage in the range: {}",
-                            flash_range
-                        );
-                        // Uh oh, no open pages.
-                        // Something has gone wrong.
-                        // We should never get here.
-                        // Let's recover
-                        flash
-                            .erase(flash_range.start, flash_range.end)
-                            .map_err(MapError::Storage)?;
+                let first_open_page =
+                    match find_first_page(flash, flash_range.clone(), 0, PageState::Open)? {
+                        Some(first_open_page) => first_open_page,
+                        None => {
+                            #[cfg(feature = "defmt")]
+                            defmt::error!(
+                                "No open pages found for sequential storage in the range: {}",
+                                flash_range
+                            );
+                            // Uh oh, no open pages.
+                            // Something has gone wrong.
+                            // We should never get here.
+                            // Let's recover
+                            flash
+                                .erase(flash_range.start, flash_range.end)
+                                .map_err(MapError::Storage)?;
 
-                        0
-                    }
-                };
+                            0
+                        }
+                    };
 
                 partial_close_page(flash, flash_range.clone(), first_open_page)?;
             }
@@ -382,7 +375,7 @@ fn read_page_items<I: StorageItem, S: NorFlash>(
                         .erase(flash_range.start, flash_range.end)
                         .map_err(MapError::Storage)
                     {
-                        return Some(Err(e.into()));
+                        return Some(Err(e));
                     }
                     return Some(Err(MapError::Item(e)));
                 }
@@ -440,6 +433,9 @@ pub enum MapError<I, S> {
     /// The item cannot be stored anymore because the storage is full.
     /// If you get this error some data may be lost.
     FullStorage,
+    /// It's been detected that the memory is likely corrupted.
+    /// You may want to erase the memory to recover.
+    Corrupted,
 }
 
 impl<S, I> From<super::Error<S>> for MapError<I, S> {
@@ -447,6 +443,7 @@ impl<S, I> From<super::Error<S>> for MapError<I, S> {
         match value {
             Error::Storage(e) => Self::Storage(e),
             Error::FullStorage => Self::FullStorage,
+            Error::Corrupted => Self::Corrupted,
         }
     }
 }

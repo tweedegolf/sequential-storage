@@ -205,6 +205,9 @@ pub enum Error<S> {
     /// The item cannot be stored anymore because the storage is full.
     /// If you get this error some data may be lost.
     FullStorage,
+    /// It's been detected that the memory is likely corrupted.
+    /// You may want to erase the memory to recover.
+    Corrupted,
 }
 
 #[cfg(test)]
