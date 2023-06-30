@@ -1,5 +1,5 @@
 #![cfg_attr(not(test), no_std)]
-// #![deny(missing_docs)]
+#![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
 // Assumptions made in this crate:
@@ -167,6 +167,7 @@ enum PageState {
     Open,
 }
 
+#[allow(dead_code)]
 impl PageState {
     /// Returns `true` if the page state is [`Closed`].
     ///
@@ -208,6 +209,10 @@ pub enum Error<S> {
     /// It's been detected that the memory is likely corrupted.
     /// You may want to erase the memory to recover.
     Corrupted,
+    /// A provided buffer was to big to be used
+    BufferTooBig,
+    /// A provided buffer was to small to be used
+    BufferTooSmall,
 }
 
 #[cfg(test)]

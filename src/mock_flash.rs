@@ -50,13 +50,13 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
         }
     }
 
-    fn as_bytes(&self) -> &[u8] {
+    pub fn as_bytes(&self) -> &[u8] {
         let ptr_words = self.words.as_ptr();
         let ptr_bytes = ptr_words as *const u8;
         unsafe { core::slice::from_raw_parts(ptr_bytes, Self::CAPACITY_BYTES) }
     }
 
-    fn as_bytes_mut(&mut self) -> &mut [u8] {
+    pub fn as_bytes_mut(&mut self) -> &mut [u8] {
         let ptr_words = self.words.as_mut_ptr();
         let ptr_bytes = ptr_words as *mut u8;
         unsafe { core::slice::from_raw_parts_mut(ptr_bytes, Self::CAPACITY_BYTES) }

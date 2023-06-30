@@ -1,9 +1,9 @@
 [package]
 name = "sequential-storage"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "A crate for storing key-value pairs in flash with minimal erase cycles."
+description = "A crate for storing data in flash with minimal erase cycles."
 homepage = "https://github.com/tweedegolf/sequential-storage"
 repository = "https://github.com/tweedegolf/sequential-storage"
 readme = "README.md"

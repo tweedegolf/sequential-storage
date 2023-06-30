@@ -2,55 +2,24 @@
 
 [![crates.io](https://img.shields.io/crates/v/sequential-storage.svg)](https://crates.io/crates/sequential-storage) [![Documentation](https://docs.rs/sequential-storage/badge.svg)](https://docs.rs/sequential-storage)
 
-A crate for storing key-value pairs in flash with minimal erase cycles.
+A crate for storing data in flash with minimal erase cycles.
 
-Basic API:
+There are two datastructures:
 
-```rust,ignore
-enum MyCustomType {
-    X,
-    Y,
-    // ...
-}
+- Map: An key-value pair store
+- Queue: A fifo store
 
-impl StorageItem for MyCustomType {
-    // ...
-}
+Each live in their own module. See the module documentation for more info and examples.
 
-let mut flash = SomeFlashChip::new();
-let flash_range = 0x1000..0x2000; // These are the flash addresses in which the crate will operate
-
-assert_eq!(
-    fetch_item::<MyCustomType, SomeFlashChip>(
-        &mut flash,
-        flash_range.clone(),
-        0
-    ).unwrap(),
-    None
-);
-
-store_item::<MyCustomType, SomeFlashChip, SomeFlashChip::ERASE_SIZE>(
-    &mut flash,
-    flash_range.clone(),
-    MyCustomType::X
-).unwrap();
-
-assert_eq!(
-    fetch_item::<MyCustomType, SomeFlashChip>(
-        &mut flash,
-        flash_range.clone(),
-        0
-    ).unwrap(),
-    Some(MyCustomType::X)
-);
-```
+Make sure not to mix the datastructures in flash!
+You can't fetch a key-value item from a flash region where you pushed to the queue.
 
 ## TODO
 
-- Find a way to support removing items. You can do this manually now by reading all keys,
+- Map: Find a way to support removing items. You can do this manually now by reading all keys,
   erasing all flash manually and then storing the items you want to keep again.
 
-## Inner workings
+## Inner workings for map
 
 The idea behind this crate it to save on flash erase cycles by storing every item in an append-only way.
 Only the most recent value of a key-value item is 'active'.
@@ -64,7 +33,22 @@ Once all pages have been closed, the next page will be erased to open it up agai
 There is the possibility that the erased page contains the only copy of a key, so the crate checks if that happens and
 if it does add that key-value item back in. In principle you will never lose any data.
 
+## Inner workings for queue
+
+Pages work in the same way as for the map.
+
+All data is stored as u16 LE length + data. Push appends the data at the next spot.
+If there's no more room, a push can erase the oldest page to make space, but only does so when configured.
+
+Peeking and popping look at the oldest data it can find.
+When popping, the data is also erased by writing all 0's over it.
+
 ## Changelog
+
+### 0.3.0 - 30-06-23
+
+- Added new queue implementation with `push`, `peek` and `pop` which requires multiwrite flash
+- *Breaking:* the map implementation now moved to its own module. You'll need to change your imports.
 
 ### 0.2.2 - 11-05-23
 

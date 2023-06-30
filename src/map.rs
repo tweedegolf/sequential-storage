@@ -1,3 +1,46 @@
+//! A module for storing key-value pairs in flash with minimal erase cycles.
+//!
+//! Basic API:
+//!
+//! ```rust,ignore
+//! enum MyCustomType {
+//!     X,
+//!     Y,
+//!     // ...
+//! }
+//!
+//! impl StorageItem for MyCustomType {
+//!     // ...
+//! }
+//!
+//! let mut flash = SomeFlashChip::new();
+//! let flash_range = 0x1000..0x2000; // These are the flash addresses in which the crate will operate
+//!
+//! assert_eq!(
+//!     fetch_item::<MyCustomType, SomeFlashChip>(
+//!         &mut flash,
+//!         flash_range.clone(),
+//!         0
+//!     ).unwrap(),
+//!     None
+//! );
+//!
+//! store_item::<MyCustomType, SomeFlashChip, SomeFlashChip::ERASE_SIZE>(
+//!     &mut flash,
+//!     flash_range.clone(),
+//!     MyCustomType::X
+//! ).unwrap();
+//!
+//! assert_eq!(
+//!     fetch_item::<MyCustomType, SomeFlashChip>(
+//!         &mut flash,
+//!         flash_range.clone(),
+//!         0
+//!     ).unwrap(),
+//!     Some(MyCustomType::X)
+//! );
+//! ```
+
 use super::*;
 
 /// Get a storage item from the flash.
@@ -436,6 +479,10 @@ pub enum MapError<I, S> {
     /// It's been detected that the memory is likely corrupted.
     /// You may want to erase the memory to recover.
     Corrupted,
+    /// A provided buffer was to big to be used
+    BufferTooBig,
+    /// A provided buffer was to small to be used
+    BufferTooSmall,
 }
 
 impl<S, I> From<super::Error<S>> for MapError<I, S> {
@@ -444,6 +491,8 @@ impl<S, I> From<super::Error<S>> for MapError<I, S> {
             Error::Storage(e) => Self::Storage(e),
             Error::FullStorage => Self::FullStorage,
             Error::Corrupted => Self::Corrupted,
+            Error::BufferTooBig => Self::BufferTooBig,
+            Error::BufferTooSmall => Self::BufferTooSmall,
         }
     }
 }
