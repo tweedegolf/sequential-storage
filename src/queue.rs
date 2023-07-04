@@ -9,7 +9,7 @@ use embedded_storage::nor_flash::MultiwriteNorFlash;
 /// Push data into the queue in the given flash memory with the given range.
 /// The data can only be taken out with the [pop] function.
 ///
-/// `data` must not be empty and can be at most 0xFFFE bytes long and must fit on a single page.
+/// `data` must not be empty and can be at most 0x7FFE bytes long and must fit on a single page.
 ///
 /// Old data will not be overwritten unless `allow_overwrite_old_data` is true.
 /// If it is, then if the queue is full, the oldest data is removed to make space for the new data.
@@ -35,9 +35,8 @@ pub fn push<S: MultiwriteNorFlash>(
 
     // Data must fit in a single page. We use two write words for page markings and
     // at least 2 bytes or a word for length encoding
-    if data.len() > S::ERASE_SIZE - S::WRITE_SIZE * 2 - S::WRITE_SIZE.max(2)
-        || data.len() >= u16::MAX as usize
-    // Length must be smaller than 0xFFFF
+    if data.len() > S::ERASE_SIZE - S::WRITE_SIZE * 2 - S::WRITE_SIZE.max(2) || data.len() > 0x7FFE
+    // Length must be smaller than 0x7FFE so we can store an extra recognition bit
     {
         return Err(Error::BufferTooBig);
     }
@@ -93,14 +92,17 @@ pub fn push<S: MultiwriteNorFlash>(
             }
             PageState::PartialOpen => {
                 // This should never happen
+                #[cfg(feature = "defmt")]
+                defmt::error!("Corrupted: A we expected an open or closed page, but found a partial open page");
                 return Err(Error::Corrupted);
             }
         }
     }
 
-    let mut buffer = [0; 16]; // Support write word size up to 16 bytes
-                              // Write the length of the item
-    buffer[0..2].copy_from_slice(&(data.len() as u16).to_le_bytes());
+    // Support write word size up to 16 bytes
+    let mut buffer = [0; 16];
+    // Write the length of the item
+    buffer[0..2].copy_from_slice(&((data.len() as u16) | 0x1000).to_be_bytes());
     flash
         .write(next_address, &buffer[..S::WRITE_SIZE.max(2)])
         .map_err(Error::Storage)?;
@@ -118,6 +120,7 @@ pub fn push<S: MultiwriteNorFlash>(
     let left_over_data = &data[aligned_data_len..];
     if !left_over_data.is_empty() {
         buffer[..left_over_data.len()].copy_from_slice(left_over_data);
+        buffer[left_over_data.len()..].fill(0);
         flash
             .write(
                 next_address + S::WRITE_SIZE.max(2) as u32 + aligned_data_len as u32,
@@ -148,14 +151,18 @@ pub fn peek<S: MultiwriteNorFlash, const CAP: usize>(
 
     let oldest_page = find_oldest_page(flash, flash_range.clone())?;
 
-    let Some(ItemAddress::Filled { address, length }) = get_pages::<S>(flash_range.clone(), oldest_page)
-        .filter_map(|page| page_item_adresses_iter(flash, flash_range.clone(), page)
-            .find(|address| address.is_err() || matches!(address, Ok(ItemAddress::Filled { .. })))
-        )
-        .next()
-        .transpose()? else {
-            return Ok(None);
-        };
+    let Some(ItemAddress::Filled { address, length }) =
+        get_pages::<S>(flash_range.clone(), oldest_page)
+            .filter_map(|page| {
+                page_item_adresses_iter(flash, flash_range.clone(), page).find(|address| {
+                    address.is_err() || matches!(address, Ok(ItemAddress::Filled { .. }))
+                })
+            })
+            .next()
+            .transpose()?
+    else {
+        return Ok(None);
+    };
 
     if length as usize > CAP {
         return Err(Error::BufferTooBig);
@@ -195,14 +202,18 @@ pub fn pop<S: MultiwriteNorFlash, const CAP: usize>(
 
     let oldest_page = find_oldest_page(flash, flash_range.clone())?;
 
-    let Some(ItemAddress::Filled { address, length }) = get_pages::<S>(flash_range.clone(), oldest_page)
-        .filter_map(|page| page_item_adresses_iter(flash, flash_range.clone(), page)
-            .find(|address| address.is_err() || matches!(address, Ok(ItemAddress::Filled { .. })))
-        )
-        .next()
-        .transpose()? else {
-            return Ok(None);
-        };
+    let Some(ItemAddress::Filled { address, length }) =
+        get_pages::<S>(flash_range.clone(), oldest_page)
+            .filter_map(|page| {
+                page_item_adresses_iter(flash, flash_range.clone(), page).find(|address| {
+                    address.is_err() || matches!(address, Ok(ItemAddress::Filled { .. }))
+                })
+            })
+            .next()
+            .transpose()?
+    else {
+        return Ok(None);
+    };
 
     if length as usize > CAP {
         return Err(Error::BufferTooBig);
@@ -261,6 +272,9 @@ fn find_youngest_page<S: NorFlash>(
     }
 
     // All pages are closed... This is not correct.
+    #[cfg(feature = "defmt")]
+    defmt::error!("Corrupted: All pages are closed");
+
     Err(Error::Corrupted)
 }
 
@@ -290,7 +304,10 @@ fn page_item_adresses_iter<S: NorFlash>(
     let mut done = false;
 
     core::iter::from_fn(move || {
-        while !done && current_address < page_data_end_address {
+        while !done
+            && current_address < page_data_end_address
+            && page_data_end_address - current_address > 1
+        {
             // Read the length
             let mut length = [0; 2];
             if let Err(e) = flash.read(current_address, &mut length) {
@@ -298,7 +315,7 @@ fn page_item_adresses_iter<S: NorFlash>(
                 done = true;
                 return Some(Err(Error::Storage(e)));
             }
-            let length = u16::from_le_bytes(length);
+            let mut length = u16::from_be_bytes(length);
 
             if length == 0xFFFF {
                 // Not programmed yet, we're done
@@ -311,15 +328,27 @@ fn page_item_adresses_iter<S: NorFlash>(
 
             if length == 0 {
                 // Probably a removed entry
-                current_address += S::WRITE_SIZE.max(2) as u32;
+                current_address += S::WRITE_SIZE as u32;
                 continue;
             }
+
+            if length & 0x1000 == 0 {
+                // This length does not have the recognition bit set, so we're probably reading half of it
+                current_address += S::WRITE_SIZE as u32;
+                continue;
+            }
+
+            // Strip off the recognition bit
+            length ^= 0x1000;
 
             let data_remaining = page_data_end_address - current_address;
 
             if length as u32 > data_remaining {
                 // All data must fit in a page and this seems like it's not.
                 // Something is wrong. Make this the last thing this iterator yields
+                #[cfg(feature = "defmt")]
+                defmt::error!("Corrupted: A page item was found at 0x{:X} with a seemingly longer length than logical of {}", current_address, length);
+
                 current_address = page_data_end_address;
                 return Some(Err(Error::Corrupted));
             }
@@ -384,7 +413,7 @@ mod tests {
 
         assert_eq!(
             &flash.as_bytes()[4..20],
-            &[6, 0, 0, 0, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF]
+            &[16, 6, 0, 0, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF]
         );
 
         push(&mut flash, flash_range.clone(), &[0xBB; 1], false).unwrap();
@@ -400,7 +429,7 @@ mod tests {
 
         assert_eq!(
             &flash.as_bytes()[16..28],
-            &[1, 0, 0, 0, 0xBB, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF]
+            &[16, 1, 0, 0, 0xBB, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF]
         );
 
         assert_eq!(
@@ -493,13 +522,13 @@ mod tests {
             flash.as_bytes(),
             &[
                 0, // Partial open page 0
-                28, 0, // LE length 28
+                16, 28, // LE length 28 | 0x1000
                 // Data of last write that overwrote 0xAA
                 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD,
                 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD,
                 0xFF, // Partial open page 0
                 0,    // Closed page 1
-                28, 0, // LE length 28
+                16, 28, // LE length 28 | 0x1000
                 // Data of second write
                 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB,
                 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB,
@@ -524,13 +553,13 @@ mod tests {
             flash.as_bytes(),
             &[
                 0, // Partial open page 0
-                28, 0, // LE length 28
+                16, 28, // BE length 28 | 0x1000
                 // Data of last write that overwrote 0xAA
                 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD,
                 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD,
                 0xFF, // Partial open page 0
                 0,    // Closed page 1
-                0, 0, // LE length 0 (erased)
+                0, 0, // BE length 0 (erased)
                 // Data of second write
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -555,13 +584,13 @@ mod tests {
             flash.as_bytes(),
             &[
                 0, // Partial open page 0
-                0, 0, // LE length 0 (erased)
+                0, 0, // BE length 0 (erased)
                 // Data of last write that overwrote 0xAA
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 0xFF, // Partial open page 0
                 0,    // Closed page 1
-                0, 0, // LE length 0 (erased)
+                0, 0, // BE length 0 (erased)
                 // Data of second write
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -606,5 +635,61 @@ mod tests {
                 "At {i}"
             );
         }
+    }
+
+    #[test]
+    fn push_pop_tiny() {
+        let mut flash = MockFlashTiny::new();
+        let flash_range = 0x00..0x40;
+
+        for i in 0..2000 {
+            println!("{i}");
+            let data = vec![i as u8; i % 20 + 1];
+
+            push(&mut flash, flash_range.clone(), &data, true).unwrap();
+            assert_eq!(
+                &peek::<_, 20>(&mut flash, flash_range.clone())
+                    .unwrap()
+                    .unwrap()[..],
+                &data,
+                "At {i}"
+            );
+            assert_eq!(
+                &pop::<_, 20>(&mut flash, flash_range.clone())
+                    .unwrap()
+                    .unwrap()[..],
+                &data,
+                "At {i}"
+            );
+            assert_eq!(
+                peek::<_, 20>(&mut flash, flash_range.clone()).unwrap(),
+                None,
+                "At {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn pop_with_empty_section() {
+        let mut flash = MockFlashTiny::new();
+        let flash_range = 0x00..0x40;
+
+        push(&mut flash, flash_range.clone(), &[0xAA; 20], false).unwrap();
+        push(&mut flash, flash_range.clone(), &[0xBB; 20], false).unwrap();
+
+        // There's now an unused gap at the end of the first page
+
+        assert_eq!(
+            &pop::<_, 20>(&mut flash, flash_range.clone())
+                .unwrap()
+                .unwrap()[..],
+            &[0xAA; 20]
+        );
+        assert_eq!(
+            &pop::<_, 20>(&mut flash, flash_range.clone())
+                .unwrap()
+                .unwrap()[..],
+            &[0xBB; 20]
+        );
     }
 }

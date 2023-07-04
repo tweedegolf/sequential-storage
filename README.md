@@ -37,13 +37,18 @@ if it does add that key-value item back in. In principle you will never lose any
 
 Pages work in the same way as for the map.
 
-All data is stored as u16 LE length + data. Push appends the data at the next spot.
+All data is stored as u16 BE length + data. Push appends the data at the next spot.
 If there's no more room, a push can erase the oldest page to make space, but only does so when configured.
 
 Peeking and popping look at the oldest data it can find.
 When popping, the data is also erased by writing all 0's over it.
 
 ## Changelog
+
+### 0.4.0 - 04-07-23
+
+- Fixed the queue implementation for devices with a write size of 1
+- *Breaking:* The internal storage format for queue has changed, so is incompatible with existing stored memory. The max size has come down to 0x7FFE.
 
 ### 0.3.0 - 30-06-23
 
