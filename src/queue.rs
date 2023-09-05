@@ -165,7 +165,7 @@ pub fn peek<S: MultiwriteNorFlash, const CAP: usize>(
     };
 
     if length as usize > CAP {
-        return Err(Error::BufferTooBig);
+        return Err(Error::BufferTooSmall);
     }
 
     let mut buffer = [0; CAP];
@@ -216,7 +216,7 @@ pub fn pop<S: MultiwriteNorFlash, const CAP: usize>(
     };
 
     if length as usize > CAP {
-        return Err(Error::BufferTooBig);
+        return Err(Error::BufferTooSmall);
     }
 
     let mut buffer = [0; CAP];

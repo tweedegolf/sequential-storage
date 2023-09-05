@@ -45,6 +45,10 @@ When popping, the data is also erased by writing all 0's over it.
 
 ## Changelog
 
+### Unreleased
+
+- Flipped one of the error messages in `queue::pop` and `queue::peek` from `BufferTooBig` to `BufferTooSmall` because that's a lot clearer
+
 ### 0.4.0 - 04-07-23
 
 - Fixed the queue implementation for devices with a write size of 1
