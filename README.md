@@ -47,7 +47,11 @@ When popping, the data is also erased by writing all 0's over it.
 
 ### Unreleased
 
+### 0.4.1 - 26-09-23
+
 - Flipped one of the error messages in `queue::pop` and `queue::peek` from `BufferTooBig` to `BufferTooSmall` because that's a lot clearer
+- Massive performance bug fixed for the queue. Before it had to read all pages from the start until the first pop or peek data was found.
+  Now empty pages are erased which solves this issue.
 
 ### 0.4.0 - 04-07-23
 

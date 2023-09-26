@@ -68,7 +68,13 @@ pub fn push<S: MultiwriteNorFlash>(
         let next_page = next_page::<S>(flash_range.clone(), current_page);
         match get_page_state(flash, flash_range.clone(), next_page)? {
             PageState::Open => {
-                close_page(flash, flash_range.clone(), current_page)?;
+                if !erase_page_if_rest_is_empty(
+                    flash,
+                    flash_range.clone(),
+                    page_data_start_address,
+                )? {
+                    close_page(flash, flash_range.clone(), current_page)?;
+                }
                 partial_close_page(flash, flash_range.clone(), next_page)?;
                 next_address =
                     calculate_page_address::<S>(flash_range, next_page) + S::WRITE_SIZE as u32;
@@ -251,7 +257,60 @@ pub fn pop<S: MultiwriteNorFlash, const CAP: usize>(
         remaining_length -= buffer.len().min(remaining_length as usize) as u32;
     }
 
+    // Check if the rest of the page is only 0xFF. If so, we've fully popped everything from this page.
+    // We can then erase the page to make it open again if this is a closed page. This will massively increase performance.
+    if get_page_state(
+        flash,
+        flash_range.clone(),
+        calculate_page_index::<S>(flash_range.clone(), address),
+    )?
+    .is_closed()
+    {
+        let next_address = address + S::WRITE_SIZE.max(2) as u32 + full_data_length;
+        erase_page_if_rest_is_empty(flash, flash_range.clone(), next_address)?;
+    }
+
     Ok(Some(return_data))
+}
+
+/// Returns true if the page was erased
+fn erase_page_if_rest_is_empty<S: NorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+    mut address: u32,
+) -> Result<bool, Error<S::Error>> {
+    let mut buffer = [0; 64];
+
+    let current_page = calculate_page_index::<S>(flash_range.clone(), address);
+
+    let page_data_end_address =
+        calculate_page_end_address::<S>(flash_range.clone(), current_page) - S::WRITE_SIZE as u32;
+
+    while address != page_data_end_address {
+        let read_length = ((page_data_end_address - address) as usize).min(buffer.len());
+        flash
+            .read(address, &mut buffer[..read_length])
+            .map_err(Error::Storage)?;
+
+        if !buffer[..read_length]
+            .iter()
+            .all(|byte| *byte == 0xFF || *byte == 0x00)
+        {
+            return Ok(false);
+        }
+
+        address += read_length as u32;
+    }
+
+    // The rest of the page is empty, so we can safely erase this page
+    flash
+        .erase(
+            calculate_page_address::<S>(flash_range.clone(), current_page),
+            calculate_page_end_address::<S>(flash_range.clone(), current_page),
+        )
+        .map_err(Error::Storage)?;
+
+    Ok(true)
 }
 
 fn find_youngest_page<S: NorFlash>(
@@ -558,12 +617,12 @@ mod tests {
                 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD,
                 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD,
                 0xFF, // Partial open page 0
-                0,    // Closed page 1
-                0, 0, // BE length 0 (erased)
+                0xFF, // Open page 1
+                0xFF, 0xFF, // (erased)
                 // Data of second write
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0 // Closed page 1
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF // Open page 1
             ]
         );
 
@@ -589,12 +648,12 @@ mod tests {
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 0xFF, // Partial open page 0
-                0,    // Closed page 1
-                0, 0, // BE length 0 (erased)
+                0xFF, // Open page 1
+                0xFF, 0xFF, // (erased)
                 // Data of second write
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0 // Closed page 1
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF // Open page 1
             ]
         );
 
@@ -666,6 +725,46 @@ mod tests {
                 None,
                 "At {i}"
             );
+        }
+    }
+
+    #[test]
+    fn push_lots_then_pop_lots() {
+        let mut flash = MockFlashBig::new();
+        let flash_range = 0x000..0x1000;
+
+        for _ in 0..100 {
+            for i in 0..20 {
+                let data = vec![i as u8; 50];
+                push(&mut flash, flash_range.clone(), &data, false).unwrap();
+            }
+
+            for i in 0..5 {
+                let data = vec![i as u8; 50];
+                assert_eq!(
+                    &pop::<_, 50>(&mut flash, flash_range.clone())
+                        .unwrap()
+                        .unwrap()[..],
+                    &data,
+                    "At {i}"
+                );
+            }
+
+            for i in 20..25 {
+                let data = vec![i as u8; 50];
+                push(&mut flash, flash_range.clone(), &data, false).unwrap();
+            }
+
+            for i in 5..25 {
+                let data = vec![i as u8; 50];
+                assert_eq!(
+                    &pop::<_, 50>(&mut flash, flash_range.clone())
+                        .unwrap()
+                        .unwrap()[..],
+                    &data,
+                    "At {i}"
+                );
+            }
         }
     }
 
