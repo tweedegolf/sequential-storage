@@ -54,6 +54,7 @@ pub fn fetch_item<I: StorageItem, S: NorFlash>(
 ) -> Result<Option<I>, MapError<I::Error, S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
+    assert!(flash_range.end - flash_range.start >= S::ERASE_SIZE as u32 * 2);
 
     assert!(S::ERASE_SIZE >= S::WRITE_SIZE * 3);
     assert_eq!(S::READ_SIZE, 1);
@@ -507,13 +508,14 @@ mod tests {
     #[derive(Debug, PartialEq, Eq)]
     struct MockStorageItem {
         key: u8,
-        value: u8,
+        value: Vec<u8>,
     }
 
     #[derive(Debug, PartialEq, Eq)]
     enum MockStorageItemError {
         BufferTooSmall,
         InvalidKey,
+        BufferTooBig,
     }
 
     impl StorageItemError for MockStorageItemError {
@@ -528,8 +530,12 @@ mod tests {
         type Error = MockStorageItemError;
 
         fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
-            if buffer.len() < 2 {
+            if buffer.len() < 2 + self.value.len() {
                 return Err(MockStorageItemError::BufferTooSmall);
+            }
+
+            if self.value.len() > 255 {
+                return Err(MockStorageItemError::BufferTooBig);
             }
 
             // The serialized value must not be all 0xFF
@@ -538,9 +544,10 @@ mod tests {
             }
 
             buffer[0] = self.key;
-            buffer[1] = self.value;
+            buffer[1] = self.value.len() as u8;
+            buffer[2..][..self.value.len()].copy_from_slice(&self.value);
 
-            Ok(2)
+            Ok(2 + self.value.len())
         }
 
         fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), Self::Error>
@@ -555,12 +562,18 @@ mod tests {
                 return Err(MockStorageItemError::InvalidKey);
             }
 
+            let len = buffer[1];
+
+            if buffer.len() < 2 + len as usize {
+                return Err(MockStorageItemError::BufferTooSmall);
+            }
+
             Ok((
                 Self {
                     key: buffer[0],
-                    value: buffer[1],
+                    value: buffer[2..][..len as usize].to_vec(),
                 },
-                2,
+                2 + len as usize,
             ))
         }
 
@@ -586,13 +599,19 @@ mod tests {
         store_item::<_, _, 1024>(
             &mut flash,
             flash_range.clone(),
-            MockStorageItem { key: 0, value: 5 },
+            MockStorageItem {
+                key: 0,
+                value: vec![5],
+            },
         )
         .unwrap();
         store_item::<_, _, 1024>(
             &mut flash,
             flash_range.clone(),
-            MockStorageItem { key: 0, value: 6 },
+            MockStorageItem {
+                key: 0,
+                value: vec![5, 6],
+            },
         )
         .unwrap();
 
@@ -600,12 +619,15 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(item.key, 0);
-        assert_eq!(item.value, 6);
+        assert_eq!(item.value, vec![5, 6]);
 
         store_item::<_, _, 1024>(
             &mut flash,
             flash_range.clone(),
-            MockStorageItem { key: 1, value: 2 },
+            MockStorageItem {
+                key: 1,
+                value: vec![2, 2, 2, 2, 2, 2],
+            },
         )
         .unwrap();
 
@@ -613,13 +635,13 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(item.key, 0);
-        assert_eq!(item.value, 6);
+        assert_eq!(item.value, vec![5, 6]);
 
         let item = fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), 1)
             .unwrap()
             .unwrap();
         assert_eq!(item.key, 1);
-        assert_eq!(item.value, 2);
+        assert_eq!(item.value, vec![2, 2, 2, 2, 2, 2]);
 
         for index in 0..4000 {
             store_item::<_, _, 1024>(
@@ -627,7 +649,7 @@ mod tests {
                 flash_range.clone(),
                 MockStorageItem {
                     key: (index % 10) as u8,
-                    value: (index % 10) as u8 * 2,
+                    value: vec![(index % 10) as u8 * 2; index % 10],
                 },
             )
             .unwrap();
@@ -638,14 +660,17 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(item.key, i);
-            assert_eq!(item.value, i * 2);
+            assert_eq!(item.value, vec![(i % 10) as u8 * 2; (i % 10) as usize]);
         }
 
         for _ in 0..4000 {
             store_item::<_, _, 1024>(
                 &mut flash,
                 flash_range.clone(),
-                MockStorageItem { key: 11, value: 0 },
+                MockStorageItem {
+                    key: 11,
+                    value: vec![0; 10],
+                },
             )
             .unwrap();
         }
@@ -655,7 +680,7 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(item.key, i);
-            assert_eq!(item.value, i * 2);
+            assert_eq!(item.value, vec![(i % 10) as u8 * 2; (i % 10) as usize]);
         }
 
         println!(
@@ -668,16 +693,14 @@ mod tests {
     fn store_too_many_items() {
         let mut tiny_flash = MockFlashTiny::new();
 
-        for i in 0..30 {
-            store_item::<_, _, 32>(
-                &mut tiny_flash,
-                0x00..0x40,
-                MockStorageItem {
-                    key: i as u8,
-                    value: i as u8,
-                },
-            )
-            .unwrap();
+        for i in 0..9 {
+            let item = MockStorageItem {
+                key: i as u8,
+                value: vec![i as u8; i as usize],
+            };
+            println!("Storing {item:?}");
+
+            store_item::<_, _, 32>(&mut tiny_flash, 0x00..0x40, item).unwrap();
         }
 
         assert_eq!(
@@ -685,17 +708,49 @@ mod tests {
                 &mut tiny_flash,
                 0x00..0x40,
                 MockStorageItem {
-                    key: 31 as u8,
-                    value: 31 as u8,
+                    key: 10 as u8,
+                    value: vec![0; 10],
                 },
             ),
             Err(MapError::FullStorage)
         );
 
-        for i in 0..30 {
-            fetch_item::<MockStorageItem, _>(&mut tiny_flash, 0x00..0x40, i as u8)
+        for i in 0..9 {
+            let item = fetch_item::<MockStorageItem, _>(&mut tiny_flash, 0x00..0x40, i as u8)
                 .unwrap()
                 .unwrap();
+
+            println!("Fetched {item:?}");
+
+            assert_eq!(item.value, vec![i as u8; i as usize]);
+        }
+    }
+
+    #[test]
+    fn store_many_items_big() {
+        let mut flash = mock_flash::MockFlashBase::<4, 1, 4096>::new();
+
+        const LENGHT_PER_KEY: [usize; 24] = [11, 13, 6, 13, 13, 10, 2, 3, 5, 36, 1, 65, 4, 6, 1, 15, 10, 7, 3, 15, 9, 3, 4, 5];
+
+        for _ in 0..1000 {
+            for i in 0..24 {
+                let item = MockStorageItem {
+                    key: i as u8,
+                    value: vec![i as u8; LENGHT_PER_KEY[i]],
+                };
+
+                store_item::<_, _, 4096>(&mut flash, 0x0000..0x4000, item).unwrap();
+            }
+        }
+
+        for i in 0..24 {
+            let item = fetch_item::<MockStorageItem, _>(&mut flash, 0x0000..0x4000, i as u8)
+                .unwrap()
+                .unwrap();
+
+            println!("Fetched {item:?}");
+
+            assert_eq!(item.value, vec![i as u8; LENGHT_PER_KEY[i]]);
         }
     }
 }
