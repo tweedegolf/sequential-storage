@@ -84,10 +84,7 @@ pub fn fetch_item<I: StorageItem, S: NorFlash>(
             // There are no open pages, so everything must be closed.
             // Something is up and this should never happen.
             // To recover, we will just erase all the flash.
-            flash
-                .erase(flash_range.start, flash_range.end)
-                .map_err(Error::Storage)?;
-            return Ok(None);
+            return Err(MapError::Corrupted);
         }
     }
 
@@ -303,12 +300,7 @@ pub fn store_item<I: StorageItem, S: NorFlash, const PAGE_BUFFER_SIZE: usize>(
                             // Uh oh, no open pages.
                             // Something has gone wrong.
                             // We should never get here.
-                            // Let's recover
-                            flash
-                                .erase(flash_range.start, flash_range.end)
-                                .map_err(MapError::Storage)?;
-
-                            0
+                            return Err(MapError::Corrupted);
                         }
                     };
 
@@ -730,7 +722,9 @@ mod tests {
     fn store_many_items_big() {
         let mut flash = mock_flash::MockFlashBase::<4, 1, 4096>::new();
 
-        const LENGHT_PER_KEY: [usize; 24] = [11, 13, 6, 13, 13, 10, 2, 3, 5, 36, 1, 65, 4, 6, 1, 15, 10, 7, 3, 15, 9, 3, 4, 5];
+        const LENGHT_PER_KEY: [usize; 24] = [
+            11, 13, 6, 13, 13, 10, 2, 3, 5, 36, 1, 65, 4, 6, 1, 15, 10, 7, 3, 15, 9, 3, 4, 5,
+        ];
 
         for _ in 0..1000 {
             for i in 0..24 {

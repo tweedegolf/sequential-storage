@@ -47,6 +47,10 @@ When popping, the data is also erased by writing all 0's over it.
 
 ### Unreleased
 
+### 0.4.2 - 13-11-23
+
+- Map no longer erases the flash when corrupted to self-recover. It now just returns an error so the user can choose what to do.
+
 ### 0.4.1 - 26-09-23
 
 - Flipped one of the error messages in `queue::pop` and `queue::peek` from `BufferTooBig` to `BufferTooSmall` because that's a lot clearer
