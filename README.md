@@ -29,7 +29,7 @@ This is more efficient because we don't have to erase a page every time we want 
 Every item has to fit in a page. Once an item is too big to fit on the current page will be closed
 and the item will be stored on the next page.
 
-Once all pages have been closed, the next page will be erased to open it up again.
+Once all but one pages have been closed, a new page will be erased to open it up again.
 There is the possibility that the erased page contains the only copy of a key, so the crate checks if that happens and
 if it does add that key-value item back in. In principle you will never lose any data.
 
@@ -46,6 +46,12 @@ When popping, the data is also erased by writing all 0's over it.
 ## Changelog
 
 ### Unreleased
+
+### 0.5.0 - 13-11-23
+
+- *Breaking* Map `store_item` item no longer uses a ram buffer to temporarily store erased items in.
+  Instead it keeps an extra open page so it can copy from one page to another page directly.
+  This means the minimum page count for map is now 2.
 
 ### 0.4.2 - 13-11-23
 

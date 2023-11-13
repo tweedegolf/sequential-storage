@@ -141,7 +141,7 @@ fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
 
 /// Store an item into flash memory.
 /// It will overwrite the last value that has the same key.
-/// The flash needs to be at least 3 pages long.
+/// The flash needs to be at least 2 pages long.
 pub fn store_item<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
