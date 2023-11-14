@@ -11,11 +11,14 @@
 use core::{fmt::Debug, ops::Range};
 use embedded_storage::nor_flash::NorFlash;
 
+mod item;
 pub mod map;
 pub mod queue;
 
 #[cfg(test)]
 mod mock_flash;
+
+const MAX_WORD_SIZE: usize = 16;
 
 fn find_first_page<S: NorFlash>(
     flash: &mut S,
@@ -216,79 +219,17 @@ pub enum Error<S> {
     BufferTooBig,
     /// A provided buffer was to small to be used
     BufferTooSmall,
+    /// An item with a crc error was encountered
+    CrcError,
+    /// Data with zero length was being stored. This is not allowed.
+    ZeroLengthData,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::map::{StorageItem, StorageItemError};
 
     type MockFlash = mock_flash::MockFlashBase<4, 4, 64>;
-
-    #[derive(Debug, PartialEq, Eq)]
-    struct MockStorageItem {
-        key: u8,
-        value: u8,
-    }
-
-    #[derive(Debug, PartialEq, Eq)]
-    enum MockStorageItemError {
-        BufferTooSmall,
-        InvalidKey,
-    }
-
-    impl StorageItemError for MockStorageItemError {
-        fn is_buffer_too_small(&self) -> bool {
-            matches!(self, MockStorageItemError::BufferTooSmall)
-        }
-    }
-
-    impl StorageItem for MockStorageItem {
-        type Key = u8;
-
-        type Error = MockStorageItemError;
-
-        fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
-            if buffer.len() < 2 {
-                return Err(MockStorageItemError::BufferTooSmall);
-            }
-
-            // The serialized value must not be all 0xFF
-            if self.key == 0xFF {
-                return Err(MockStorageItemError::InvalidKey);
-            }
-
-            buffer[0] = self.key;
-            buffer[1] = self.value;
-
-            Ok(2)
-        }
-
-        fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), Self::Error>
-        where
-            Self: Sized,
-        {
-            if buffer.len() < 2 {
-                return Err(MockStorageItemError::BufferTooSmall);
-            }
-
-            if buffer[0] == 0xFF {
-                return Err(MockStorageItemError::InvalidKey);
-            }
-
-            Ok((
-                Self {
-                    key: buffer[0],
-                    value: buffer[1],
-                },
-                2,
-            ))
-        }
-
-        fn key(&self) -> Self::Key {
-            self.key
-        }
-    }
 
     #[test]
     fn test_find_pages() {
