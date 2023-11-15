@@ -18,7 +18,7 @@ pub mod queue;
 #[cfg(test)]
 mod mock_flash;
 
-const MAX_WORD_SIZE: usize = 16;
+const MAX_WORD_SIZE: usize = 32;
 
 fn find_first_page<S: NorFlash>(
     flash: &mut S,
@@ -78,7 +78,7 @@ fn get_page_state<S: NorFlash>(
 ) -> Result<PageState, Error<S::Error>> {
     let page_address = calculate_page_address::<S>(flash_range, page_index);
 
-    let mut buffer = [0; 16];
+    let mut buffer = [0; MAX_WORD_SIZE];
     flash
         .read(page_address, &mut buffer[..S::READ_SIZE])
         .map_err(Error::Storage)?;
@@ -130,12 +130,12 @@ fn close_page<S: NorFlash>(
         return Ok(());
     }
 
-    let buffer = [MARKER; 16];
+    let buffer = [MARKER; MAX_WORD_SIZE];
     // Close the end marker
     flash
         .write(
             calculate_page_end_address::<S>(flash_range, page_index) - S::WRITE_SIZE as u32,
-            &buffer[..S::WRITE_SIZE],
+            &buffer[..S::WORD_SIZE],
         )
         .map_err(Error::Storage)?;
 
@@ -154,12 +154,12 @@ fn partial_close_page<S: NorFlash>(
         return Ok(());
     }
 
-    let buffer = [MARKER; 16];
+    let buffer = [MARKER; MAX_WORD_SIZE];
     // Close the start marker
     flash
         .write(
             calculate_page_address::<S>(flash_range, page_index),
-            &buffer[..S::WRITE_SIZE],
+            &buffer[..S::WORD_SIZE],
         )
         .map_err(Error::Storage)?;
 
@@ -223,6 +223,39 @@ pub enum Error<S> {
     CrcError,
     /// Data with zero length was being stored. This is not allowed.
     ZeroLengthData,
+}
+
+const fn round_up_to_alignment<S: NorFlash>(value: u32) -> u32 {
+    let alignment = S::WORD_SIZE as u32;
+    match value % alignment {
+        0 => value,
+        r => value + (alignment - r),
+    }
+}
+
+const fn round_up_to_alignment_usize<S: NorFlash>(value: usize) -> usize {
+    round_up_to_alignment::<S>(value as u32) as usize
+}
+
+const fn round_down_to_alignment<S: NorFlash>(value: u32) -> u32 {
+    let alignment = S::WORD_SIZE as u32;
+    (value / alignment) * alignment
+}
+
+const fn round_down_to_alignment_usize<S: NorFlash>(value: usize) -> usize {
+    round_down_to_alignment::<S>(value as u32) as usize
+}
+
+trait NorFlashExt {
+    const WORD_SIZE: usize;
+}
+
+impl<S: NorFlash> NorFlashExt for S {
+    const WORD_SIZE: usize = if Self::WRITE_SIZE > Self::READ_SIZE {
+        Self::WRITE_SIZE
+    } else {
+        Self::READ_SIZE
+    };
 }
 
 #[cfg(test)]

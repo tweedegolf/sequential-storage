@@ -27,7 +27,7 @@ pub fn push<S: MultiwriteNorFlash>(
 
     assert!(S::ERASE_SIZE >= S::WRITE_SIZE * 4);
     assert_eq!(S::READ_SIZE, 1);
-    assert!(S::WRITE_SIZE <= 16);
+    assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
 
     if data.is_empty() {
         return Err(Error::BufferTooSmall);
@@ -105,8 +105,8 @@ pub fn push<S: MultiwriteNorFlash>(
         }
     }
 
-    // Support write word size up to 16 bytes
-    let mut buffer = [0; 16];
+    // Support write word size up to MAX_WORD_SIZE bytes
+    let mut buffer = [0; MAX_WORD_SIZE];
     // Write the length of the item
     buffer[0..2].copy_from_slice(&((data.len() as u16) | 0x1000).to_be_bytes());
     flash
@@ -153,7 +153,7 @@ pub fn peek<S: MultiwriteNorFlash, const CAP: usize>(
 
     assert!(S::ERASE_SIZE >= S::WRITE_SIZE * 4);
     assert_eq!(S::READ_SIZE, 1);
-    assert!(S::WRITE_SIZE <= 16);
+    assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
 
     let oldest_page = find_oldest_page(flash, flash_range.clone())?;
 
@@ -204,7 +204,7 @@ pub fn pop<S: MultiwriteNorFlash, const CAP: usize>(
 
     assert!(S::ERASE_SIZE >= S::WRITE_SIZE * 4);
     assert_eq!(S::READ_SIZE, 1);
-    assert!(S::WRITE_SIZE <= 16);
+    assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
 
     let oldest_page = find_oldest_page(flash, flash_range.clone())?;
 

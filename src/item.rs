@@ -2,7 +2,10 @@ use core::num::NonZeroU16;
 
 use embedded_storage::nor_flash::{MultiwriteNorFlash, NorFlash};
 
-use crate::{Error, MAX_WORD_SIZE};
+use crate::{
+    round_down_to_alignment, round_down_to_alignment_usize, round_up_to_alignment,
+    round_up_to_alignment_usize, Error, MAX_WORD_SIZE,
+};
 
 pub struct ItemHeader {
     /// Length of the item payload (so not including the header and not including word alignment)
@@ -46,6 +49,44 @@ impl ItemHeader {
         }))
     }
 
+    pub fn read_item<'d, S: NorFlash>(
+        self,
+        flash: &mut S,
+        data_buffer: &'d mut [u8],
+        address: u32,
+        end_address: u32,
+    ) -> Result<Option<MaybeItem<'d>>, Error<S::Error>> {
+        match self.crc {
+            None => Ok(Some(MaybeItem::Erased(self))),
+            Some(header_crc) => {
+                let data_address = ItemHeader::data_address::<S>(address);
+                let read_len = round_up_to_alignment_usize::<S>(self.length.get() as usize);
+                if data_buffer.len() < read_len {
+                    return Err(Error::BufferTooSmall);
+                }
+                if data_address + read_len as u32 > end_address {
+                    return Ok(Some(MaybeItem::Corrupted(self)));
+                }
+
+                flash
+                    .read(data_address, &mut data_buffer[..read_len])
+                    .map_err(Error::Storage)?;
+
+                let data = &data_buffer[..self.length.get() as usize];
+                let data_crc = crc16(data);
+
+                if data_crc == header_crc {
+                    Ok(Some(MaybeItem::Present(Item {
+                        header: self,
+                        data_buffer,
+                    })))
+                } else {
+                    Err(Error::CrcError)
+                }
+            }
+        }
+    }
+
     fn write<S: NorFlash>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
         let mut buffer = [0xFF; MAX_WORD_SIZE];
 
@@ -78,14 +119,32 @@ impl ItemHeader {
         let data_address = ItemHeader::data_address::<S>(address);
         data_address + round_up_to_alignment::<S>(self.length.get() as u32)
     }
+
+    /// Calculates the amount of bytes available for data.
+    /// Essentially, it's the given amount minus the header and minus some alignment padding.
+    pub fn available_data_bytes<S: NorFlash>(total_available: u32) -> Option<u32> {
+        let data_start = Self::data_address::<S>(0);
+        let data_end = round_down_to_alignment::<S>(total_available);
+
+        data_end.checked_sub(data_start)
+    }
 }
 
 pub struct Item<'d> {
     pub header: ItemHeader,
-    pub data: &'d [u8],
+    data_buffer: &'d mut [u8],
 }
 
 impl<'d> Item<'d> {
+    pub fn data(&'d self) -> &'d [u8] {
+        &self.data_buffer[..self.header.length.get() as usize]
+    }
+
+    /// Destruct the item to get back the full data buffer
+    pub fn destruct(self) -> (ItemHeader, &'d mut [u8]) {
+        (self.header, self.data_buffer)
+    }
+
     /// Read the item from the flash
     ///
     /// `data_buffer` must be long enough to hold the data and some padding
@@ -99,39 +158,14 @@ impl<'d> Item<'d> {
             return Ok(None);
         };
 
-        match header.crc {
-            None => Ok(Some(MaybeItem::Erased(header))),
-            Some(header_crc) => {
-                let data_address = ItemHeader::data_address::<S>(address);
-                let read_len = round_up_to_alignment_usize::<S>(header.length.get() as usize);
-                if data_buffer.len() < read_len {
-                    return Err(Error::BufferTooSmall);
-                }
-                if data_address + read_len as u32 > end_address {
-                    return Ok(Some(MaybeItem::Corrupted(header)));
-                }
-
-                flash
-                    .read(data_address, &mut data_buffer[..read_len])
-                    .map_err(Error::Storage)?;
-
-                let data = &data_buffer[..header.length.get() as usize];
-                let data_crc = crc16(data);
-
-                if data_crc == header_crc {
-                    Ok(Some(MaybeItem::Present(Self { header, data })))
-                } else {
-                    Err(Error::CrcError)
-                }
-            }
-        }
+        header.read_item(flash, data_buffer, address, end_address)
     }
 
     pub fn write_new<S: NorFlash>(
         flash: &mut S,
         address: u32,
         data: &'d [u8],
-    ) -> Result<Self, Error<S::Error>> {
+    ) -> Result<ItemHeader, Error<S::Error>> {
         let data_crc = crc16(data);
         let data_len = match data.len() {
             0 => return Err(Error::ZeroLengthData),
@@ -145,17 +179,20 @@ impl<'d> Item<'d> {
             crc: Some(data_crc),
         };
 
-        let s = Self { header, data };
+        Self::write_raw(&header, data, flash, address)?;
 
-        s.write(flash, address)?;
-
-        Ok(s)
+        Ok(header)
     }
 
-    pub fn write<S: NorFlash>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
-        self.header.write(flash, address)?;
+    fn write_raw<S: NorFlash>(
+        header: &ItemHeader,
+        data: &[u8],
+        flash: &mut S,
+        address: u32,
+    ) -> Result<(), Error<S::Error>> {
+        header.write(flash, address)?;
 
-        let (data_block, data_left) = self.data.split_at(round_down_to_alignment_usize::<S>(self.data.len()));
+        let (data_block, data_left) = data.split_at(round_down_to_alignment_usize::<S>(data.len()));
 
         let data_address = ItemHeader::data_address::<S>(address);
         flash
@@ -175,20 +212,24 @@ impl<'d> Item<'d> {
 
         Ok(())
     }
+
+    pub fn write<S: NorFlash>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
+        Self::write_raw(&self.header, self.data(), flash, address)
+    }
 }
 
-pub fn read_items<S: NorFlash, R>(
+pub fn read_items<'d, S: NorFlash, R>(
     flash: &mut S,
     start_address: u32,
     end_address: u32,
     data_buffer: &mut [u8],
-    mut callback: impl FnMut(&mut S, Result<(Item<'_>, u32), Error<S::Error>>) -> Option<R>,
-) -> Option<R> {
+    mut callback: impl FnMut(&mut S, Result<(Item<'_>, u32), Error<S::Error>>) -> Result<(), R>,
+) -> Result<(), R> {
     let mut current_address = start_address;
 
     loop {
         if current_address >= end_address {
-            return None;
+            return Ok(());
         }
 
         let value = match Item::read_new(flash, data_buffer, current_address, end_address) {
@@ -214,10 +255,10 @@ pub fn read_items<S: NorFlash, R>(
 
         match value {
             Some(value) => match callback(flash, value) {
-                Some(r) => return Some(r),
-                None => {}
+                Err(r) => return Err(r),
+                Ok(()) => {}
             },
-            None => return None,
+            None => return Ok(()),
         }
     }
 }
@@ -253,6 +294,14 @@ impl<'d> MaybeItem<'d> {
             MaybeItem::Present(item) => &item.header,
         }
     }
+
+    pub fn unwrap<E>(self) -> Result<Item<'d>, Error<E>> {
+        match self {
+            MaybeItem::Corrupted(_) => Err(Error::Corrupted),
+            MaybeItem::Erased(_) => panic!("Cannot unwrap an erased item"),
+            MaybeItem::Present(item) => Ok(item),
+        }
+    }
 }
 
 /// A crc that never returns 0
@@ -274,37 +323,4 @@ fn crc16(data: &[u8]) -> NonZeroU16 {
     } else {
         NonZeroU16::new(crc).unwrap()
     }
-}
-
-const fn round_up_to_alignment<S: NorFlash>(value: u32) -> u32 {
-    let alignment = S::WORD_SIZE as u32;
-    match value % alignment {
-        0 => value,
-        r => value + (alignment - r),
-    }
-}
-
-const fn round_up_to_alignment_usize<S: NorFlash>(value: usize) -> usize {
-    round_up_to_alignment::<S>(value as u32) as usize
-}
-
-const fn round_down_to_alignment<S: NorFlash>(value: u32) -> u32 {
-    let alignment = S::WORD_SIZE as u32;
-    (value / alignment) * alignment
-}
-
-const fn round_down_to_alignment_usize<S: NorFlash>(value: usize) -> usize {
-    round_down_to_alignment::<S>(value as u32) as usize
-}
-
-trait NorFlashExt {
-    const WORD_SIZE: usize;
-}
-
-impl<S: NorFlash> NorFlashExt for S {
-    const WORD_SIZE: usize = if Self::WRITE_SIZE > Self::READ_SIZE {
-        Self::WRITE_SIZE
-    } else {
-        Self::READ_SIZE
-    };
 }

@@ -61,7 +61,7 @@ pub fn fetch_item<I: StorageItem, S: NorFlash>(
     )
 }
 
-/// Fetch the item, but with the address and the length too
+/// Fetch the item, but with the address and header
 #[allow(clippy::type_complexity)]
 fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
     flash: &mut S,
@@ -119,28 +119,24 @@ fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
             calculate_page_end_address::<S>(flash_range.clone(), current_page_to_check)
                 - S::WRITE_SIZE as u32;
 
-        let error = read_items(
+        read_items(
             flash,
             page_data_start_address,
             page_data_end_address,
             data_buffer,
-            |_, item| match item {
-                Ok((item, address)) => match I::deserialize_from(item.data) {
-                    Ok(kv_item) => {
-                        if kv_item.key() == search_key {
-                            newest_found_item = Some((kv_item, address, item.header));
-                        }
-                        None
-                    }
-                    Err(e) => Some(MapError::Item(e)),
-                },
-                Err(e) => Some(e.into()),
-            },
-        );
+            |_, item| {
+                let (item, address) = item?;
+                if I::deserialize_key_only(item.data()).map_err(MapError::Item)? == search_key {
+                    newest_found_item = Some((
+                        I::deserialize_from(item.data()).map_err(MapError::Item)?,
+                        address,
+                        item.header,
+                    ));
+                }
 
-        if let Some(error) = error {
-            return Err(error);
-        }
+                Result::<(), MapError<_, S::Error>>::Ok(())
+            },
+        )?;
 
         // We've found the item! We can stop searching
         if newest_found_item.is_some() {
@@ -218,35 +214,45 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
 
             match free_spot_address {
                 Some(free_spot_address) => {
-                    let available_bytes_in_page =
-                        (page_data_end_address - free_spot_address) as usize;
+                    let available_bytes_in_page = page_data_end_address - free_spot_address;
+                    let available_data_bytes_in_page =
+                        ItemHeader::available_data_bytes::<S>(available_bytes_in_page);
                     let data_buffer_len = data_buffer.len();
 
-                    match item.serialize_into(&mut data_buffer[..data_buffer_len.min(available_bytes_in_page)]) {
-                        Ok(used_bytes) => {
-                            Item::write_new(flash, free_spot_address, &data_buffer[..used_bytes])?;
+                    if let Some(available_data_bytes_in_page) = available_data_bytes_in_page {
+                        match item.serialize_into(
+                            &mut data_buffer
+                                [..data_buffer_len.min(available_data_bytes_in_page as usize)],
+                        ) {
+                            Ok(used_bytes) => {
+                                Item::write_new(
+                                    flash,
+                                    free_spot_address,
+                                    &data_buffer
+                                        [..used_bytes.min(available_data_bytes_in_page as usize)],
+                                )?;
 
-                            #[cfg(feature = "defmt")]
-                            defmt::trace!("Item has been written ok");
+                                #[cfg(feature = "defmt")]
+                                defmt::trace!("Item has been written ok");
 
-                            return Ok(());
-                        }
-                        Err(e) if e.is_buffer_too_small() => {
-                            #[cfg(feature = "defmt")]
-                            defmt::trace!(
-                                "Partial open page is too small. Closing it now: {}",
-                                partial_open_page
-                            );
-
-                            // The item doesn't fit here, so we need to close this page and move to the next
-                            close_page(flash, flash_range.clone(), partial_open_page)?;
-                            next_page_to_use =
-                                Some(next_page::<S>(flash_range.clone(), partial_open_page));
-                        }
-                        Err(e) => {
-                            return Err(MapError::Item(e));
+                                return Ok(());
+                            }
+                            Err(e) if e.is_buffer_too_small() => {}
+                            Err(e) => {
+                                return Err(MapError::Item(e));
+                            }
                         }
                     }
+
+                    #[cfg(feature = "defmt")]
+                    defmt::trace!(
+                        "Partial open page is too small. Closing it now: {}",
+                        partial_open_page
+                    );
+
+                    // The item doesn't fit here, so we need to close this page and move to the next
+                    close_page(flash, flash_range.clone(), partial_open_page)?;
+                    next_page_to_use = Some(next_page::<S>(flash_range.clone(), partial_open_page));
                 }
                 None => {
                     #[cfg(feature = "defmt")]
@@ -291,29 +297,46 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
                         calculate_page_address::<S>(flash_range.clone(), next_page_to_use)
                             + S::WRITE_SIZE as u32;
 
-                    let result = read_items(
+                    read_items(
                         flash,
                         calculate_page_address::<S>(flash_range.clone(), next_buffer_page)
                             + S::WRITE_SIZE as u32,
                         calculate_page_end_address::<S>(flash_range.clone(), next_buffer_page)
                             - S::WRITE_SIZE as u32,
                         data_buffer,
-                        |flash, item| match item {
-                            Ok((item, _)) => {
-                                todo!("Find newest item with same key and store that");
+                        |flash, item| {
+                            let (item, item_address) = item?;
+                            let key =
+                                I::deserialize_key_only(item.data()).map_err(MapError::Item)?;
+                            let (item_header, data_buffer) = item.destruct();
 
-                                // let result = item.write(flash, next_page_write_address).err();
-                                // next_page_write_address =
-                                //     item.header.next_item_address::<S>(next_page_write_address);
-                                // result
+                            // Search for the newest item with the key we found
+                            let Some((_, found_address, _)) = fetch_item_with_location::<I, S>(
+                                flash,
+                                flash_range.clone(),
+                                key,
+                                data_buffer,
+                            )?
+                            else {
+                                // We couldn't even find our own item?
+                                return Err(MapError::Corrupted);
+                            };
+
+                            if found_address == item_address {
+                                // The newest item with this key is the item we're about to erase
+                                // This means we need to copy it over to the next_page_to_use
+                                let item = item_header
+                                    .read_item(flash, data_buffer, item_address, u32::MAX)?
+                                    .unwrap()
+                                    .unwrap()?;
+                                item.write(flash, next_page_write_address)?;
+                                next_page_write_address =
+                                    item.header.next_item_address::<S>(next_page_write_address);
                             }
-                            Err(e) => Some(e),
-                        },
-                    );
 
-                    if let Some(error) = result {
-                        return Err(error.into());
-                    }
+                            Result::<(), MapError<_, S::Error>>::Ok(())
+                        },
+                    )?;
 
                     flash
                         .erase(
@@ -372,6 +395,15 @@ pub trait StorageItem {
     fn deserialize_from(buffer: &[u8]) -> Result<Self, Self::Error>
     where
         Self: Sized;
+    /// Optimization for deserializing the key only. Can give a small performance boost if
+    /// your key is easily extractable from the buffer.
+    fn deserialize_key_only(buffer: &[u8]) -> Result<Self::Key, Self::Error>
+    where
+        Self: Sized,
+    {
+        // This works for any impl, but could be overridden by the user
+        Ok(Self::deserialize_from(buffer)?.key())
+    }
 
     /// The key of the key-value item. It is used by the storage to know what the key of this item is.
     fn key(&self) -> Self::Key;
@@ -553,9 +585,10 @@ mod tests {
         )
         .unwrap();
 
-        let item = fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), 0, &mut data_buffer)
-            .unwrap()
-            .unwrap();
+        let item =
+            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), 0, &mut data_buffer)
+                .unwrap()
+                .unwrap();
         assert_eq!(item.key, 0);
         assert_eq!(item.value, vec![5, 6]);
 
@@ -565,38 +598,48 @@ mod tests {
             MockStorageItem {
                 key: 1,
                 value: vec![2, 2, 2, 2, 2, 2],
-            }, &mut data_buffer
+            },
+            &mut data_buffer,
         )
         .unwrap();
 
-        let item = fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), 0, &mut data_buffer)
-            .unwrap()
-            .unwrap();
+        let item =
+            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), 0, &mut data_buffer)
+                .unwrap()
+                .unwrap();
         assert_eq!(item.key, 0);
         assert_eq!(item.value, vec![5, 6]);
 
-        let item = fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), 1, &mut data_buffer)
-            .unwrap()
-            .unwrap();
+        let item =
+            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), 1, &mut data_buffer)
+                .unwrap()
+                .unwrap();
         assert_eq!(item.key, 1);
         assert_eq!(item.value, vec![2, 2, 2, 2, 2, 2]);
 
         for index in 0..4000 {
+            println!("Test index {index}");
             store_item::<_, _>(
                 &mut flash,
                 flash_range.clone(),
                 MockStorageItem {
                     key: (index % 10) as u8,
                     value: vec![(index % 10) as u8 * 2; index % 10],
-                }, &mut data_buffer
+                },
+                &mut data_buffer,
             )
             .unwrap();
         }
 
         for i in 0..10 {
-            let item = fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), i, &mut data_buffer)
-                .unwrap()
-                .unwrap();
+            let item = fetch_item::<MockStorageItem, _>(
+                &mut flash,
+                flash_range.clone(),
+                i,
+                &mut data_buffer,
+            )
+            .unwrap()
+            .unwrap();
             assert_eq!(item.key, i);
             assert_eq!(item.value, vec![(i % 10) as u8 * 2; (i % 10) as usize]);
         }
@@ -608,15 +651,21 @@ mod tests {
                 MockStorageItem {
                     key: 11,
                     value: vec![0; 10],
-                }, &mut data_buffer
+                },
+                &mut data_buffer,
             )
             .unwrap();
         }
 
         for i in 0..10 {
-            let item = fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), i, &mut data_buffer)
-                .unwrap()
-                .unwrap();
+            let item = fetch_item::<MockStorageItem, _>(
+                &mut flash,
+                flash_range.clone(),
+                i,
+                &mut data_buffer,
+            )
+            .unwrap()
+            .unwrap();
             assert_eq!(item.key, i);
             assert_eq!(item.value, vec![(i % 10) as u8 * 2; (i % 10) as usize]);
         }
@@ -651,15 +700,21 @@ mod tests {
                 MockStorageItem {
                     key: UPPER_BOUND,
                     value: vec![0; UPPER_BOUND as usize],
-                }, &mut data_buffer
+                },
+                &mut data_buffer
             ),
             Err(MapError::FullStorage)
         );
 
         for i in 0..UPPER_BOUND {
-            let item = fetch_item::<MockStorageItem, _>(&mut tiny_flash, 0x00..0x40, i as u8, &mut data_buffer)
-                .unwrap()
-                .unwrap();
+            let item = fetch_item::<MockStorageItem, _>(
+                &mut tiny_flash,
+                0x00..0x40,
+                i as u8,
+                &mut data_buffer,
+            )
+            .unwrap()
+            .unwrap();
 
             println!("Fetched {item:?}");
 
@@ -691,15 +746,21 @@ mod tests {
                 MockStorageItem {
                     key: UPPER_BOUND,
                     value: vec![0; UPPER_BOUND as usize],
-                }, &mut data_buffer
+                },
+                &mut data_buffer
             ),
             Err(MapError::FullStorage)
         );
 
         for i in 0..UPPER_BOUND {
-            let item = fetch_item::<MockStorageItem, _>(&mut big_flash, 0x0000..0x1000, i as u8, &mut data_buffer)
-                .unwrap()
-                .unwrap();
+            let item = fetch_item::<MockStorageItem, _>(
+                &mut big_flash,
+                0x0000..0x1000,
+                i as u8,
+                &mut data_buffer,
+            )
+            .unwrap()
+            .unwrap();
 
             println!("Fetched {item:?}");
 
@@ -728,9 +789,14 @@ mod tests {
         }
 
         for i in 0..24 {
-            let item = fetch_item::<MockStorageItem, _>(&mut flash, 0x0000..0x4000, i as u8, &mut data_buffer)
-                .unwrap()
-                .unwrap();
+            let item = fetch_item::<MockStorageItem, _>(
+                &mut flash,
+                0x0000..0x4000,
+                i as u8,
+                &mut data_buffer,
+            )
+            .unwrap()
+            .unwrap();
 
             println!("Fetched {item:?}");
 
