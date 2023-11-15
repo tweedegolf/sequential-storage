@@ -1,4 +1,4 @@
-use core::num::NonZeroU16;
+use core::{num::NonZeroU16, ops::ControlFlow};
 
 use embedded_storage::nor_flash::{MultiwriteNorFlash, NorFlash};
 
@@ -55,9 +55,9 @@ impl ItemHeader {
         data_buffer: &'d mut [u8],
         address: u32,
         end_address: u32,
-    ) -> Result<Option<MaybeItem<'d>>, Error<S::Error>> {
+    ) -> Result<MaybeItem<'d>, Error<S::Error>> {
         match self.crc {
-            None => Ok(Some(MaybeItem::Erased(self))),
+            None => Ok(MaybeItem::Erased(self)),
             Some(header_crc) => {
                 let data_address = ItemHeader::data_address::<S>(address);
                 let read_len = round_up_to_alignment_usize::<S>(self.length.get() as usize);
@@ -65,7 +65,7 @@ impl ItemHeader {
                     return Err(Error::BufferTooSmall);
                 }
                 if data_address + read_len as u32 > end_address {
-                    return Ok(Some(MaybeItem::Corrupted(self)));
+                    return Ok(MaybeItem::Corrupted(self));
                 }
 
                 flash
@@ -76,12 +76,12 @@ impl ItemHeader {
                 let data_crc = crc16(data);
 
                 if data_crc == header_crc {
-                    Ok(Some(MaybeItem::Present(Item {
+                    Ok(MaybeItem::Present(Item {
                         header: self,
                         data_buffer,
-                    })))
+                    }))
                 } else {
-                    Err(Error::CrcError)
+                    return Ok(MaybeItem::Corrupted(self));
                 }
             }
         }
@@ -145,22 +145,6 @@ impl<'d> Item<'d> {
         (self.header, self.data_buffer)
     }
 
-    /// Read the item from the flash
-    ///
-    /// `data_buffer` must be long enough to hold the data and some padding
-    pub fn read_new<S: NorFlash>(
-        flash: &mut S,
-        data_buffer: &'d mut [u8],
-        address: u32,
-        end_address: u32,
-    ) -> Result<Option<MaybeItem<'d>>, Error<S::Error>> {
-        let Some(header) = ItemHeader::read_new(flash, address, end_address)? else {
-            return Ok(None);
-        };
-
-        header.read_item(flash, data_buffer, address, end_address)
-    }
-
     pub fn write_new<S: NorFlash>(
         flash: &mut S,
         address: u32,
@@ -218,49 +202,61 @@ impl<'d> Item<'d> {
     }
 }
 
+pub fn read_item_headers<S: NorFlash, R>(
+    flash: &mut S,
+    start_address: u32,
+    end_address: u32,
+    mut callback: impl FnMut(&mut S, ItemHeader, u32) -> ControlFlow<R, ()>,
+) -> Result<Option<R>, Error<S::Error>> {
+    let mut current_address = start_address;
+
+    loop {
+        if current_address >= end_address {
+            return Ok(None);
+        }
+
+        match ItemHeader::read_new(flash, current_address, end_address)? {
+            Some(header) => {
+                let next_address = header.next_item_address::<S>(current_address);
+
+                match callback(flash, header, current_address) {
+                    ControlFlow::Continue(_) => {}
+                    ControlFlow::Break(r) => return Ok(Some(r)),
+                }
+
+                current_address = next_address;
+            }
+            None => return Ok(None),
+        };
+    }
+}
+
 pub fn read_items<'d, S: NorFlash, R>(
     flash: &mut S,
     start_address: u32,
     end_address: u32,
     data_buffer: &mut [u8],
-    mut callback: impl FnMut(&mut S, Result<(Item<'_>, u32), Error<S::Error>>) -> Result<(), R>,
-) -> Result<(), R> {
-    let mut current_address = start_address;
-
-    loop {
-        if current_address >= end_address {
-            return Ok(());
-        }
-
-        let value = match Item::read_new(flash, data_buffer, current_address, end_address) {
-            Ok(Some(maybe_item)) => {
-                let next_address = maybe_item.header().next_item_address::<S>(current_address);
-                let value = match maybe_item {
-                    MaybeItem::Corrupted(_) => {
-                        #[cfg(feature = "defmt")]
-                        defmt::error!("Found a corrupted item header at {:X}", current_address);
-                        continue;
-                    }
-                    MaybeItem::Erased(_) => continue,
-                    MaybeItem::Present(item) => Some(Ok((item, current_address))),
-                };
-
-                current_address = next_address;
-
-                value
+    mut callback: impl FnMut(&mut S, Item<'_>, u32) -> ControlFlow<R, ()>,
+) -> Result<Option<R>, Error<S::Error>> {
+    read_item_headers(
+        flash,
+        start_address,
+        end_address,
+        |flash, header, address| match header.read_item(flash, data_buffer, address, end_address) {
+            Ok(MaybeItem::Corrupted(_)) => {
+                #[cfg(feature = "defmt")]
+                defmt::error!("Found a corrupted item header at {:X}", current_address);
+                ControlFlow::Continue(())
             }
-            Ok(None) => None,
-            Err(e) => Some(Err(e)),
-        };
-
-        match value {
-            Some(value) => match callback(flash, value) {
-                Err(r) => return Err(r),
-                Ok(()) => {}
+            Ok(MaybeItem::Erased(_)) => ControlFlow::Continue(()),
+            Ok(MaybeItem::Present(item)) => match callback(flash, item, address) {
+                ControlFlow::Continue(_) => ControlFlow::Continue(()),
+                ControlFlow::Break(r) => ControlFlow::Break(Ok(r)),
             },
-            None => return Ok(()),
-        }
-    }
+            Err(e) => ControlFlow::Break(Err(e)),
+        },
+    )?
+    .transpose()
 }
 
 pub fn find_next_free_item_spot<S: NorFlash>(
@@ -287,14 +283,6 @@ pub enum MaybeItem<'d> {
 }
 
 impl<'d> MaybeItem<'d> {
-    pub fn header(&self) -> &ItemHeader {
-        match self {
-            MaybeItem::Corrupted(header) => header,
-            MaybeItem::Erased(header) => header,
-            MaybeItem::Present(item) => &item.header,
-        }
-    }
-
     pub fn unwrap<E>(self) -> Result<Item<'d>, Error<E>> {
         match self {
             MaybeItem::Corrupted(_) => Err(Error::Corrupted),

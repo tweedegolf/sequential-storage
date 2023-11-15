@@ -41,6 +41,8 @@
 //! );
 //! ```
 
+use core::ops::ControlFlow;
+
 use crate::item::{find_next_free_item_spot, read_items, Item, ItemHeader};
 
 use super::*;
@@ -119,24 +121,31 @@ fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
             calculate_page_end_address::<S>(flash_range.clone(), current_page_to_check)
                 - S::WRITE_SIZE as u32;
 
-        read_items(
+        if let Some(e) = read_items(
             flash,
             page_data_start_address,
             page_data_end_address,
             data_buffer,
-            |_, item| {
-                let (item, address) = item?;
-                if I::deserialize_key_only(item.data()).map_err(MapError::Item)? == search_key {
+            |_, item, address| {
+                if I::deserialize_key_only(item.data())
+                    .map_err(MapError::Item)
+                    .to_controlflow()?
+                    == search_key
+                {
                     newest_found_item = Some((
-                        I::deserialize_from(item.data()).map_err(MapError::Item)?,
+                        I::deserialize_from(item.data())
+                            .map_err(MapError::Item)
+                            .to_controlflow()?,
                         address,
                         item.header,
                     ));
                 }
 
-                Result::<(), MapError<_, S::Error>>::Ok(())
+                ControlFlow::<MapError<_, S::Error>, ()>::Continue(())
             },
-        )?;
+        )? {
+            return Err(e);
+        }
 
         // We've found the item! We can stop searching
         if newest_found_item.is_some() {
@@ -297,17 +306,17 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
                         calculate_page_address::<S>(flash_range.clone(), next_page_to_use)
                             + S::WRITE_SIZE as u32;
 
-                    read_items(
+                    if let Some(e) = read_items(
                         flash,
                         calculate_page_address::<S>(flash_range.clone(), next_buffer_page)
                             + S::WRITE_SIZE as u32,
                         calculate_page_end_address::<S>(flash_range.clone(), next_buffer_page)
                             - S::WRITE_SIZE as u32,
                         data_buffer,
-                        |flash, item| {
-                            let (item, item_address) = item?;
-                            let key =
-                                I::deserialize_key_only(item.data()).map_err(MapError::Item)?;
+                        |flash, item, item_address| {
+                            let key = I::deserialize_key_only(item.data())
+                                .map_err(MapError::Item)
+                                .to_controlflow()?;
                             let (item_header, data_buffer) = item.destruct();
 
                             // Search for the newest item with the key we found
@@ -316,27 +325,32 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
                                 flash_range.clone(),
                                 key,
                                 data_buffer,
-                            )?
+                            )
+                            .to_controlflow()?
                             else {
                                 // We couldn't even find our own item?
-                                return Err(MapError::Corrupted);
+                                return ControlFlow::Break(MapError::Corrupted);
                             };
 
                             if found_address == item_address {
                                 // The newest item with this key is the item we're about to erase
                                 // This means we need to copy it over to the next_page_to_use
                                 let item = item_header
-                                    .read_item(flash, data_buffer, item_address, u32::MAX)?
+                                    .read_item(flash, data_buffer, item_address, u32::MAX)
+                                    .to_controlflow()?
                                     .unwrap()
-                                    .unwrap()?;
-                                item.write(flash, next_page_write_address)?;
+                                    .to_controlflow()?;
+                                item.write(flash, next_page_write_address)
+                                    .to_controlflow()?;
                                 next_page_write_address =
                                     item.header.next_item_address::<S>(next_page_write_address);
                             }
 
-                            Result::<(), MapError<_, S::Error>>::Ok(())
+                            ControlFlow::<MapError<_, S::Error>, ()>::Continue(())
                         },
-                    )?;
+                    )? {
+                        return Err(e);
+                    }
 
                     flash
                         .erase(

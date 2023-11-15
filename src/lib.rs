@@ -8,7 +8,10 @@
 // - flash write size is quite small, so it writes words and not full pages
 // - flash read size is 1, so the flash is byte addressable
 
-use core::{fmt::Debug, ops::Range};
+use core::{
+    fmt::Debug,
+    ops::{ControlFlow, Range},
+};
 use embedded_storage::nor_flash::NorFlash;
 
 mod item;
@@ -67,6 +70,7 @@ fn calculate_page_address<S: NorFlash>(flash_range: Range<u32>, page_index: usiz
 fn calculate_page_end_address<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> u32 {
     flash_range.start + (S::ERASE_SIZE * (page_index + 1)) as u32
 }
+#[allow(unused)]
 fn calculate_page_index<S: NorFlash>(flash_range: Range<u32>, address: u32) -> usize {
     (address - flash_range.start) as usize / S::ERASE_SIZE
 }
@@ -256,6 +260,24 @@ impl<S: NorFlash> NorFlashExt for S {
     } else {
         Self::READ_SIZE
     };
+}
+
+/// Some plumbing for things not yet stable in std/core
+trait ResultToControlflow<B, C> {
+    fn to_controlflow(self) -> ControlFlow<B, C>;
+}
+
+impl<B, C, E> ResultToControlflow<B, C> for Result<C, E>
+where
+    // T: Into<C>,
+    E: Into<B>,
+{
+    fn to_controlflow(self) -> ControlFlow<B, C> {
+        match self {
+            Ok(c) => ControlFlow::Continue(c),
+            Err(b) => ControlFlow::Break(b.into()),
+        }
+    }
 }
 
 #[cfg(test)]
