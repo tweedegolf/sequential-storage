@@ -11,6 +11,10 @@
 use core::{fmt::Debug, ops::Range};
 use embedded_storage::nor_flash::NorFlash;
 
+// The maximum size for flash writes that is supported. Current upper limit of 256 bits arises from
+// STM32 parts.
+const MAX_FLASH_WRITE_SIZE: usize = 32;
+
 pub mod map;
 pub mod queue;
 
@@ -75,7 +79,7 @@ fn get_page_state<S: NorFlash>(
 ) -> Result<PageState, Error<S::Error>> {
     let page_address = calculate_page_address::<S>(flash_range, page_index);
 
-    let mut buffer = [0; 16];
+    let mut buffer = [0; MAX_FLASH_WRITE_SIZE];
     flash
         .read(page_address, &mut buffer[..S::READ_SIZE])
         .map_err(Error::Storage)?;
@@ -127,7 +131,7 @@ fn close_page<S: NorFlash>(
         return Ok(());
     }
 
-    let buffer = [MARKER; 16];
+    let buffer = [MARKER; MAX_FLASH_WRITE_SIZE];
     // Close the end marker
     flash
         .write(
@@ -151,7 +155,7 @@ fn partial_close_page<S: NorFlash>(
         return Ok(());
     }
 
-    let buffer = [MARKER; 16];
+    let buffer = [MARKER; MAX_FLASH_WRITE_SIZE];
     // Close the start marker
     flash
         .write(
