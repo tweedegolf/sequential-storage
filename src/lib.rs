@@ -1,4 +1,4 @@
-#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(any(test, doctest)), no_std)]
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
@@ -6,7 +6,6 @@
 //
 // - flash erase size is quite big, aka, this is a paged flash
 // - flash write size is quite small, so it writes words and not full pages
-// - flash read size is 1, so the flash is byte addressable
 
 use core::{
     fmt::Debug,
@@ -18,11 +17,18 @@ mod item;
 pub mod map;
 pub mod queue;
 
-#[cfg(test)]
-mod mock_flash;
+#[cfg(any(test, doctest))]
+pub mod mock_flash;
 
+/// The biggest wordsize we support.
+/// 
+/// Stm32 internal flash has 256-bit words, so 32 bytes.
+/// Many flashes have 4-byte or 1-byte words.
 const MAX_WORD_SIZE: usize = 32;
 
+/// Find the first page that is in the given page state.
+/// 
+/// The search starts at starting_page_index (and wraps around back to 0 if required)
 fn find_first_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
@@ -50,11 +56,13 @@ fn get_pages<S: NorFlash>(
         .map(move |(index, _)| (index + starting_page_index) % page_count)
 }
 
+/// Get the next page index (wrapping around to 0 if required)
 fn next_page<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> usize {
     let page_count = flash_range.len() / S::ERASE_SIZE;
     (page_index + 1) % page_count
 }
 
+/// Get the previous page index (wrapping around to the biggest page if required)
 fn previous_page<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> usize {
     let page_count = flash_range.len() / S::ERASE_SIZE;
 
@@ -64,17 +72,21 @@ fn previous_page<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> usi
     }
 }
 
+/// Calculate the first address of the given page
 fn calculate_page_address<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> u32 {
     flash_range.start + (S::ERASE_SIZE * page_index) as u32
 }
+/// Calculate the last address (exclusive) of the given page
 fn calculate_page_end_address<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> u32 {
     flash_range.start + (S::ERASE_SIZE * (page_index + 1)) as u32
 }
+/// Get the page index from any address located inside that page
 #[allow(unused)]
 fn calculate_page_index<S: NorFlash>(flash_range: Range<u32>, address: u32) -> usize {
     (address - flash_range.start) as usize / S::ERASE_SIZE
 }
 
+/// Get the state of the page located at the given index
 fn get_page_state<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
@@ -126,9 +138,7 @@ fn close_page<S: NorFlash>(
     flash_range: Range<u32>,
     page_index: usize,
 ) -> Result<(), Error<S::Error>> {
-    partial_close_page::<S>(flash, flash_range.clone(), page_index)?;
-
-    let current_state = get_page_state::<S>(flash, flash_range.clone(), page_index)?;
+    let current_state = partial_close_page::<S>(flash, flash_range.clone(), page_index)?;
 
     if current_state != PageState::PartialOpen {
         return Ok(());
@@ -139,7 +149,7 @@ fn close_page<S: NorFlash>(
     flash
         .write(
             calculate_page_end_address::<S>(flash_range, page_index) - S::WRITE_SIZE as u32,
-            &buffer[..S::WORD_SIZE],
+            &buffer[..S::WRITE_SIZE],
         )
         .map_err(Error::Storage)?;
 
@@ -151,11 +161,11 @@ fn partial_close_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     page_index: usize,
-) -> Result<(), Error<S::Error>> {
+) -> Result<PageState, Error<S::Error>> {
     let current_state = get_page_state::<S>(flash, flash_range.clone(), page_index)?;
 
     if current_state != PageState::Open {
-        return Ok(());
+        return Ok(current_state);
     }
 
     let buffer = [MARKER; MAX_WORD_SIZE];
@@ -163,17 +173,25 @@ fn partial_close_page<S: NorFlash>(
     flash
         .write(
             calculate_page_address::<S>(flash_range, page_index),
-            &buffer[..S::WORD_SIZE],
+            &buffer[..S::WRITE_SIZE],
         )
         .map_err(Error::Storage)?;
 
-    Ok(())
+    Ok(match current_state {
+        PageState::Closed => PageState::Closed,
+        PageState::PartialOpen => PageState::PartialOpen,
+        PageState::Open => PageState::PartialOpen,
+    })
 }
 
+/// The state of a page
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PageState {
+    /// This page was fully written and has now been sealed
     Closed,
+    /// This page has been written to, but may have some space left over
     PartialOpen,
+    /// This page is fully erased
     Open,
 }
 
@@ -204,6 +222,7 @@ impl PageState {
     }
 }
 
+/// The marker being used for page states
 const MARKER: u8 = 0;
 
 /// The main error type
@@ -223,12 +242,12 @@ pub enum Error<S> {
     BufferTooBig,
     /// A provided buffer was to small to be used
     BufferTooSmall,
-    /// An item with a crc error was encountered
-    CrcError,
     /// Data with zero length was being stored. This is not allowed.
     ZeroLengthData,
 }
 
+/// Round up the the given number to align with the wordsize of the flash.
+/// If the number is already aligned, it is not changed.
 const fn round_up_to_alignment<S: NorFlash>(value: u32) -> u32 {
     let alignment = S::WORD_SIZE as u32;
     match value % alignment {
@@ -237,20 +256,28 @@ const fn round_up_to_alignment<S: NorFlash>(value: u32) -> u32 {
     }
 }
 
+/// Round up the the given number to align with the wordsize of the flash.
+/// If the number is already aligned, it is not changed.
 const fn round_up_to_alignment_usize<S: NorFlash>(value: usize) -> usize {
     round_up_to_alignment::<S>(value as u32) as usize
 }
 
+/// Round down the the given number to align with the wordsize of the flash.
+/// If the number is already aligned, it is not changed.
 const fn round_down_to_alignment<S: NorFlash>(value: u32) -> u32 {
     let alignment = S::WORD_SIZE as u32;
     (value / alignment) * alignment
 }
 
+/// Round down the the given number to align with the wordsize of the flash.
+/// If the number is already aligned, it is not changed.
 const fn round_down_to_alignment_usize<S: NorFlash>(value: usize) -> usize {
     round_down_to_alignment::<S>(value as u32) as usize
 }
 
+/// Extension trait to get the overall word size, which is the largest of the write and read word size
 trait NorFlashExt {
+    /// The largest of the write and read word size
     const WORD_SIZE: usize;
 }
 

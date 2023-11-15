@@ -1,3 +1,24 @@
+//! Module that implements storing raw items in flash.
+//! This module is page-unaware.
+//!
+//! Memory layout of item:
+//! ```text
+//! ┌──────┬──────┬──────┬──────┬──┬─────┬─────┬──┬─────────────────────────────┬─────┬─────┬─────┐
+//! │      │      │      │      │  │     │     │  │                             │     │     │     │
+//! │Length│Length│CRC   │CRC   │Pad to word align│Data                         │Pad to word align│
+//! │      │      │      │      │     │     │     │                             │  │     │     │  │
+//! └──────┴──────┴──────┴──────┴─────┴─────┴─────┴─────────────────────────────┴──┴─────┴─────┴──┘
+//! 0      1      2      3      4                 4+padding                     4+padding+length  4+padding+length+endpadding
+//! ```
+//!
+//! An item consists of an [ItemHeader] and some data.
+//! The header has a length field that encodes the length of the data
+//! and a crc field that encodes the checksum of the data.
+//!
+//! If the crc is 0, then the item is counted as being erased.
+//! The crc is calculated by [crc16] which never produces a 0 value on its own.
+//!
+
 use core::{num::NonZeroU16, ops::ControlFlow};
 
 use embedded_storage::nor_flash::{MultiwriteNorFlash, NorFlash};
@@ -151,11 +172,10 @@ impl<'d> Item<'d> {
         data: &'d [u8],
     ) -> Result<ItemHeader, Error<S::Error>> {
         let data_crc = crc16(data);
-        let data_len = match data.len() {
+        let data_len = match data.len() as u32 {
             0 => return Err(Error::ZeroLengthData),
             len @ 1..=0xFFFF => NonZeroU16::new(len as u16).unwrap(),
             0x10000.. => return Err(Error::BufferTooBig),
-            _ => unreachable!(),
         };
 
         let header = ItemHeader {

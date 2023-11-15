@@ -1,43 +1,115 @@
 //! A module for storing key-value pairs in flash with minimal erase cycles.
 //!
+//! When a key-value is stored, it overwrites the any old items with the same key.
+//!
 //! Basic API:
 //!
-//! ```rust,ignore
-//! enum MyCustomType {
-//!     X,
-//!     Y,
-//!     // ...
+//! ```rust
+//! # use sequential_storage::map::{store_item, fetch_item, StorageItem, StorageItemError};
+//! # use mock_flash::MockFlashBase;
+//! # type Flash = MockFlashBase<10, 1, 4096>;
+//! # mod mock_flash {
+//! #   include!("mock_flash.rs");
+//! # }
+//! // We create the type we want to store in this part of flash.
+//! // It itself must contain the key and the value.
+//! // On this part of flash, we must only call the functions using this type.
+//! // If you start to mix, bad things will happen.
+//!
+//! #[derive(Debug, PartialEq)]
+//! struct MyCustomType {
+//!     key: u8,
+//!     data: u32,
 //! }
+//!
+//! // We implement StorageItem for our type. This lets the crate
+//! // know how to serialize and deserialize the data and get its key for comparison.
 //!
 //! impl StorageItem for MyCustomType {
-//!     // ...
+//!     type Key = u8;
+//!     type Error = Error;
+//!     
+//!     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
+//!         if buffer.len() < 5 {
+//!             return Err(Error::BufferTooSmall);
+//!         }
+//!
+//!         buffer[0] = self.key;
+//!         buffer[1..5].copy_from_slice(&self.data.to_le_bytes());
+//!
+//!         Ok(5)
+//!     }
+//!     fn deserialize_from(buffer: &[u8]) -> Result<Self, Self::Error> {
+//!         if buffer.len() < 5 {
+//!             return Err(Error::BufferTooSmall);
+//!         }
+//!         
+//!         Ok(Self {
+//!             key: buffer[0],
+//!             data: u32::from_le_bytes(buffer[1..5].try_into().unwrap()),
+//!         })
+//!     }
+//!     fn key(&self) -> Self::Key { self.key }
 //! }
 //!
-//! let mut flash = SomeFlashChip::new();
-//! let flash_range = 0x1000..0x2000; // These are the flash addresses in which the crate will operate
+//! // We never tell the crate the max length of our type.
+//! // Instead we need to tell the crate when the provided buffer is too small.
+//! // That's done with the StorageItemError trait which needs to be implemented by the error type.
+//!
+//! #[derive(Debug)]
+//! enum Error {
+//!     BufferTooSmall,
+//! }
+//!
+//! impl StorageItemError for Error {
+//!     fn is_buffer_too_small(&self) -> bool {
+//!         match self {
+//!             Self::BufferTooSmall => true,
+//!         }
+//!     }
+//! }
+//!
+//! // Initialize the flash. This can be internal or external
+//! let mut flash = Flash::new();
+//! // These are the flash addresses in which the crate will operate.
+//! // The crate will not read, write or erase outside of this range.
+//! let flash_range = 0x1000..0x3000;
+//! // We need to give the crate a buffer to work with.
+//! // It must be big enough to serialize the biggest value of your storage type in.
+//! let mut data_buffer = [0; 100];
+//!
+//! // We can fetch an item from the flash.
+//! // Nothing is stored in it yet, so it will return None.
 //!
 //! assert_eq!(
-//!     fetch_item::<MyCustomType, SomeFlashChip>(
+//!     fetch_item::<MyCustomType, _>(
 //!         &mut flash,
 //!         flash_range.clone(),
-//!         0
+//!         &mut data_buffer,
+//!         42,
 //!     ).unwrap(),
 //!     None
 //! );
 //!
-//! store_item::<MyCustomType, SomeFlashChip>(
+//! // Now we store an item the flash with key 42
+//!
+//! store_item::<MyCustomType, _>(
 //!     &mut flash,
 //!     flash_range.clone(),
-//!     MyCustomType::X
+//!     &mut data_buffer,
+//!     MyCustomType { key: 42, data: 104729 },
 //! ).unwrap();
 //!
+//! // When we ask for key 42, we not get back a Some with the correct value
+//!
 //! assert_eq!(
-//!     fetch_item::<MyCustomType, SomeFlashChip>(
+//!     fetch_item::<MyCustomType, _>(
 //!         &mut flash,
 //!         flash_range.clone(),
-//!         0
+//!         &mut data_buffer,
+//!         42,
 //!     ).unwrap(),
-//!     Some(MyCustomType::X)
+//!     Some(MyCustomType { key: 42, data: 104729 })
 //! );
 //! ```
 
@@ -51,14 +123,19 @@ use super::*;
 /// Only the last stored item of the given key is returned.
 ///
 /// If no value with the key is found, None is returned.
+/// 
+/// The data buffer must be long enough to hold the longest serialized data of your [StorageItem] type.
+///
+/// *Note: On a given flash range, make sure to use only the same type as [StorageItem] every time
+/// or types that serialize and deserialize the key in the same way.*
 pub fn fetch_item<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    search_key: I::Key,
     data_buffer: &mut [u8],
+    search_key: I::Key,
 ) -> Result<Option<I>, MapError<I::Error, S::Error>> {
     Ok(
-        fetch_item_with_location(flash, flash_range, search_key, data_buffer)?
+        fetch_item_with_location(flash, flash_range, data_buffer, search_key)?
             .map(|(item, _, _)| item),
     )
 }
@@ -68,14 +145,14 @@ pub fn fetch_item<I: StorageItem, S: NorFlash>(
 fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    search_key: I::Key,
     data_buffer: &mut [u8],
+    search_key: I::Key,
 ) -> Result<Option<(I, u32, ItemHeader)>, MapError<I::Error, S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
     assert!(flash_range.end - flash_range.start >= S::ERASE_SIZE as u32 * 2);
 
-    assert!(S::ERASE_SIZE >= S::WRITE_SIZE * 3);
+    assert!(S::ERASE_SIZE >= S::WORD_SIZE * 3);
     assert_eq!(S::READ_SIZE, 1);
 
     // We need to find the page we were last using. This should be the only partial open page.
@@ -116,10 +193,10 @@ fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
     loop {
         let page_data_start_address =
             calculate_page_address::<S>(flash_range.clone(), current_page_to_check)
-                + S::WRITE_SIZE as u32;
+                + S::WORD_SIZE as u32;
         let page_data_end_address =
             calculate_page_end_address::<S>(flash_range.clone(), current_page_to_check)
-                - S::WRITE_SIZE as u32;
+                - S::WORD_SIZE as u32;
 
         if let Some(e) = read_items(
             flash,
@@ -169,27 +246,32 @@ fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
 /// Store an item into flash memory.
 /// It will overwrite the last value that has the same key.
 /// The flash needs to be at least 2 pages long.
+/// 
+/// The data buffer must be long enough to hold the longest serialized data of your [StorageItem] type.
+///
+/// *Note: On a given flash range, make sure to use only the same type as [StorageItem] every time
+/// or types that serialize and deserialize the key in the same way.*
 pub fn store_item<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    item: I,
     data_buffer: &mut [u8],
+    item: I,
 ) -> Result<(), MapError<I::Error, S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
 
     assert!(flash_range.len() / S::ERASE_SIZE >= 2);
 
-    assert!(S::ERASE_SIZE >= S::WRITE_SIZE * 3);
+    assert!(S::ERASE_SIZE >= S::WORD_SIZE * 3);
     assert_eq!(S::READ_SIZE, 1);
 
-    return store_item_inner::<I, S>(flash, flash_range, item, data_buffer, 0);
+    return store_item_inner::<I, S>(flash, flash_range, data_buffer, item, 0);
 
     fn store_item_inner<I: StorageItem, S: NorFlash>(
         flash: &mut S,
         flash_range: Range<u32>,
-        item: I,
         data_buffer: &mut [u8],
+        item: I,
         recursion_level: usize,
     ) -> Result<(), MapError<I::Error, S::Error>> {
         #[cfg(feature = "defmt")]
@@ -213,10 +295,10 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
 
             let page_data_start_address =
                 calculate_page_address::<S>(flash_range.clone(), partial_open_page)
-                    + S::WRITE_SIZE as u32;
+                    + S::WORD_SIZE as u32;
             let page_data_end_address =
                 calculate_page_end_address::<S>(flash_range.clone(), partial_open_page)
-                    - S::WRITE_SIZE as u32;
+                    - S::WORD_SIZE as u32;
 
             let free_spot_address =
                 find_next_free_item_spot(flash, page_data_start_address, page_data_end_address)?;
@@ -304,14 +386,14 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
 
                     let mut next_page_write_address =
                         calculate_page_address::<S>(flash_range.clone(), next_page_to_use)
-                            + S::WRITE_SIZE as u32;
+                            + S::WORD_SIZE as u32;
 
                     if let Some(e) = read_items(
                         flash,
                         calculate_page_address::<S>(flash_range.clone(), next_buffer_page)
-                            + S::WRITE_SIZE as u32,
+                            + S::WORD_SIZE as u32,
                         calculate_page_end_address::<S>(flash_range.clone(), next_buffer_page)
-                            - S::WRITE_SIZE as u32,
+                            - S::WORD_SIZE as u32,
                         data_buffer,
                         |flash, item, item_address| {
                             let key = I::deserialize_key_only(item.data())
@@ -323,8 +405,8 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
                             let Some((_, found_address, _)) = fetch_item_with_location::<I, S>(
                                 flash,
                                 flash_range.clone(),
-                                key,
                                 data_buffer,
+                                key,
                             )
                             .to_controlflow()?
                             else {
@@ -385,17 +467,14 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
         }
 
         // If we get here, we just freshly partially closed a new page, so this should succeed
-        store_item_inner::<I, S>(flash, flash_range, item, data_buffer, recursion_level + 1)
+        store_item_inner::<I, S>(flash, flash_range, data_buffer, item, recursion_level + 1)
     }
 }
 
 /// A way of serializing and deserializing items in the storage.
-///
-/// A serialized byte pattern of all `0xFF` is invalid and must never be the result of the `serialize_into` function
-/// and `deserialize_from` must always return an error for it.
-///
-/// The given buffer to serialize in and deserialize from is never bigger than [MAX_STORAGE_ITEM_SIZE] bytes, so make sure the item is
-/// smaller than that.
+/// 
+/// Serialized items must not be 0 bytes and may not be longer than [u16::MAX].
+/// Items must also fit within a page (together with the bits of overhead added in the storage process).
 pub trait StorageItem {
     /// The key type of the key-value pair
     type Key: Eq;
@@ -423,16 +502,13 @@ pub trait StorageItem {
     fn key(&self) -> Self::Key;
 }
 
-/// The maximum size in bytes that a storage item can be
-pub const MAX_STORAGE_ITEM_SIZE: usize = 512;
-
 /// A trait that the storage item error needs to implement
 pub trait StorageItemError: Debug {
     /// Returns true if the error indicates that the buffer is too small to contain the storage item
     fn is_buffer_too_small(&self) -> bool;
 }
 
-/// The main error type
+/// The error type for map operations
 #[non_exhaustive]
 #[derive(Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -451,8 +527,6 @@ pub enum MapError<I, S> {
     BufferTooBig,
     /// A provided buffer was to small to be used
     BufferTooSmall,
-    /// An item with a crc error was encountered
-    CrcError,
     /// Data with zero length was being stored. This is not allowed.
     ZeroLengthData,
 }
@@ -465,7 +539,6 @@ impl<S, I> From<super::Error<S>> for MapError<I, S> {
             Error::Corrupted => Self::Corrupted,
             Error::BufferTooBig => Self::BufferTooBig,
             Error::BufferTooSmall => Self::BufferTooSmall,
-            Error::CrcError => Self::CrcError,
             Error::ZeroLengthData => Self::ZeroLengthData,
         }
     }
@@ -560,20 +633,20 @@ mod tests {
         let mut data_buffer = [0; 128];
 
         let item =
-            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), 0, &mut data_buffer)
+            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), &mut data_buffer, 0)
                 .unwrap();
         assert_eq!(item, None);
 
         let item =
-            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), 60, &mut data_buffer)
+            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), &mut data_buffer, 60)
                 .unwrap();
         assert_eq!(item, None);
 
         let item = fetch_item::<MockStorageItem, _>(
             &mut flash,
             flash_range.clone(),
-            0xFF,
             &mut data_buffer,
+            0xFF,
         )
         .unwrap();
         assert_eq!(item, None);
@@ -581,26 +654,26 @@ mod tests {
         store_item::<_, _>(
             &mut flash,
             flash_range.clone(),
+            &mut data_buffer,
             MockStorageItem {
                 key: 0,
                 value: vec![5],
             },
-            &mut data_buffer,
         )
         .unwrap();
         store_item::<_, _>(
             &mut flash,
             flash_range.clone(),
+            &mut data_buffer,
             MockStorageItem {
                 key: 0,
                 value: vec![5, 6],
             },
-            &mut data_buffer,
         )
         .unwrap();
 
         let item =
-            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), 0, &mut data_buffer)
+            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), &mut data_buffer, 0)
                 .unwrap()
                 .unwrap();
         assert_eq!(item.key, 0);
@@ -609,23 +682,23 @@ mod tests {
         store_item::<_, _>(
             &mut flash,
             flash_range.clone(),
+            &mut data_buffer,
             MockStorageItem {
                 key: 1,
                 value: vec![2, 2, 2, 2, 2, 2],
             },
-            &mut data_buffer,
         )
         .unwrap();
 
         let item =
-            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), 0, &mut data_buffer)
+            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), &mut data_buffer, 0)
                 .unwrap()
                 .unwrap();
         assert_eq!(item.key, 0);
         assert_eq!(item.value, vec![5, 6]);
 
         let item =
-            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), 1, &mut data_buffer)
+            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), &mut data_buffer, 1)
                 .unwrap()
                 .unwrap();
         assert_eq!(item.key, 1);
@@ -636,11 +709,11 @@ mod tests {
             store_item::<_, _>(
                 &mut flash,
                 flash_range.clone(),
+                &mut data_buffer,
                 MockStorageItem {
                     key: (index % 10) as u8,
                     value: vec![(index % 10) as u8 * 2; index % 10],
                 },
-                &mut data_buffer,
             )
             .unwrap();
         }
@@ -649,8 +722,8 @@ mod tests {
             let item = fetch_item::<MockStorageItem, _>(
                 &mut flash,
                 flash_range.clone(),
-                i,
                 &mut data_buffer,
+                i,
             )
             .unwrap()
             .unwrap();
@@ -662,11 +735,11 @@ mod tests {
             store_item::<_, _>(
                 &mut flash,
                 flash_range.clone(),
+                &mut data_buffer,
                 MockStorageItem {
                     key: 11,
                     value: vec![0; 10],
                 },
-                &mut data_buffer,
             )
             .unwrap();
         }
@@ -675,8 +748,8 @@ mod tests {
             let item = fetch_item::<MockStorageItem, _>(
                 &mut flash,
                 flash_range.clone(),
-                i,
                 &mut data_buffer,
+                i,
             )
             .unwrap()
             .unwrap();
@@ -704,18 +777,18 @@ mod tests {
             };
             println!("Storing {item:?}");
 
-            store_item::<_, _>(&mut tiny_flash, 0x00..0x40, item, &mut data_buffer).unwrap();
+            store_item::<_, _>(&mut tiny_flash, 0x00..0x40, &mut data_buffer, item).unwrap();
         }
 
         assert_eq!(
             store_item::<_, _>(
                 &mut tiny_flash,
                 0x00..0x40,
+                &mut data_buffer,
                 MockStorageItem {
                     key: UPPER_BOUND,
                     value: vec![0; UPPER_BOUND as usize],
                 },
-                &mut data_buffer
             ),
             Err(MapError::FullStorage)
         );
@@ -724,8 +797,8 @@ mod tests {
             let item = fetch_item::<MockStorageItem, _>(
                 &mut tiny_flash,
                 0x00..0x40,
-                i as u8,
                 &mut data_buffer,
+                i as u8,
             )
             .unwrap()
             .unwrap();
@@ -750,18 +823,18 @@ mod tests {
             };
             println!("Storing {item:?}");
 
-            store_item::<_, _>(&mut big_flash, 0x0000..0x1000, item, &mut data_buffer).unwrap();
+            store_item::<_, _>(&mut big_flash, 0x0000..0x1000, &mut data_buffer, item).unwrap();
         }
 
         assert_eq!(
             store_item::<_, _>(
                 &mut big_flash,
                 0x0000..0x1000,
+                &mut data_buffer,
                 MockStorageItem {
                     key: UPPER_BOUND,
                     value: vec![0; UPPER_BOUND as usize],
                 },
-                &mut data_buffer
             ),
             Err(MapError::FullStorage)
         );
@@ -770,8 +843,8 @@ mod tests {
             let item = fetch_item::<MockStorageItem, _>(
                 &mut big_flash,
                 0x0000..0x1000,
-                i as u8,
                 &mut data_buffer,
+                i as u8,
             )
             .unwrap()
             .unwrap();
@@ -798,7 +871,7 @@ mod tests {
                     value: vec![i as u8; LENGHT_PER_KEY[i]],
                 };
 
-                store_item::<_, _>(&mut flash, 0x0000..0x4000, item, &mut data_buffer).unwrap();
+                store_item::<_, _>(&mut flash, 0x0000..0x4000, &mut data_buffer, item).unwrap();
             }
         }
 
@@ -806,8 +879,8 @@ mod tests {
             let item = fetch_item::<MockStorageItem, _>(
                 &mut flash,
                 0x0000..0x4000,
-                i as u8,
                 &mut data_buffer,
+                i as u8,
             )
             .unwrap()
             .unwrap();

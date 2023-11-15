@@ -46,9 +46,9 @@ pub fn push<S: NorFlash>(
     let current_page = find_youngest_page(flash, flash_range.clone())?;
 
     let page_data_start_address =
-        calculate_page_address::<S>(flash_range.clone(), current_page) + S::WRITE_SIZE as u32;
+        calculate_page_address::<S>(flash_range.clone(), current_page) + S::WORD_SIZE as u32;
     let page_data_end_address =
-        calculate_page_end_address::<S>(flash_range.clone(), current_page) - S::WRITE_SIZE as u32;
+        calculate_page_end_address::<S>(flash_range.clone(), current_page) - S::WORD_SIZE as u32;
 
     partial_close_page(flash, flash_range.clone(), current_page)?;
 
@@ -68,8 +68,8 @@ pub fn push<S: NorFlash>(
         match get_page_state(flash, flash_range.clone(), next_page)? {
             PageState::Open => {
                 partial_close_page(flash, flash_range.clone(), next_page)?;
-                next_address =
-                    calculate_page_address::<S>(flash_range.clone(), next_page) + S::WRITE_SIZE as u32;
+                next_address = calculate_page_address::<S>(flash_range.clone(), next_page)
+                    + S::WORD_SIZE as u32;
             }
             PageState::Closed => {
                 if !allow_overwrite_old_data {
@@ -84,8 +84,8 @@ pub fn push<S: NorFlash>(
                     .map_err(Error::Storage)?;
 
                 partial_close_page(flash, flash_range.clone(), next_page)?;
-                next_address =
-                    calculate_page_address::<S>(flash_range.clone(), next_page) + S::WRITE_SIZE as u32;
+                next_address = calculate_page_address::<S>(flash_range.clone(), next_page)
+                    + S::WORD_SIZE as u32;
             }
             PageState::PartialOpen => {
                 // This should never happen
@@ -124,10 +124,10 @@ pub fn peek<'d, S: NorFlash>(
 
     for current_page in get_pages::<S>(flash_range.clone(), oldest_page) {
         let page_data_start_address =
-            calculate_page_address::<S>(flash_range.clone(), current_page) + S::WRITE_SIZE as u32;
+            calculate_page_address::<S>(flash_range.clone(), current_page) + S::WORD_SIZE as u32;
         let page_data_end_address =
             calculate_page_end_address::<S>(flash_range.clone(), current_page)
-                - S::WRITE_SIZE as u32;
+                - S::WORD_SIZE as u32;
 
         if let Some((found_item_header, found_item_address)) = read_item_headers(
             flash,
@@ -179,10 +179,10 @@ pub fn pop<'d, S: MultiwriteNorFlash>(
 
     for current_page in get_pages::<S>(flash_range.clone(), oldest_page) {
         let page_data_start_address =
-            calculate_page_address::<S>(flash_range.clone(), current_page) + S::WRITE_SIZE as u32;
+            calculate_page_address::<S>(flash_range.clone(), current_page) + S::WORD_SIZE as u32;
         let page_data_end_address =
             calculate_page_end_address::<S>(flash_range.clone(), current_page)
-                - S::WRITE_SIZE as u32;
+                - S::WORD_SIZE as u32;
 
         if let Some((found_item_header, found_item_address)) = read_item_headers(
             flash,
