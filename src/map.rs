@@ -2,7 +2,7 @@
 //!
 //! When a key-value is stored, it overwrites the any old items with the same key.
 //!
-//! Basic API:
+//! ## Basic API:
 //!
 //! ```rust
 //! # use sequential_storage::map::{store_item, fetch_item, StorageItem, StorageItemError};

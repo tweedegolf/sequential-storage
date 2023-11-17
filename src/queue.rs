@@ -1,6 +1,14 @@
 //! A queue (fifo) implementation for storing arbitrary data in flash memory.
 //!
 //! Use [push] to add data to the fifo and use [peek] and [pop] to get the data back.
+//! 
+//! ```rust
+//! # use sequential_storage::queue::{push, peek, pop};
+//! # use mock_flash::MockFlashBase;
+//! # type Flash = MockFlashBase<10, 1, 4096>;
+//! # mod mock_flash {
+//! #   include!("mock_flash.rs");
+//! # }
 
 use crate::item::{find_next_free_item_spot, read_item_headers, Item, ItemHeader};
 
