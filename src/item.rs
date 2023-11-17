@@ -251,7 +251,7 @@ pub fn read_item_headers<S: NorFlash, R>(
     }
 }
 
-pub fn read_items<'d, S: NorFlash, R>(
+pub fn read_items<S: NorFlash, R>(
     flash: &mut S,
     start_address: u32,
     end_address: u32,

@@ -1,7 +1,7 @@
 //! A queue (fifo) implementation for storing arbitrary data in flash memory.
 //!
 //! Use [push] to add data to the fifo and use [peek] and [pop] to get the data back.
-//! 
+//!
 //! ```rust
 //! # use sequential_storage::queue::{push, peek, pop};
 //! # use mock_flash::MockFlashBase;
@@ -9,6 +9,42 @@
 //! # mod mock_flash {
 //! #   include!("mock_flash.rs");
 //! # }
+//! // Initialize the flash. This can be internal or external
+//! let mut flash = Flash::new();
+//! // These are the flash addresses in which the crate will operate.
+//! // The crate will not read, write or erase outside of this range.
+//! let flash_range = 0x1000..0x3000;
+//! // We need to give the crate a buffer to work with.
+//! // It must be big enough to serialize the biggest value of your storage type in.
+//! let mut data_buffer = [0; 100];
+//!
+//! let my_data = [10, 47, 29];
+//!
+//! // We can push some data to the queue
+//!
+//! push(&mut flash, flash_range.clone(), &my_data, false).unwrap();
+//!
+//! // We can peek at the oldest data
+//!
+//! assert_eq!(
+//!     &peek(&mut flash, flash_range.clone(), &mut data_buffer).unwrap().unwrap()[..],
+//!     &my_data[..]
+//! );
+//!
+//! // With popping we get back the oldest data, but that data is now also removed
+//!
+//! assert_eq!(
+//!     &pop(&mut flash, flash_range.clone(), &mut data_buffer).unwrap().unwrap()[..],
+//!     &my_data[..]
+//! );
+//!
+//! // If we pop again, we find there's no data anymore
+//!
+//! assert_eq!(
+//!     pop(&mut flash, flash_range.clone(), &mut data_buffer),
+//!     Ok(None)
+//! );
+//! ```
 
 use crate::item::{find_next_free_item_spot, read_item_headers, Item, ItemHeader};
 
@@ -115,13 +151,17 @@ pub fn push<S: NorFlash>(
 ///
 /// If you also want to remove the data use [pop].
 ///
-/// The data is written to the given data buffer and the part that was written is returned.
+/// The data is written to the given `data_buffer`` and the part that was written is returned.
+/// It is valid to only use the length of the returned slice and use the original `data_buffer`.
+/// The `data_buffer` may contain extra data on ranges after the returned slice.
+/// You should not depend on that data.
+///
 /// If the data buffer is not big enough an error is returned.
 pub fn peek<'d, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     data_buffer: &'d mut [u8],
-) -> Result<Option<&'d [u8]>, Error<S::Error>> {
+) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
 
@@ -159,7 +199,7 @@ pub fn peek<'d, S: NorFlash>(
                 .unwrap()?
                 .destruct();
 
-            return Ok(Some(&data_buffer[..header.length.get() as usize]));
+            return Ok(Some(&mut data_buffer[..header.length.get() as usize]));
         }
     }
 
@@ -170,13 +210,17 @@ pub fn peek<'d, S: NorFlash>(
 ///
 /// If you don't want to remove the data use [peek].
 ///
-/// The given `CAP` determines the buffer size with which is read.
-/// An error is returned if the oldest data is longer than `CAP`.
+/// The data is written to the given `data_buffer`` and the part that was written is returned.
+/// It is valid to only use the length of the returned slice and use the original `data_buffer`.
+/// The `data_buffer` may contain extra data on ranges after the returned slice.
+/// You should not depend on that data.
+///
+/// If the data buffer is not big enough an error is returned.
 pub fn pop<'d, S: MultiwriteNorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     data_buffer: &'d mut [u8],
-) -> Result<Option<&'d [u8]>, Error<S::Error>> {
+) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
 
@@ -226,7 +270,7 @@ pub fn pop<'d, S: MultiwriteNorFlash>(
                     .map_err(Error::Storage)?;
             }
 
-            return Ok(Some(&data_buffer[..header.length.get() as usize]));
+            return Ok(Some(&mut data_buffer[..header.length.get() as usize]));
         }
     }
 

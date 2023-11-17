@@ -21,13 +21,13 @@ pub mod queue;
 pub mod mock_flash;
 
 /// The biggest wordsize we support.
-/// 
+///
 /// Stm32 internal flash has 256-bit words, so 32 bytes.
 /// Many flashes have 4-byte or 1-byte words.
 const MAX_WORD_SIZE: usize = 32;
 
 /// Find the first page that is in the given page state.
-/// 
+///
 /// The search starts at starting_page_index (and wraps around back to 0 if required)
 fn find_first_page<S: NorFlash>(
     flash: &mut S,

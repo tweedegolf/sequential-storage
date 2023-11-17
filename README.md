@@ -47,6 +47,11 @@ When popping, the data is also erased by writing all 0's over it.
 
 ### Unreleased
 
+- *Breaking* Internal overhaul of the code. Both map and queue now use the same `item` module to store and read their data with.
+- *Breaking* Map serialization is no longer done in a stack buffer, but in the buffer provided by the user.
+- Added CRC protection of the user data. If user data is corrupted, it will now be skipped as if it wasn't stored.
+- Read word size is no longer required to be 1. It can now be 1-32.
+
 ### 0.5.0 - 13-11-23
 
 - *Breaking* Map `store_item` item no longer uses a ram buffer to temporarily store erased items in.

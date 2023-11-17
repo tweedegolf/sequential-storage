@@ -123,7 +123,7 @@ use super::*;
 /// Only the last stored item of the given key is returned.
 ///
 /// If no value with the key is found, None is returned.
-/// 
+///
 /// The data buffer must be long enough to hold the longest serialized data of your [StorageItem] type.
 ///
 /// *Note: On a given flash range, make sure to use only the same type as [StorageItem] every time
@@ -246,7 +246,7 @@ fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
 /// Store an item into flash memory.
 /// It will overwrite the last value that has the same key.
 /// The flash needs to be at least 2 pages long.
-/// 
+///
 /// The data buffer must be long enough to hold the longest serialized data of your [StorageItem] type.
 ///
 /// *Note: On a given flash range, make sure to use only the same type as [StorageItem] every time
@@ -472,7 +472,7 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
 }
 
 /// A way of serializing and deserializing items in the storage.
-/// 
+///
 /// Serialized items must not be 0 bytes and may not be longer than [u16::MAX].
 /// Items must also fit within a page (together with the bits of overhead added in the storage process).
 pub trait StorageItem {
