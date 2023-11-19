@@ -153,7 +153,7 @@ fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
     assert!(flash_range.end - flash_range.start >= S::ERASE_SIZE as u32 * 2);
 
     assert!(S::ERASE_SIZE >= S::WORD_SIZE * 3);
-    assert_eq!(S::READ_SIZE, 1);
+    assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
 
     // We need to find the page we were last using. This should be the only partial open page.
     let mut last_used_page =
@@ -263,7 +263,7 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
     assert!(flash_range.len() / S::ERASE_SIZE >= 2);
 
     assert!(S::ERASE_SIZE >= S::WORD_SIZE * 3);
-    assert_eq!(S::READ_SIZE, 1);
+    assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
 
     return store_item_inner::<I, S>(flash, flash_range, data_buffer, item, 0);
 

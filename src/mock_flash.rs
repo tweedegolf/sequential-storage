@@ -99,10 +99,14 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> E
 impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> ReadNorFlash
     for MockFlashBase<PAGES, BYTES_PER_WORD, PAGE_WORDS>
 {
-    const READ_SIZE: usize = 1;
+    const READ_SIZE: usize = BYTES_PER_WORD;
 
     fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
         self.reads += 1;
+
+        if bytes.len() % Self::READ_SIZE != 0 {
+            panic!("any read must be a multiple of Self::READ_SIZE bytes");
+        }
 
         let range = Self::validate_read_operation(offset, bytes.len())?;
 
