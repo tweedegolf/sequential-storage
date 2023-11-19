@@ -14,34 +14,58 @@ Each live in their own module. See the module documentation for more info and ex
 Make sure not to mix the datastructures in flash!
 You can't fetch a key-value item from a flash region where you pushed to the queue.
 
-## TODO
+## Inner workings
 
-- Map: Find a way to support removing items. You can do this manually now by reading all keys,
-  erasing all flash manually and then storing the items you want to keep again.
+To save on erase cycles, this crate only really appends data to the pages. Exactly how this is done depends
+on whether you use the map or the queue.
 
-## Inner workings for map
+To do all this there are two concepts:
 
-The idea behind this crate it to save on flash erase cycles by storing every item in an append-only way.
-Only the most recent value of a key-value item is 'active'.
+### Page & page state
 
-This is more efficient because we don't have to erase a page every time we want to update a value.
+The flash is divided up in multiple pages.
+A page can be in three states:
 
-Every item has to fit in a page. Once an item is too big to fit on the current page will be closed
-and the item will be stored on the next page.
+1. Open - This page is in the erased state
+2. Partial open - This page has been written to, but is not full yet
+3. Closed - This page has been fully written to
 
-Once all but one pages have been closed, a new page will be erased to open it up again.
-There is the possibility that the erased page contains the only copy of a key, so the crate checks if that happens and
-if it does add that key-value item back in. In principle you will never lose any data.
+The state of a page is encoded into the first and the last word of a page.
+If both words are `FF` (erased), then the page is open.
+If the first word is written with the marker, then the page is partial open.
+If both words are written, then the page is closed.
+
+### Items
+
+All data is stored as an item.
+
+An item consists of a header containing the data length and a CRC, and some data.
+An item is considered erased when its CRC field is 0.
+
+*NOTE: This means the data itself is still stored on the flash when it's considered erased.*
+*Depending on your usecase, this might not be secure*
+
+The u16 length field is protected with 2 parity bits and thus the max size of an item is 16k.
+
+### Inner workings for map
+
+The map stores every key-value as an item. Every new value is appended at the last partial open page
+or the first open after the last closed page.
+
+Once a page is full it will be closed and the next page will need to store the item.
+However, we need to erase an old page at some point. Because we don't want to lose any data,
+all items on the to-be-erased page are checked. If an item does not have a newer value than what is found on
+the page, it will be copied over from the to-be-erased page to the current partial-open page.
+This way no data is lost (as long as the flash is big enough to contain all data).
 
 ## Inner workings for queue
 
-Pages work in the same way as for the map.
-
-All data is stored as u16 BE length + data. Push appends the data at the next spot.
-If there's no more room, a push can erase the oldest page to make space, but only does so when configured.
+When pushing, the youngest spot to place the item is searched for.
+If it doesn't fit, it will return an error or erase an old page if you specified it could.
+You should only lose data when you give permission.
 
 Peeking and popping look at the oldest data it can find.
-When popping, the data is also erased by writing all 0's over it.
+When popping, the item is also erased.
 
 ## Changelog
 

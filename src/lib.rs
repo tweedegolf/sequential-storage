@@ -242,8 +242,6 @@ pub enum Error<S> {
     BufferTooBig,
     /// A provided buffer was to small to be used
     BufferTooSmall,
-    /// Data with zero length was being stored. This is not allowed.
-    ZeroLengthData,
 }
 
 /// Round up the the given number to align with the wordsize of the flash.

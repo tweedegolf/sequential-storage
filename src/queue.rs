@@ -77,12 +77,10 @@ pub fn push<S: NorFlash>(
         return Err(Error::BufferTooSmall);
     }
 
-    // Data must fit in a single page. We use two write words for page markings and
-    // at least 2 bytes or a word for length encoding
+    // Data must fit in a single page
     if data.len()
         > ItemHeader::available_data_bytes::<S>((S::ERASE_SIZE - S::WORD_SIZE * 2) as u32).unwrap()
             as usize
-    // Length must be smaller than 0x7FFE so we can store an extra recognition bit
     {
         return Err(Error::BufferTooBig);
     }
@@ -199,7 +197,7 @@ pub fn peek<'d, S: NorFlash>(
                 .unwrap()?
                 .destruct();
 
-            return Ok(Some(&mut data_buffer[..header.length.get() as usize]));
+            return Ok(Some(&mut data_buffer[..header.length as usize]));
         }
     }
 
@@ -270,7 +268,7 @@ pub fn pop<'d, S: MultiwriteNorFlash>(
                     .map_err(Error::Storage)?;
             }
 
-            return Ok(Some(&mut data_buffer[..header.length.get() as usize]));
+            return Ok(Some(&mut data_buffer[..header.length as usize]));
         }
     }
 
@@ -395,7 +393,11 @@ mod tests {
 
         for i in 0..2000 {
             println!("{i}");
-            let data = vec![i as u8; i % 244 + 1];
+            let data = vec![i as u8; i % 512 + 1];
+
+            if i == 127 {
+                println!("WOW");
+            }
 
             push(&mut flash, flash_range.clone(), &data, true).unwrap();
             assert_eq!(

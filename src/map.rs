@@ -527,8 +527,6 @@ pub enum MapError<I, S> {
     BufferTooBig,
     /// A provided buffer was to small to be used
     BufferTooSmall,
-    /// Data with zero length was being stored. This is not allowed.
-    ZeroLengthData,
 }
 
 impl<S, I> From<super::Error<S>> for MapError<I, S> {
@@ -539,7 +537,6 @@ impl<S, I> From<super::Error<S>> for MapError<I, S> {
             Error::Corrupted => Self::Corrupted,
             Error::BufferTooBig => Self::BufferTooBig,
             Error::BufferTooSmall => Self::BufferTooSmall,
-            Error::ZeroLengthData => Self::ZeroLengthData,
         }
     }
 }

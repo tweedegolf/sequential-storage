@@ -3,17 +3,19 @@
 //!
 //! Memory layout of item:
 //! ```text
-//! ┌──────┬──────┬──────┬──────┬──┬─────┬─────┬──┬─────────────────────────────┬─────┬─────┬─────┐
-//! │      │      │      │      │  │     │     │  │                             │     │     │     │
-//! │Length│Length│CRC   │CRC   │Pad to word align│Data                         │Pad to word align│
-//! │      │      │      │      │     │     │     │                             │  │     │     │  │
-//! └──────┴──────┴──────┴──────┴─────┴─────┴─────┴─────────────────────────────┴──┴─────┴─────┴──┘
+//! ┌──────┬──────┬──────┬──────┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
+//! │      :      │      :      │  :  :  :  :  :  │  :  :  :  :  :  :  :  :  :  │  :  :  :  :  :  │
+//! │    Length   │     CRC     │Pad to word align│            Data             │Pad to word align│
+//! │      :      │      :      │  :  :  :  :  :  │  :  :  :  :  :   :  :  :  : │  :  :  :  :  :  │
+//! └──────┴──────┴──────┴──────┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴───┴──┴──┴──┴─┴──┴──┴──┴──┴──┴──┘
 //! 0      1      2      3      4                 4+padding                     4+padding+length  4+padding+length+endpadding
 //! ```
 //!
 //! An item consists of an [ItemHeader] and some data.
 //! The header has a length field that encodes the length of the data
 //! and a crc field that encodes the checksum of the data.
+//!
+//! The length bytes each must have odd parity
 //!
 //! If the crc is 0, then the item is counted as being erased.
 //! The crc is calculated by [crc16] which never produces a 0 value on its own.
@@ -30,7 +32,7 @@ use crate::{
 
 pub struct ItemHeader {
     /// Length of the item payload (so not including the header and not including word alignment)
-    pub length: NonZeroU16,
+    pub length: u16,
     pub crc: Option<NonZeroU16>,
 }
 
@@ -58,8 +60,13 @@ impl ItemHeader {
 
         Ok(Some(Self {
             length: match u16::from_le_bytes(header_slice[0..2].try_into().unwrap()) {
-                0xFFFF => return Err(Error::Corrupted),
-                val => NonZeroU16::new(val + 1).unwrap(),
+                val if val.to_ne_bytes()[0].count_ones() % 2 == 0
+                    || val.to_ne_bytes()[1].count_ones() % 2 == 0 =>
+                {
+                    // The length does not have odd parity, so this is not a valid length
+                    return Err(Error::Corrupted);
+                }
+                val => ((val & 0x7F00) >> 1) + (val & 0x007F),
             },
             crc: {
                 match u16::from_le_bytes(header_slice[2..4].try_into().unwrap()) {
@@ -81,7 +88,7 @@ impl ItemHeader {
             None => Ok(MaybeItem::Erased(self)),
             Some(header_crc) => {
                 let data_address = ItemHeader::data_address::<S>(address);
-                let read_len = round_up_to_alignment_usize::<S>(self.length.get() as usize);
+                let read_len = round_up_to_alignment_usize::<S>(self.length as usize);
                 if data_buffer.len() < read_len {
                     return Err(Error::BufferTooSmall);
                 }
@@ -93,7 +100,7 @@ impl ItemHeader {
                     .read(data_address, &mut data_buffer[..read_len])
                     .map_err(Error::Storage)?;
 
-                let data = &data_buffer[..self.length.get() as usize];
+                let data = &data_buffer[..self.length as usize];
                 let data_crc = crc16(data);
 
                 if data_crc == header_crc {
@@ -111,7 +118,21 @@ impl ItemHeader {
     fn write<S: NorFlash>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
         let mut buffer = [0xFF; MAX_WORD_SIZE];
 
-        buffer[0..2].copy_from_slice(&(self.length.get() - 1).to_le_bytes());
+        if self.length > 0x3FFF {
+            return Err(Error::BufferTooBig);
+        }
+
+        // Length bytes in LE
+        let mut length_bytes = [
+            (self.length & 0x007F) as u8,
+            ((self.length & (0x7F00 >> 1)) >> 7) as u8,
+        ];
+
+        for byte in length_bytes.iter_mut() {
+            *byte |= 0x80 * (1 - (byte.count_ones() as u8 % 2));
+        }
+
+        buffer[0..2].copy_from_slice(&length_bytes);
         buffer[2..4].copy_from_slice(&self.crc.map(|crc| crc.get()).unwrap_or(0).to_le_bytes());
 
         flash
@@ -138,7 +159,7 @@ impl ItemHeader {
 
     pub fn next_item_address<S: NorFlash>(&self, address: u32) -> u32 {
         let data_address = ItemHeader::data_address::<S>(address);
-        data_address + round_up_to_alignment::<S>(self.length.get() as u32)
+        data_address + round_up_to_alignment::<S>(self.length as u32)
     }
 
     /// Calculates the amount of bytes available for data.
@@ -158,7 +179,7 @@ pub struct Item<'d> {
 
 impl<'d> Item<'d> {
     pub fn data(&'d self) -> &'d [u8] {
-        &self.data_buffer[..self.header.length.get() as usize]
+        &self.data_buffer[..self.header.length as usize]
     }
 
     /// Destruct the item to get back the full data buffer
@@ -172,14 +193,9 @@ impl<'d> Item<'d> {
         data: &'d [u8],
     ) -> Result<ItemHeader, Error<S::Error>> {
         let data_crc = crc16(data);
-        let data_len = match data.len() as u32 {
-            0 => return Err(Error::ZeroLengthData),
-            len @ 1..=0xFFFF => NonZeroU16::new(len as u16).unwrap(),
-            0x10000.. => return Err(Error::BufferTooBig),
-        };
 
         let header = ItemHeader {
-            length: data_len,
+            length: data.len() as u16,
             crc: Some(data_crc),
         };
 
