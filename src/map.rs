@@ -70,7 +70,7 @@
 //! }
 //!
 //! // Initialize the flash. This can be internal or external
-//! let mut flash = Flash::new();
+//! let mut flash = Flash::default();
 //! // These are the flash addresses in which the crate will operate.
 //! // The crate will not read, write or erase outside of this range.
 //! let flash_range = 0x1000..0x3000;
@@ -624,7 +624,7 @@ mod tests {
 
     #[test]
     fn store_and_fetch() {
-        let mut flash = MockFlashBig::new();
+        let mut flash = MockFlashBig::new(0.0);
         let flash_range = 0x000..0x1000;
 
         let mut data_buffer = [0; 128];
@@ -764,7 +764,7 @@ mod tests {
     fn store_too_many_items() {
         const UPPER_BOUND: u8 = 4;
 
-        let mut tiny_flash = MockFlashTiny::new();
+        let mut tiny_flash = MockFlashTiny::new(0.0);
         let mut data_buffer = [0; 128];
 
         for i in 0..UPPER_BOUND {
@@ -810,7 +810,7 @@ mod tests {
     fn store_too_many_items_big() {
         const UPPER_BOUND: u8 = 70;
 
-        let mut big_flash = MockFlashBig::new();
+        let mut big_flash = MockFlashBig::new(0.0);
         let mut data_buffer = [0; 128];
 
         for i in 0..UPPER_BOUND {
@@ -854,7 +854,7 @@ mod tests {
 
     #[test]
     fn store_many_items_big() {
-        let mut flash = mock_flash::MockFlashBase::<4, 1, 4096>::new();
+        let mut flash = mock_flash::MockFlashBase::<4, 1, 4096>::new(0.0);
         let mut data_buffer = [0; 128];
 
         const LENGHT_PER_KEY: [usize; 24] = [

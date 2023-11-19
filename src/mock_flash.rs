@@ -22,13 +22,14 @@ pub struct MockFlashBase<const PAGES: usize, const BYTES_PER_WORD: usize, const 
     pub erases: u32,
     pub reads: u32,
     pub writes: u32,
+    pub write_bit_flip_chance: f32,
 }
 
 impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> Default
     for MockFlashBase<PAGES, BYTES_PER_WORD, PAGE_WORDS>
 {
     fn default() -> Self {
-        Self::new()
+        Self::new(0.0)
     }
 }
 
@@ -40,13 +41,14 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
 
     const PAGE_BYTES: usize = PAGE_WORDS * BYTES_PER_WORD;
 
-    pub fn new() -> Self {
+    pub fn new(write_bit_flip_chance: f32) -> Self {
         Self {
             writable: vec![T; Self::CAPACITY_WORDS],
             words: vec![u32::MAX; Self::CAPACITY_WORDS],
             erases: 0,
             reads: 0,
             writes: 0,
+            write_bit_flip_chance,
         }
     }
 
@@ -172,8 +174,20 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
         let start_word = range.start / BYTES_PER_WORD;
         let end_word = (range.end + BYTES_PER_WORD - 1) / BYTES_PER_WORD;
 
+        let write_bit_flip_chance = self.write_bit_flip_chance;
+
         for (target, source) in self.as_bytes_mut()[range].iter_mut().zip(bytes.iter()) {
-            *target &= *source;
+            let mut source = *source;
+
+            if write_bit_flip_chance > 0.0 {
+                for bit in 0..8 {
+                    if rand::random::<f32>() < write_bit_flip_chance {
+                        source ^= 1 << bit;
+                    }
+                }
+            }
+
+            *target &= source;
         }
 
         for word_writable in self.writable[start_word..end_word].iter_mut() {

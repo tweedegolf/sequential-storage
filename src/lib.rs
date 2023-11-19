@@ -319,7 +319,7 @@ mod tests {
         // 2: partial-open
         // 3: open
 
-        let mut flash = MockFlash::new();
+        let mut flash = MockFlash::new(0.0);
         // Page 0 markers
         flash.write(0x000, &[MARKER, 0, 0, 0]).unwrap();
         flash.write(0x100 - 4, &[0, 0, 0, MARKER]).unwrap();

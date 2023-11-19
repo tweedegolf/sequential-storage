@@ -10,7 +10,7 @@
 //! #   include!("mock_flash.rs");
 //! # }
 //! // Initialize the flash. This can be internal or external
-//! let mut flash = Flash::new();
+//! let mut flash = Flash::default();
 //! // These are the flash addresses in which the crate will operate.
 //! // The crate will not read, write or erase outside of this range.
 //! let flash_range = 0x1000..0x3000;
@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn peek_and_overwrite_old_data() {
-        let mut flash = MockFlashTiny::new();
+        let mut flash = MockFlashTiny::new(0.0);
         let flash_range = 0x00..0x40;
         let mut data_buffer = [0; 1024];
 
@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn push_pop() {
-        let mut flash = MockFlashBig::new();
+        let mut flash = MockFlashBig::new(0.0);
         let flash_range = 0x000..0x1000;
         let mut data_buffer = [0; 1024];
 
@@ -424,7 +424,7 @@ mod tests {
 
     #[test]
     fn push_pop_tiny() {
-        let mut flash = MockFlashTiny::new();
+        let mut flash = MockFlashTiny::new(0.0);
         let flash_range = 0x00..0x40;
         let mut data_buffer = [0; 1024];
 
@@ -457,7 +457,7 @@ mod tests {
 
     #[test]
     fn push_lots_then_pop_lots() {
-        let mut flash = MockFlashBig::new();
+        let mut flash = MockFlashBig::new(0.0);
         let flash_range = 0x000..0x1000;
         let mut data_buffer = [0; 1024];
 
@@ -498,7 +498,7 @@ mod tests {
 
     #[test]
     fn pop_with_empty_section() {
-        let mut flash = MockFlashTiny::new();
+        let mut flash = MockFlashTiny::new(0.0);
         let flash_range = 0x00..0x40;
         let mut data_buffer = [0; 1024];
 
