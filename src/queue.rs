@@ -96,26 +96,47 @@ pub fn push<S: NorFlash>(
 
     // Find the last item on the page so we know where we need to write
 
-    let mut next_address =
-        find_next_free_item_spot(flash, page_data_start_address, page_data_end_address)?
-            .unwrap_or(page_data_end_address);
+    let mut next_address = find_next_free_item_spot(
+        flash,
+        page_data_start_address,
+        page_data_end_address,
+        data.len() as u32,
+    )?;
 
-    let data_cap_left =
-        ItemHeader::available_data_bytes::<S>(page_data_end_address.saturating_sub(next_address))
-            .unwrap_or(0);
-
-    if data.len() > data_cap_left as usize {
+    if next_address.is_none() {
         // No cap left on this page, move to the next page
         let next_page = next_page::<S>(flash_range.clone(), current_page);
         match get_page_state(flash, flash_range.clone(), next_page)? {
             PageState::Open => {
                 partial_close_page(flash, flash_range.clone(), next_page)?;
-                next_address = calculate_page_address::<S>(flash_range.clone(), next_page)
-                    + S::WORD_SIZE as u32;
+                next_address = Some(
+                    calculate_page_address::<S>(flash_range.clone(), next_page)
+                        + S::WORD_SIZE as u32,
+                );
             }
             PageState::Closed => {
+                let next_page_data_start_address =
+                    calculate_page_address::<S>(flash_range.clone(), next_page)
+                        + S::WORD_SIZE as u32;
+                let next_page_data_end_address =
+                    calculate_page_end_address::<S>(flash_range.clone(), next_page)
+                        - S::WORD_SIZE as u32;
+
                 if !allow_overwrite_old_data {
-                    return Err(Error::FullStorage);
+                    let next_page_empty = read_item_headers(
+                        flash,
+                        next_page_data_start_address,
+                        next_page_data_end_address,
+                        |_, header, _| match header.crc {
+                            Some(_) => ControlFlow::Break(()),
+                            None => ControlFlow::Continue(()),
+                        },
+                    )?
+                    .is_none();
+
+                    if !next_page_empty {
+                        return Err(Error::FullStorage);
+                    }
                 }
 
                 flash
@@ -126,8 +147,7 @@ pub fn push<S: NorFlash>(
                     .map_err(Error::Storage)?;
 
                 partial_close_page(flash, flash_range.clone(), next_page)?;
-                next_address = calculate_page_address::<S>(flash_range.clone(), next_page)
-                    + S::WORD_SIZE as u32;
+                next_address = Some(next_page_data_start_address);
             }
             PageState::PartialOpen => {
                 // This should never happen
@@ -140,7 +160,7 @@ pub fn push<S: NorFlash>(
         close_page(flash, flash_range.clone(), current_page)?;
     }
 
-    Item::write_new(flash, next_address, data)?;
+    Item::write_new(flash, next_address.unwrap(), data)?;
 
     Ok(())
 }
@@ -175,9 +195,11 @@ pub fn peek<'d, S: NorFlash>(
             calculate_page_end_address::<S>(flash_range.clone(), current_page)
                 - S::WORD_SIZE as u32;
 
-        if let Some((found_item_header, found_item_address)) = read_item_headers(
+        let mut start_address = page_data_start_address;
+
+        while let Some((found_item_header, found_item_address)) = read_item_headers(
             flash,
-            page_data_start_address,
+            start_address,
             page_data_end_address,
             |_, item_header, item_address| {
                 if item_header.crc.is_some() {
@@ -187,17 +209,28 @@ pub fn peek<'d, S: NorFlash>(
                 }
             },
         )? {
-            let (header, data_buffer) = found_item_header
-                .read_item(
-                    flash,
-                    data_buffer,
-                    found_item_address,
-                    page_data_end_address,
-                )?
-                .unwrap()?
-                .destruct();
+            let data_buffer = unsafe {
+                core::slice::from_raw_parts_mut(data_buffer.as_mut_ptr(), data_buffer.len())
+            };
 
-            return Ok(Some(&mut data_buffer[..header.length as usize]));
+            let maybe_item = found_item_header.read_item(
+                flash,
+                data_buffer,
+                found_item_address,
+                page_data_end_address,
+            )?;
+
+            match maybe_item {
+                item::MaybeItem::Corrupted(_) => {
+                    start_address += found_item_address + S::WORD_SIZE as u32;
+                    continue;
+                }
+                item::MaybeItem::Erased(_) => unreachable!("Item is already erased"),
+                item::MaybeItem::Present(item) => {
+                    let (header, data_buffer) = item.destruct();
+                    return Ok(Some(&mut data_buffer[..header.length as usize]));
+                }
+            };
         }
     }
 
@@ -234,9 +267,11 @@ pub fn pop<'d, S: MultiwriteNorFlash>(
             calculate_page_end_address::<S>(flash_range.clone(), current_page)
                 - S::WORD_SIZE as u32;
 
-        if let Some((found_item_header, found_item_address)) = read_item_headers(
+        let mut start_address = page_data_start_address;
+
+        while let Some((found_item_header, found_item_address)) = read_item_headers(
             flash,
-            page_data_start_address,
+            start_address,
             page_data_end_address,
             |_, item_header, item_address| {
                 if item_header.crc.is_some() {
@@ -246,29 +281,40 @@ pub fn pop<'d, S: MultiwriteNorFlash>(
                 }
             },
         )? {
-            let (header, data_buffer) = found_item_header
-                .read_item(
-                    flash,
-                    data_buffer,
-                    found_item_address,
-                    page_data_end_address,
-                )?
-                .unwrap()?
-                .destruct();
+            let data_buffer = unsafe {
+                core::slice::from_raw_parts_mut(data_buffer.as_mut_ptr(), data_buffer.len())
+            };
 
-            let header = header.erase_data(flash, found_item_address)?;
+            let maybe_item = found_item_header.read_item(
+                flash,
+                data_buffer,
+                found_item_address,
+                page_data_end_address,
+            )?;
 
-            if current_page != oldest_page {
-                // The oldest page didn't yield an item, so we can now erase it
-                flash
-                    .erase(
-                        calculate_page_address::<S>(flash_range.clone(), oldest_page),
-                        calculate_page_end_address::<S>(flash_range.clone(), oldest_page),
-                    )
-                    .map_err(Error::Storage)?;
-            }
+            match maybe_item {
+                item::MaybeItem::Corrupted(_) => {
+                    start_address += found_item_address + S::WORD_SIZE as u32;
+                    continue;
+                }
+                item::MaybeItem::Erased(_) => unreachable!("Item is already erased"),
+                item::MaybeItem::Present(item) => {
+                    let (header, data_buffer) = item.destruct();
+                    let header = header.erase_data(flash, found_item_address)?;
 
-            return Ok(Some(&mut data_buffer[..header.length as usize]));
+                    if current_page != oldest_page {
+                        // The oldest page didn't yield an item, so we can now erase it
+                        flash
+                            .erase(
+                                calculate_page_address::<S>(flash_range.clone(), oldest_page),
+                                calculate_page_end_address::<S>(flash_range.clone(), oldest_page),
+                            )
+                            .map_err(Error::Storage)?;
+                    }
+
+                    return Ok(Some(&mut data_buffer[..header.length as usize]));
+                }
+            };
         }
     }
 
@@ -323,56 +369,57 @@ mod tests {
         let mut flash = MockFlashTiny::new(0.0);
         let flash_range = 0x00..0x40;
         let mut data_buffer = [0; 1024];
+        const DATA_SIZE: usize = 24;
 
         assert_eq!(
             peek(&mut flash, flash_range.clone(), &mut data_buffer).unwrap(),
             None
         );
 
-        push(&mut flash, flash_range.clone(), &[0xAA; 26], false).unwrap();
+        push(&mut flash, flash_range.clone(), &[0xAA; DATA_SIZE], false).unwrap();
         assert_eq!(
             &peek(&mut flash, flash_range.clone(), &mut data_buffer)
                 .unwrap()
                 .unwrap()[..],
-            &[0xAA; 26]
+            &[0xAA; DATA_SIZE]
         );
-        push(&mut flash, flash_range.clone(), &[0xBB; 26], false).unwrap();
+        push(&mut flash, flash_range.clone(), &[0xBB; DATA_SIZE], false).unwrap();
         assert_eq!(
             &peek(&mut flash, flash_range.clone(), &mut data_buffer)
                 .unwrap()
                 .unwrap()[..],
-            &[0xAA; 26]
+            &[0xAA; DATA_SIZE]
         );
 
         // Flash is full, this should fail
-        push(&mut flash, flash_range.clone(), &[0xCC; 26], false).unwrap_err();
+        push(&mut flash, flash_range.clone(), &[0xCC; DATA_SIZE], false).unwrap_err();
         // Now we allow overwrite, so it should work
-        push(&mut flash, flash_range.clone(), &[0xDD; 26], true).unwrap();
+        push(&mut flash, flash_range.clone(), &[0xDD; DATA_SIZE], true).unwrap();
 
         assert_eq!(
             &peek(&mut flash, flash_range.clone(), &mut data_buffer)
                 .unwrap()
                 .unwrap()[..],
-            &[0xBB; 26]
+            &[0xBB; DATA_SIZE]
         );
         assert_eq!(
             &pop(&mut flash, flash_range.clone(), &mut data_buffer)
                 .unwrap()
                 .unwrap()[..],
-            &[0xBB; 26]
+            &[0xBB; DATA_SIZE]
         );
 
         assert_eq!(
             &peek(&mut flash, flash_range.clone(), &mut data_buffer)
                 .unwrap()
                 .unwrap()[..],
-            &[0xDD; 26]
+            &[0xDD; DATA_SIZE]
         );
         assert_eq!(
             &pop(&mut flash, flash_range.clone(), &mut data_buffer)
                 .unwrap()
                 .unwrap()[..],
-            &[0xDD; 26]
+            &[0xDD; DATA_SIZE]
         );
 
         assert_eq!(
@@ -519,5 +566,49 @@ mod tests {
                 .unwrap()[..],
             &[0xBB; 20]
         );
+    }
+
+    #[test]
+    fn recover_from_bitflips() {
+        // We can't really recover, but we can at least ignore and continue
+
+        const TOTAL_TRIES: usize = 100000;
+        const DATA_SIZE: usize = 32;
+        const BITFLIP_CHANCE: f32 = 0.0001;
+        const EFFECTIVE_SIZE: usize = ItemHeader::LENGTH * 2 + DATA_SIZE;
+        let chance_item_bad: f32 = 1.0 - (1.0 - BITFLIP_CHANCE).powf(EFFECTIVE_SIZE as f32 * 8.0);
+        let average_tries_bad: f32 = TOTAL_TRIES as f32 * chance_item_bad;
+
+        println!("Chance item bad: {chance_item_bad}");
+        println!("Expecting {average_tries_bad} bad tries");
+
+        let mut flash = MockFlashBig::new(BITFLIP_CHANCE);
+        let flash_range = 0x000..0x1000;
+
+        let mut bad_tries = 0;
+
+        for i in 0..TOTAL_TRIES {
+            push(
+                &mut flash,
+                flash_range.clone(),
+                &[i as u8; DATA_SIZE],
+                false,
+            )
+            .unwrap();
+            let mut data_buffer = [0; DATA_SIZE];
+            match peek(&mut flash, flash_range.clone(), &mut data_buffer).unwrap() {
+                Some(data) => {
+                    assert_eq!(data, &[i as u8; DATA_SIZE]);
+                    pop(&mut flash, flash_range.clone(), &mut data_buffer).unwrap();
+                }
+                None => {
+                    bad_tries += 1;
+                }
+            }
+        }
+
+        println!("Bad total: {bad_tries}");
+
+        assert!(bad_tries <= (average_tries_bad * 2.0) as usize);
     }
 }

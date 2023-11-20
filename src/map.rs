@@ -300,50 +300,23 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
                 calculate_page_end_address::<S>(flash_range.clone(), partial_open_page)
                     - S::WORD_SIZE as u32;
 
-            let free_spot_address =
-                find_next_free_item_spot(flash, page_data_start_address, page_data_end_address)?;
+            let item_data_length = item.serialize_into(data_buffer).map_err(MapError::Item)?;
+
+            let free_spot_address = find_next_free_item_spot(
+                flash,
+                page_data_start_address,
+                page_data_end_address,
+                item_data_length as u32,
+            )?;
 
             match free_spot_address {
                 Some(free_spot_address) => {
-                    let available_bytes_in_page = page_data_end_address - free_spot_address;
-                    let available_data_bytes_in_page =
-                        ItemHeader::available_data_bytes::<S>(available_bytes_in_page);
-                    let data_buffer_len = data_buffer.len();
-
-                    if let Some(available_data_bytes_in_page) = available_data_bytes_in_page {
-                        match item.serialize_into(
-                            &mut data_buffer
-                                [..data_buffer_len.min(available_data_bytes_in_page as usize)],
-                        ) {
-                            Ok(used_bytes) => {
-                                Item::write_new(
-                                    flash,
-                                    free_spot_address,
-                                    &data_buffer
-                                        [..used_bytes.min(available_data_bytes_in_page as usize)],
-                                )?;
-
-                                #[cfg(feature = "defmt")]
-                                defmt::trace!("Item has been written ok");
-
-                                return Ok(());
-                            }
-                            Err(e) if e.is_buffer_too_small() => {}
-                            Err(e) => {
-                                return Err(MapError::Item(e));
-                            }
-                        }
-                    }
+                    Item::write_new(flash, free_spot_address, &data_buffer[..item_data_length])?;
 
                     #[cfg(feature = "defmt")]
-                    defmt::trace!(
-                        "Partial open page is too small. Closing it now: {}",
-                        partial_open_page
-                    );
+                    defmt::trace!("Item has been written ok");
 
-                    // The item doesn't fit here, so we need to close this page and move to the next
-                    close_page(flash, flash_range.clone(), partial_open_page)?;
-                    next_page_to_use = Some(next_page::<S>(flash_range.clone(), partial_open_page));
+                    return Ok(());
                 }
                 None => {
                     #[cfg(feature = "defmt")]
@@ -479,7 +452,7 @@ pub trait StorageItem {
     /// The key type of the key-value pair
     type Key: Eq;
     /// The error type for serialization and deserialization
-    type Error: StorageItemError;
+    type Error;
 
     /// Serialize the key-value item into the given buffer.
     /// Returns the number of bytes the buffer was filled with or an error.
@@ -500,12 +473,6 @@ pub trait StorageItem {
 
     /// The key of the key-value item. It is used by the storage to know what the key of this item is.
     fn key(&self) -> Self::Key;
-}
-
-/// A trait that the storage item error needs to implement
-pub trait StorageItemError: Debug {
-    /// Returns true if the error indicates that the buffer is too small to contain the storage item
-    fn is_buffer_too_small(&self) -> bool;
 }
 
 /// The error type for map operations
@@ -559,12 +526,6 @@ mod tests {
         BufferTooSmall,
         InvalidKey,
         BufferTooBig,
-    }
-
-    impl StorageItemError for MockStorageItemError {
-        fn is_buffer_too_small(&self) -> bool {
-            matches!(self, MockStorageItemError::BufferTooSmall)
-        }
     }
 
     impl StorageItem for MockStorageItem {
@@ -762,7 +723,7 @@ mod tests {
 
     #[test]
     fn store_too_many_items() {
-        const UPPER_BOUND: u8 = 4;
+        const UPPER_BOUND: u8 = 3;
 
         let mut tiny_flash = MockFlashTiny::new(0.0);
         let mut data_buffer = [0; 128];
@@ -808,7 +769,7 @@ mod tests {
 
     #[test]
     fn store_too_many_items_big() {
-        const UPPER_BOUND: u8 = 70;
+        const UPPER_BOUND: u8 = 67;
 
         let mut big_flash = MockFlashBig::new(0.0);
         let mut data_buffer = [0; 128];

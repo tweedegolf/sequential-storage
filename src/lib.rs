@@ -86,6 +86,9 @@ fn calculate_page_index<S: NorFlash>(flash_range: Range<u32>, address: u32) -> u
     (address - flash_range.start) as usize / S::ERASE_SIZE
 }
 
+/// The marker being used for page states
+const MARKER: u8 = 0;
+
 /// Get the state of the page located at the given index
 fn get_page_state<S: NorFlash>(
     flash: &mut S,
@@ -98,9 +101,13 @@ fn get_page_state<S: NorFlash>(
     flash
         .read(page_address, &mut buffer[..S::READ_SIZE])
         .map_err(Error::Storage)?;
-    let start_marker = buffer[0];
+    let start_marker_zero_bits = buffer[..S::READ_SIZE]
+        .iter()
+        .map(|marker_byte| marker_byte.count_zeros())
+        .sum::<u32>();
 
-    if start_marker != MARKER {
+    if start_marker_zero_bits == 0 {
+        // More bits are erased than written to 0
         #[cfg(feature = "defmt")]
         defmt::trace!("Page {} is open", page_index);
 
@@ -117,9 +124,12 @@ fn get_page_state<S: NorFlash>(
             &mut buffer[..S::READ_SIZE],
         )
         .map_err(Error::Storage)?;
-    let end_marker = buffer[S::READ_SIZE - 1];
+    let end_marker_zero_bits = buffer[..S::READ_SIZE]
+        .iter()
+        .map(|marker_byte| marker_byte.count_zeros())
+        .sum::<u32>();
 
-    if end_marker != MARKER {
+    if end_marker_zero_bits == 0 {
         #[cfg(feature = "defmt")]
         defmt::trace!("Page {} is partial open", page_index);
         // The page end is not marked, so it is only partially filled and thus open
@@ -148,8 +158,8 @@ fn close_page<S: NorFlash>(
     // Close the end marker
     flash
         .write(
-            calculate_page_end_address::<S>(flash_range, page_index) - S::WRITE_SIZE as u32,
-            &buffer[..S::WRITE_SIZE],
+            calculate_page_end_address::<S>(flash_range, page_index) - S::WORD_SIZE as u32,
+            &buffer[..S::WORD_SIZE],
         )
         .map_err(Error::Storage)?;
 
@@ -173,7 +183,7 @@ fn partial_close_page<S: NorFlash>(
     flash
         .write(
             calculate_page_address::<S>(flash_range, page_index),
-            &buffer[..S::WRITE_SIZE],
+            &buffer[..S::WORD_SIZE],
         )
         .map_err(Error::Storage)?;
 
@@ -221,9 +231,6 @@ impl PageState {
         matches!(self, Self::Open)
     }
 }
-
-/// The marker being used for page states
-const MARKER: u8 = 0;
 
 /// The main error type
 #[non_exhaustive]
