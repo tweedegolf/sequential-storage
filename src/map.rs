@@ -1,6 +1,9 @@
 //! A module for storing key-value pairs in flash with minimal erase cycles.
 //!
 //! When a key-value is stored, it overwrites the any old items with the same key.
+//! 
+//! Make sure to use the same [StorageItem] type on a given range in flash.
+//! In theory you could use multiple types if you're careful, but they must at least have the same key definition and format.
 //!
 //! ## Basic API:
 //!

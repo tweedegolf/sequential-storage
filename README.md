@@ -14,6 +14,15 @@ Each live in their own module. See the module documentation for more info and ex
 Make sure not to mix the datastructures in flash!
 You can't fetch a key-value item from a flash region where you pushed to the queue.
 
+To search for data, the crate first searches for the flash page that is likeliest to contain it and
+then performs a linear scan over the data, skipping data blocks where it can.
+
+All data is crc protected, so if there is corruption of the data, you should not read back corrupted data unless there's
+a perfect storm of unfortunate bitflips. But this chance is very low.
+Corrupted data is ignored. This means you will lose the corrupted data, but not any other data.
+
+If you're looking for an alternative with different tradeoffs, take a look at [ekv](https://github.com/embassy-rs/ekv).
+
 ## Inner workings
 
 To save on erase cycles, this crate only really appends data to the pages. Exactly how this is done depends
@@ -69,7 +78,7 @@ When popping, the item is also erased.
 
 ## Changelog
 
-### Unreleased
+### 0.6.0 - 21-11-23
 
 - *Breaking* Internal overhaul of the code. Both map and queue now use the same `item` module to store and read their data with.
 - *Breaking* Map serialization is no longer done in a stack buffer, but in the buffer provided by the user.
