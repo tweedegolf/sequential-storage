@@ -1,4 +1,4 @@
-#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(any(test, doctest)), no_std)]
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
@@ -6,21 +6,29 @@
 //
 // - flash erase size is quite big, aka, this is a paged flash
 // - flash write size is quite small, so it writes words and not full pages
-// - flash read size is 1, so the flash is byte addressable
 
-use core::{fmt::Debug, ops::Range};
+use core::{
+    fmt::Debug,
+    ops::{ControlFlow, Range},
+};
 use embedded_storage::nor_flash::NorFlash;
 
-// The maximum size for flash writes that is supported. Current upper limit of 256 bits arises from
-// STM32 parts.
-const MAX_FLASH_WRITE_SIZE: usize = 32;
-
+mod item;
 pub mod map;
 pub mod queue;
 
-#[cfg(test)]
-mod mock_flash;
+#[cfg(any(test, doctest))]
+pub mod mock_flash;
 
+/// The biggest wordsize we support.
+///
+/// Stm32 internal flash has 256-bit words, so 32 bytes.
+/// Many flashes have 4-byte or 1-byte words.
+const MAX_WORD_SIZE: usize = 32;
+
+/// Find the first page that is in the given page state.
+///
+/// The search starts at starting_page_index (and wraps around back to 0 if required)
 fn find_first_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
@@ -48,11 +56,13 @@ fn get_pages<S: NorFlash>(
         .map(move |(index, _)| (index + starting_page_index) % page_count)
 }
 
+/// Get the next page index (wrapping around to 0 if required)
 fn next_page<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> usize {
     let page_count = flash_range.len() / S::ERASE_SIZE;
     (page_index + 1) % page_count
 }
 
+/// Get the previous page index (wrapping around to the biggest page if required)
 fn previous_page<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> usize {
     let page_count = flash_range.len() / S::ERASE_SIZE;
 
@@ -62,30 +72,43 @@ fn previous_page<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> usi
     }
 }
 
+/// Calculate the first address of the given page
 fn calculate_page_address<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> u32 {
     flash_range.start + (S::ERASE_SIZE * page_index) as u32
 }
+/// Calculate the last address (exclusive) of the given page
 fn calculate_page_end_address<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> u32 {
     flash_range.start + (S::ERASE_SIZE * (page_index + 1)) as u32
 }
+/// Get the page index from any address located inside that page
+#[allow(unused)]
 fn calculate_page_index<S: NorFlash>(flash_range: Range<u32>, address: u32) -> usize {
     (address - flash_range.start) as usize / S::ERASE_SIZE
 }
 
+/// The marker being used for page states
+const MARKER: u8 = 0;
+
+/// Get the state of the page located at the given index
 fn get_page_state<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     page_index: usize,
 ) -> Result<PageState, Error<S::Error>> {
     let page_address = calculate_page_address::<S>(flash_range, page_index);
+    let half_marker_bits = (S::READ_SIZE * 8 / 2) as u32;
 
-    let mut buffer = [0; MAX_FLASH_WRITE_SIZE];
+    let mut buffer = [0; MAX_WORD_SIZE];
     flash
         .read(page_address, &mut buffer[..S::READ_SIZE])
         .map_err(Error::Storage)?;
-    let start_marker = buffer[0];
+    let start_marker_zero_bits = buffer[..S::READ_SIZE]
+        .iter()
+        .map(|marker_byte| marker_byte.count_zeros())
+        .sum::<u32>();
 
-    if start_marker != MARKER {
+    if start_marker_zero_bits < half_marker_bits {
+        // More bits are erased than written to 0
         #[cfg(feature = "defmt")]
         defmt::trace!("Page {} is open", page_index);
 
@@ -102,9 +125,12 @@ fn get_page_state<S: NorFlash>(
             &mut buffer[..S::READ_SIZE],
         )
         .map_err(Error::Storage)?;
-    let end_marker = buffer[S::READ_SIZE - 1];
+    let end_marker_zero_bits = buffer[..S::READ_SIZE]
+        .iter()
+        .map(|marker_byte| marker_byte.count_zeros())
+        .sum::<u32>();
 
-    if end_marker != MARKER {
+    if end_marker_zero_bits < half_marker_bits {
         #[cfg(feature = "defmt")]
         defmt::trace!("Page {} is partial open", page_index);
         // The page end is not marked, so it is only partially filled and thus open
@@ -123,20 +149,18 @@ fn close_page<S: NorFlash>(
     flash_range: Range<u32>,
     page_index: usize,
 ) -> Result<(), Error<S::Error>> {
-    partial_close_page::<S>(flash, flash_range.clone(), page_index)?;
-
-    let current_state = get_page_state::<S>(flash, flash_range.clone(), page_index)?;
+    let current_state = partial_close_page::<S>(flash, flash_range.clone(), page_index)?;
 
     if current_state != PageState::PartialOpen {
         return Ok(());
     }
 
-    let buffer = [MARKER; MAX_FLASH_WRITE_SIZE];
+    let buffer = [MARKER; MAX_WORD_SIZE];
     // Close the end marker
     flash
         .write(
-            calculate_page_end_address::<S>(flash_range, page_index) - S::WRITE_SIZE as u32,
-            &buffer[..S::WRITE_SIZE],
+            calculate_page_end_address::<S>(flash_range, page_index) - S::WORD_SIZE as u32,
+            &buffer[..S::WORD_SIZE],
         )
         .map_err(Error::Storage)?;
 
@@ -148,29 +172,37 @@ fn partial_close_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     page_index: usize,
-) -> Result<(), Error<S::Error>> {
+) -> Result<PageState, Error<S::Error>> {
     let current_state = get_page_state::<S>(flash, flash_range.clone(), page_index)?;
 
     if current_state != PageState::Open {
-        return Ok(());
+        return Ok(current_state);
     }
 
-    let buffer = [MARKER; MAX_FLASH_WRITE_SIZE];
+    let buffer = [MARKER; MAX_WORD_SIZE];
     // Close the start marker
     flash
         .write(
             calculate_page_address::<S>(flash_range, page_index),
-            &buffer[..S::WRITE_SIZE],
+            &buffer[..S::WORD_SIZE],
         )
         .map_err(Error::Storage)?;
 
-    Ok(())
+    Ok(match current_state {
+        PageState::Closed => PageState::Closed,
+        PageState::PartialOpen => PageState::PartialOpen,
+        PageState::Open => PageState::PartialOpen,
+    })
 }
 
+/// The state of a page
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PageState {
+    /// This page was fully written and has now been sealed
     Closed,
+    /// This page has been written to, but may have some space left over
     PartialOpen,
+    /// This page is fully erased
     Open,
 }
 
@@ -201,8 +233,6 @@ impl PageState {
     }
 }
 
-const MARKER: u8 = 0;
-
 /// The main error type
 #[non_exhaustive]
 #[derive(Debug, PartialEq, Eq)]
@@ -218,81 +248,76 @@ pub enum Error<S> {
     Corrupted,
     /// A provided buffer was to big to be used
     BufferTooBig,
-    /// A provided buffer was to small to be used
-    BufferTooSmall,
+    /// A provided buffer was to small to be used (usize is size needed)
+    BufferTooSmall(usize),
+}
+
+/// Round up the the given number to align with the wordsize of the flash.
+/// If the number is already aligned, it is not changed.
+const fn round_up_to_alignment<S: NorFlash>(value: u32) -> u32 {
+    let alignment = S::WORD_SIZE as u32;
+    match value % alignment {
+        0 => value,
+        r => value + (alignment - r),
+    }
+}
+
+/// Round up the the given number to align with the wordsize of the flash.
+/// If the number is already aligned, it is not changed.
+const fn round_up_to_alignment_usize<S: NorFlash>(value: usize) -> usize {
+    round_up_to_alignment::<S>(value as u32) as usize
+}
+
+/// Round down the the given number to align with the wordsize of the flash.
+/// If the number is already aligned, it is not changed.
+const fn round_down_to_alignment<S: NorFlash>(value: u32) -> u32 {
+    let alignment = S::WORD_SIZE as u32;
+    (value / alignment) * alignment
+}
+
+/// Round down the the given number to align with the wordsize of the flash.
+/// If the number is already aligned, it is not changed.
+const fn round_down_to_alignment_usize<S: NorFlash>(value: usize) -> usize {
+    round_down_to_alignment::<S>(value as u32) as usize
+}
+
+/// Extension trait to get the overall word size, which is the largest of the write and read word size
+trait NorFlashExt {
+    /// The largest of the write and read word size
+    const WORD_SIZE: usize;
+}
+
+impl<S: NorFlash> NorFlashExt for S {
+    const WORD_SIZE: usize = if Self::WRITE_SIZE > Self::READ_SIZE {
+        Self::WRITE_SIZE
+    } else {
+        Self::READ_SIZE
+    };
+}
+
+/// Some plumbing for things not yet stable in std/core
+trait ResultToControlflow<B, C> {
+    fn to_controlflow(self) -> ControlFlow<B, C>;
+}
+
+impl<B, C, E> ResultToControlflow<B, C> for Result<C, E>
+where
+    // T: Into<C>,
+    E: Into<B>,
+{
+    fn to_controlflow(self) -> ControlFlow<B, C> {
+        match self {
+            Ok(c) => ControlFlow::Continue(c),
+            Err(b) => ControlFlow::Break(b.into()),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::map::{StorageItem, StorageItemError};
 
     type MockFlash = mock_flash::MockFlashBase<4, 4, 64>;
-
-    #[derive(Debug, PartialEq, Eq)]
-    struct MockStorageItem {
-        key: u8,
-        value: u8,
-    }
-
-    #[derive(Debug, PartialEq, Eq)]
-    enum MockStorageItemError {
-        BufferTooSmall,
-        InvalidKey,
-    }
-
-    impl StorageItemError for MockStorageItemError {
-        fn is_buffer_too_small(&self) -> bool {
-            matches!(self, MockStorageItemError::BufferTooSmall)
-        }
-    }
-
-    impl StorageItem for MockStorageItem {
-        type Key = u8;
-
-        type Error = MockStorageItemError;
-
-        fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
-            if buffer.len() < 2 {
-                return Err(MockStorageItemError::BufferTooSmall);
-            }
-
-            // The serialized value must not be all 0xFF
-            if self.key == 0xFF {
-                return Err(MockStorageItemError::InvalidKey);
-            }
-
-            buffer[0] = self.key;
-            buffer[1] = self.value;
-
-            Ok(2)
-        }
-
-        fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), Self::Error>
-        where
-            Self: Sized,
-        {
-            if buffer.len() < 2 {
-                return Err(MockStorageItemError::BufferTooSmall);
-            }
-
-            if buffer[0] == 0xFF {
-                return Err(MockStorageItemError::InvalidKey);
-            }
-
-            Ok((
-                Self {
-                    key: buffer[0],
-                    value: buffer[1],
-                },
-                2,
-            ))
-        }
-
-        fn key(&self) -> Self::Key {
-            self.key
-        }
-    }
 
     #[test]
     fn test_find_pages() {
@@ -302,7 +327,7 @@ mod tests {
         // 2: partial-open
         // 3: open
 
-        let mut flash = MockFlash::new();
+        let mut flash = MockFlash::default();
         // Page 0 markers
         flash.write(0x000, &[MARKER, 0, 0, 0]).unwrap();
         flash.write(0x100 - 4, &[0, 0, 0, MARKER]).unwrap();
