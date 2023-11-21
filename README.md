@@ -39,13 +39,13 @@ If both words are written, then the page is closed.
 
 All data is stored as an item.
 
-An item consists of a header containing the data length and a CRC, and some data.
-An item is considered erased when its CRC field is 0.
+An item consists of a header containing the data length, a CRC for that length, a data CRC, and some data.
+An item is considered erased when its data CRC field is 0.
 
 *NOTE: This means the data itself is still stored on the flash when it's considered erased.*
 *Depending on your usecase, this might not be secure*
 
-The u16 length field is protected with 2 parity bits and thus the max size of an item is 16k.
+The length is a u16, so any item cannot be longer than 0xFFFF.
 
 ### Inner workings for map
 
@@ -73,7 +73,9 @@ When popping, the item is also erased.
 
 - *Breaking* Internal overhaul of the code. Both map and queue now use the same `item` module to store and read their data with.
 - *Breaking* Map serialization is no longer done in a stack buffer, but in the buffer provided by the user.
+- *Breaking* Map StorageItemError trait has been removed.
 - Added CRC protection of the user data. If user data is corrupted, it will now be skipped as if it wasn't stored.
+  If you think it should be reported to the user, let me know and propose an API for that!
 - Read word size is no longer required to be 1. It can now be 1-32.
 
 ### 0.5.0 - 13-11-23

@@ -96,6 +96,7 @@ fn get_page_state<S: NorFlash>(
     page_index: usize,
 ) -> Result<PageState, Error<S::Error>> {
     let page_address = calculate_page_address::<S>(flash_range, page_index);
+    let half_marker_bits = (S::READ_SIZE * 8 / 2) as u32;
 
     let mut buffer = [0; MAX_WORD_SIZE];
     flash
@@ -106,7 +107,7 @@ fn get_page_state<S: NorFlash>(
         .map(|marker_byte| marker_byte.count_zeros())
         .sum::<u32>();
 
-    if start_marker_zero_bits == 0 {
+    if start_marker_zero_bits < half_marker_bits {
         // More bits are erased than written to 0
         #[cfg(feature = "defmt")]
         defmt::trace!("Page {} is open", page_index);
@@ -129,7 +130,7 @@ fn get_page_state<S: NorFlash>(
         .map(|marker_byte| marker_byte.count_zeros())
         .sum::<u32>();
 
-    if end_marker_zero_bits == 0 {
+    if end_marker_zero_bits < half_marker_bits {
         #[cfg(feature = "defmt")]
         defmt::trace!("Page {} is partial open", page_index);
         // The page end is not marked, so it is only partially filled and thus open
@@ -247,8 +248,8 @@ pub enum Error<S> {
     Corrupted,
     /// A provided buffer was to big to be used
     BufferTooBig,
-    /// A provided buffer was to small to be used
-    BufferTooSmall,
+    /// A provided buffer was to small to be used (usize is size needed)
+    BufferTooSmall(usize),
 }
 
 /// Round up the the given number to align with the wordsize of the flash.
@@ -326,7 +327,7 @@ mod tests {
         // 2: partial-open
         // 3: open
 
-        let mut flash = MockFlash::new(0.0);
+        let mut flash = MockFlash::default();
         // Page 0 markers
         flash.write(0x000, &[MARKER, 0, 0, 0]).unwrap();
         flash.write(0x100 - 4, &[0, 0, 0, MARKER]).unwrap();

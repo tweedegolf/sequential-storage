@@ -5,15 +5,14 @@
 //! ```text
 //! ┌──────┬──────┬──────┬──────┬──────┬──────┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
 //! │      :      │      :      │      :      │  :  :  :  :  :  │  :  :  :  :  :  :  :  :  :  │  :  :  :  :  :  │
-//! │    Length   │ Length CRC  │     CRC     │Pad to word align│            Data             │Pad to word align│
+//! │   Length    │   Length'   │     CRC     │Pad to word align│            Data             │Pad to word align│
 //! │      :      │      :      │      :      │  :  :  :  :  :  │  :  :  :  :  :   :  :  :  : │  :  :  :  :  :  │
 //! └──────┴──────┴──────┴──────┴──────┴──────┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴───┴──┴──┴──┴─┴──┴──┴──┴──┴──┴──┘
 //! 0      1      2      3      4      5      6                 6+padding                     6+padding+length  6+padding+length+endpadding
 //! ```
 //!
 //! An item consists of an [ItemHeader] and some data.
-//! The header has a length field that encodes the length of the data,
-//! a crc for the length
+//! The header has a length field that encodes the length of the data, a crc of the length (`Length'`)
 //! and a crc field that encodes the checksum of the data.
 //!
 //! If the crc is 0, then the item is counted as being erased.
@@ -33,7 +32,6 @@ use crate::{
 pub struct ItemHeader {
     /// Length of the item payload (so not including the header and not including word alignment)
     pub length: u16,
-    pub length_crc: u16,
     pub crc: Option<NonZeroU16>,
 }
 
@@ -68,7 +66,6 @@ impl ItemHeader {
 
         Ok(Some(Self {
             length: u16::from_le_bytes(header_slice[0..2].try_into().unwrap()),
-            length_crc,
             crc: {
                 match u16::from_le_bytes(header_slice[4..6].try_into().unwrap()) {
                     0 => None,
@@ -91,7 +88,7 @@ impl ItemHeader {
                 let data_address = ItemHeader::data_address::<S>(address);
                 let read_len = round_up_to_alignment_usize::<S>(self.length as usize);
                 if data_buffer.len() < read_len {
-                    return Err(Error::BufferTooSmall);
+                    return Err(Error::BufferTooSmall(read_len));
                 }
                 if data_address + read_len as u32 > end_address {
                     return Ok(MaybeItem::Corrupted(self));
@@ -120,7 +117,7 @@ impl ItemHeader {
         let mut buffer = [0xFF; MAX_WORD_SIZE];
 
         buffer[0..2].copy_from_slice(&self.length.to_le_bytes());
-        buffer[2..4].copy_from_slice(&self.length_crc.to_le_bytes());
+        buffer[2..4].copy_from_slice(&crc16(&self.length.to_le_bytes()).get().to_le_bytes());
         buffer[4..6].copy_from_slice(&self.crc.map(|crc| crc.get()).unwrap_or(0).to_le_bytes());
 
         flash
@@ -182,7 +179,6 @@ impl<'d> Item<'d> {
     ) -> Result<ItemHeader, Error<S::Error>> {
         let header = ItemHeader {
             length: data.len() as u16,
-            length_crc: crc16(&(data.len() as u16).to_le_bytes()).get(),
             crc: Some(crc16(data)),
         };
 
@@ -222,6 +218,18 @@ impl<'d> Item<'d> {
 
     pub fn write<S: NorFlash>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
         Self::write_raw(&self.header, self.data(), flash, address)
+    }
+}
+
+impl<'d> core::fmt::Debug for Item<'d> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Item")
+            .field("header", &self.header)
+            .field(
+                "data_buffer",
+                &&self.data_buffer[..self.header.length as usize],
+            )
+            .finish()
     }
 }
 
@@ -295,6 +303,8 @@ pub fn read_items<S: NorFlash, R>(
 }
 
 /// Scans through the items to find the first spot that is free to store a new item.
+///
+/// - `end_address` is exclusive.
 pub fn find_next_free_item_spot<S: NorFlash>(
     flash: &mut S,
     start_address: u32,
@@ -308,7 +318,11 @@ pub fn find_next_free_item_spot<S: NorFlash>(
         match ItemHeader::read_new(flash, current_address, end_address) {
             Ok(Some(header)) => current_address = header.next_item_address::<S>(current_address),
             Ok(None) => {
-                if current_address + data_length >= end_address {
+                if ItemHeader::data_address::<S>(current_address)
+                    + round_up_to_alignment::<S>(data_length)
+                    >= end_address
+                {
+                    // Items does not fit anymore between the current address and the end address
                     return Ok(None);
                 } else {
                     if corruption_detected {
@@ -343,6 +357,7 @@ pub fn find_next_free_item_spot<S: NorFlash>(
     Ok(None)
 }
 
+#[derive(Debug)]
 pub enum MaybeItem<'d> {
     Corrupted(ItemHeader),
     Erased(ItemHeader),

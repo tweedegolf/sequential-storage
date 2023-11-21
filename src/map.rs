@@ -5,7 +5,7 @@
 //! ## Basic API:
 //!
 //! ```rust
-//! # use sequential_storage::map::{store_item, fetch_item, StorageItem, StorageItemError};
+//! # use sequential_storage::map::{store_item, fetch_item, StorageItem};
 //! # use mock_flash::MockFlashBase;
 //! # type Flash = MockFlashBase<10, 1, 4096>;
 //! # mod mock_flash {
@@ -59,14 +59,6 @@
 //! #[derive(Debug)]
 //! enum Error {
 //!     BufferTooSmall,
-//! }
-//!
-//! impl StorageItemError for Error {
-//!     fn is_buffer_too_small(&self) -> bool {
-//!         match self {
-//!             Self::BufferTooSmall => true,
-//!         }
-//!     }
 //! }
 //!
 //! // Initialize the flash. This can be internal or external
@@ -492,8 +484,8 @@ pub enum MapError<I, S> {
     Corrupted,
     /// A provided buffer was to big to be used
     BufferTooBig,
-    /// A provided buffer was to small to be used
-    BufferTooSmall,
+    /// A provided buffer was to small to be used (usize is size needed)
+    BufferTooSmall(usize),
 }
 
 impl<S, I> From<super::Error<S>> for MapError<I, S> {
@@ -503,7 +495,7 @@ impl<S, I> From<super::Error<S>> for MapError<I, S> {
             Error::FullStorage => Self::FullStorage,
             Error::Corrupted => Self::Corrupted,
             Error::BufferTooBig => Self::BufferTooBig,
-            Error::BufferTooSmall => Self::BufferTooSmall,
+            Error::BufferTooSmall(needed) => Self::BufferTooSmall(needed),
         }
     }
 }
@@ -585,7 +577,7 @@ mod tests {
 
     #[test]
     fn store_and_fetch() {
-        let mut flash = MockFlashBig::new(0.0);
+        let mut flash = MockFlashBig::default();
         let flash_range = 0x000..0x1000;
 
         let mut data_buffer = [0; 128];
@@ -663,7 +655,6 @@ mod tests {
         assert_eq!(item.value, vec![2, 2, 2, 2, 2, 2]);
 
         for index in 0..4000 {
-            println!("Test index {index}");
             store_item::<_, _>(
                 &mut flash,
                 flash_range.clone(),
@@ -725,7 +716,7 @@ mod tests {
     fn store_too_many_items() {
         const UPPER_BOUND: u8 = 3;
 
-        let mut tiny_flash = MockFlashTiny::new(0.0);
+        let mut tiny_flash = MockFlashTiny::default();
         let mut data_buffer = [0; 128];
 
         for i in 0..UPPER_BOUND {
@@ -771,7 +762,7 @@ mod tests {
     fn store_too_many_items_big() {
         const UPPER_BOUND: u8 = 67;
 
-        let mut big_flash = MockFlashBig::new(0.0);
+        let mut big_flash = MockFlashBig::default();
         let mut data_buffer = [0; 128];
 
         for i in 0..UPPER_BOUND {
@@ -815,7 +806,7 @@ mod tests {
 
     #[test]
     fn store_many_items_big() {
-        let mut flash = mock_flash::MockFlashBase::<4, 1, 4096>::new(0.0);
+        let mut flash = mock_flash::MockFlashBase::<4, 1, 4096>::default();
         let mut data_buffer = [0; 128];
 
         const LENGHT_PER_KEY: [usize; 24] = [
