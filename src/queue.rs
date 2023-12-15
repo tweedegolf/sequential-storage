@@ -254,8 +254,9 @@ impl<'d, S: NorFlash> Peeker<'d, S> {
                     }
                     item::MaybeItem::Erased(_) => unreachable!("Item is already erased"),
                     item::MaybeItem::Present(item) => {
-                        self.start_address = item.header.next_item_address::<S>(self.start_address);
+                        let next_address = item.header.next_item_address::<S>(found_item_address);
                         let (header, data_buffer) = item.destruct();
+                        self.start_address = next_address;
                         return Ok(Some(&mut data_buffer[..header.length as usize]));
                     }
                 }
@@ -275,12 +276,6 @@ impl<'d, S: NorFlash> Peeker<'d, S> {
             }
         }
     }
-    //let page_count = flash_range.len() / S::ERASE_SIZE;
-    //flash_range
-    //    .step_by(S::ERASE_SIZE)
-    //    .enumerate()
-    //    .map(move |(index, _)| (index + starting_page_index) % page_count)
-    //}
 }
 
 /// Peek at the oldest data.
@@ -557,6 +552,67 @@ mod tests {
                 None,
                 "At {i}"
             );
+        }
+    }
+
+    #[test]
+    fn push_peek_pop_many() {
+        let mut flash = MockFlashBig::default();
+        let flash_range = 0x000..0x1000;
+        let mut data_buffer = [0; 1024];
+
+        for a in 0..100 {
+            for i in 0..20 {
+                let data = vec![i as u8; 50];
+                push(&mut flash, flash_range.clone(), &data, false).unwrap();
+            }
+
+            let mut peeker = peek_many(&mut flash, flash_range.clone());
+            for i in 0..20 {
+                let data = vec![i as u8; 50];
+                assert_eq!(
+                    &peeker.next(&mut data_buffer).unwrap().unwrap()[..],
+                    &data,
+                    "At {i}"
+                );
+            }
+
+            for i in 0..5 {
+                let data = vec![i as u8; 50];
+                assert_eq!(
+                    &pop(&mut flash, flash_range.clone(), &mut data_buffer)
+                        .unwrap()
+                        .unwrap()[..],
+                    &data,
+                    "At {i}"
+                );
+            }
+
+            for i in 20..25 {
+                let data = vec![i as u8; 50];
+                push(&mut flash, flash_range.clone(), &data, false).unwrap();
+            }
+
+            let mut peeker = peek_many(&mut flash, flash_range.clone());
+            for i in 5..25 {
+                let data = vec![i as u8; 50];
+                assert_eq!(
+                    &peeker.next(&mut data_buffer).unwrap().unwrap()[..],
+                    &data,
+                    "At {i}"
+                );
+            }
+
+            for i in 5..25 {
+                let data = vec![i as u8; 50];
+                assert_eq!(
+                    &pop(&mut flash, flash_range.clone(), &mut data_buffer)
+                        .unwrap()
+                        .unwrap()[..],
+                    &data,
+                    "At {i}"
+                );
+            }
         }
     }
 
