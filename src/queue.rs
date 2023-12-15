@@ -231,9 +231,9 @@ pub struct PopIterator<'d, S: MultiwriteNorFlash> {
 }
 
 impl<'d, S: MultiwriteNorFlash> PopIterator<'d, S> {
-    /// Pop the next event.
+    /// Pop the next data.
     ///
-    /// The data is written to the given `data_buffer`` and the part that was written is returned.
+    /// The data is written to the given `data_buffer` and the part that was written is returned.
     /// It is valid to only use the length of the returned slice and use the original `data_buffer`.
     /// The `data_buffer` may contain extra data on ranges after the returned slice.
     /// You should not depend on that data.
@@ -261,9 +261,9 @@ pub struct PeekIterator<'d, S: NorFlash> {
 }
 
 impl<'d, S: NorFlash> PeekIterator<'d, S> {
-    /// Peek at the next event.
+    /// Peek at the next data.
     ///
-    /// The data is written to the given `data_buffer`` and the part that was written is returned.
+    /// The data is written to the given `data_buffer` and the part that was written is returned.
     /// It is valid to only use the length of the returned slice and use the original `data_buffer`.
     /// The `data_buffer` may contain extra data on ranges after the returned slice.
     /// You should not depend on that data.
@@ -281,7 +281,7 @@ impl<'d, S: NorFlash> PeekIterator<'d, S> {
 }
 
 /// An iterator-like interface for peeking into events stored in flash.
-pub struct QueueIterator<'d, S: NorFlash> {
+struct QueueIterator<'d, S: NorFlash> {
     flash: &'d mut S,
     flash_range: Range<u32>,
     oldest_page: Option<usize>,
