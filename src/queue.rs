@@ -604,12 +604,11 @@ mod tests {
                 );
             }
 
+            let mut poper = pop_many(&mut flash, flash_range.clone());
             for i in 0..5 {
                 let data = vec![i as u8; 50];
                 assert_eq!(
-                    &pop(&mut flash, flash_range.clone(), &mut data_buffer)
-                        .unwrap()
-                        .unwrap()[..],
+                    &poper.next(&mut data_buffer).unwrap().unwrap()[..],
                     &data,
                     "At {i}"
                 );
@@ -630,12 +629,11 @@ mod tests {
                 );
             }
 
+            let mut poper = pop_many(&mut flash, flash_range.clone());
             for i in 5..25 {
                 let data = vec![i as u8; 50];
                 assert_eq!(
-                    &pop(&mut flash, flash_range.clone(), &mut data_buffer)
-                        .unwrap()
-                        .unwrap()[..],
+                    &poper.next(&mut data_buffer).unwrap().unwrap()[..],
                     &data,
                     "At {i}"
                 );
