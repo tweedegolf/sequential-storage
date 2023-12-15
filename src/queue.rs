@@ -166,10 +166,7 @@ pub fn push<S: NorFlash>(
 /// If you also want to remove the data use [pop_many].
 ///
 /// Returns an iterator-like type that can be used to peek into the data.
-pub fn peek_many<'d, S: NorFlash>(
-    flash: &'d mut S,
-    flash_range: Range<u32>,
-) -> PeekIterator<'d, S> {
+pub fn peek_many<S: NorFlash>(flash: &mut S, flash_range: Range<u32>) -> PeekIterator<'_, S> {
     PeekIterator {
         iter: QueueIterator::new(flash, flash_range),
     }
@@ -198,10 +195,10 @@ pub fn peek<'d, S: NorFlash>(
 /// If you don't want to remove the data use [peek_many].
 ///
 /// Returns an iterator-like type that can be used to pop the data.
-pub fn pop_many<'d, S: MultiwriteNorFlash>(
-    flash: &'d mut S,
+pub fn pop_many<S: MultiwriteNorFlash>(
+    flash: &mut S,
     flash_range: Range<u32>,
-) -> PopIterator<'d, S> {
+) -> PopIterator<'_, S> {
     PopIterator {
         iter: QueueIterator::new(flash, flash_range),
     }
@@ -280,7 +277,7 @@ impl<'d, S: NorFlash> PeekIterator<'d, S> {
     }
 }
 
-/// An iterator-like interface for peeking into events stored in flash.
+/// An iterator-like interface for peeking into data stored in flash.
 struct QueueIterator<'d, S: NorFlash> {
     flash: &'d mut S,
     flash_range: Range<u32>,
@@ -604,11 +601,11 @@ mod tests {
                 );
             }
 
-            let mut poper = pop_many(&mut flash, flash_range.clone());
+            let mut popper = pop_many(&mut flash, flash_range.clone());
             for i in 0..5 {
                 let data = vec![i as u8; 50];
                 assert_eq!(
-                    &poper.next(&mut data_buffer).unwrap().unwrap()[..],
+                    &popper.next(&mut data_buffer).unwrap().unwrap()[..],
                     &data,
                     "At {i}"
                 );
@@ -629,11 +626,11 @@ mod tests {
                 );
             }
 
-            let mut poper = pop_many(&mut flash, flash_range.clone());
+            let mut popper = pop_many(&mut flash, flash_range.clone());
             for i in 5..25 {
                 let data = vec![i as u8; 50];
                 assert_eq!(
-                    &poper.next(&mut data_buffer).unwrap().unwrap()[..],
+                    &popper.next(&mut data_buffer).unwrap().unwrap()[..],
                     &data,
                     "At {i}"
                 );
