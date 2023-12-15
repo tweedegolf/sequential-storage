@@ -397,6 +397,7 @@ impl<'d, S: MultiwriteNorFlash> QueueIterator<'d, S> {
                     ),
                 )
                 .map_err(Error::Storage)?;
+            self.oldest_page = None;
         }
         Ok(())
     }
@@ -577,6 +578,31 @@ mod tests {
                 "At {i}"
             );
         }
+    }
+
+    #[test]
+    fn push_pop_many_oldest_erased() {
+        let mut flash = MockFlashBig::default();
+        let flash_range = 0x00..0x1000;
+        let mut data_buffer = [0; 1024];
+
+        // Fill up over 2 pages worth of data
+        for i in 0..64 {
+            println!("{i}");
+            let data = vec![i as u8; 32];
+            push(&mut flash, flash_range.clone(), &data, false).unwrap();
+        }
+
+        let mut popper = pop_many(&mut flash, flash_range.clone());
+        let mut i = 0;
+        while let Some(v) = popper.next(&mut data_buffer).unwrap() {
+            println!("{i}");
+            let data = vec![i as u8; 32];
+            assert_eq!(&v, &data, "At {i}");
+            i += 1;
+        }
+        // After pop'ing all elements, first two pages should be fully erased
+        assert_eq!(&flash.as_bytes()[..2048], &[0xff; 2048])
     }
 
     #[test]
