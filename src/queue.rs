@@ -160,22 +160,12 @@ pub fn push<S: NorFlash>(
     Ok(())
 }
 
-/// Peek at up to limit entries that can be fit into the given data_buffer and assigned to
-/// the output buffer.
+/// Peek at the data from oldest to newest.
 ///
 /// If you also want to remove the data use [pop_many].
 ///
-/// The data is written to the given `data_buffer`` and the part that was written is returned.
-/// It is valid to only use the length of the returned slice and use the original `data_buffer`.
-/// The `data_buffer` may contain extra data on ranges after the returned slice.
-/// You should not depend on that data.
-///
-/// If the data_buffer cannot fit a single item, an error is returned.
-pub fn peek_many<'d, S: NorFlash>(
-    flash: &'d mut S,
-    flash_range: Range<u32>, //data_buffer: &'d mut [u8],
-                             //output_buffer: &mut [MaybeUninit<&'d mut [u8]>; N],
-) -> Peeker<'d, S> {
+/// Returns an iterator-like type that can be used to peek into the data.
+pub fn peek_many<'d, S: NorFlash>(flash: &'d mut S, flash_range: Range<u32>) -> Peeker<'d, S> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
 
@@ -191,7 +181,7 @@ pub fn peek_many<'d, S: NorFlash>(
     }
 }
 
-/// Foo
+/// An iterator-like interface for peeking into events stored in flash.
 pub struct Peeker<'d, S: NorFlash> {
     flash: &'d mut S,
     flash_range: Range<u32>,
@@ -211,7 +201,14 @@ impl<'d, S: NorFlash> Peeker<'d, S> {
         }
     }
 
-    /// Foo
+    /// Peek at the next event.
+    ///
+    /// The data is written to the given `data_buffer`` and the part that was written is returned.
+    /// It is valid to only use the length of the returned slice and use the original `data_buffer`.
+    /// The `data_buffer` may contain extra data on ranges after the returned slice.
+    /// You should not depend on that data.
+    ///
+    /// If the data buffer is not big enough an error is returned.
     pub fn next<'m>(
         &mut self,
         data_buffer: &'m mut [u8],
@@ -224,6 +221,7 @@ impl<'d, S: NorFlash> Peeker<'d, S> {
                 + S::WORD_SIZE as u32;
         }
 
+        let mut data_buffer = Some(data_buffer);
         loop {
             let page_data_end_address =
                 calculate_page_end_address::<S>(self.flash_range.clone(), self.current_page)
@@ -240,20 +238,17 @@ impl<'d, S: NorFlash> Peeker<'d, S> {
                     }
                 },
             )? {
-                let data_buffer = unsafe {
-                    core::slice::from_raw_parts_mut(data_buffer.as_mut_ptr(), data_buffer.len())
-                };
-
                 let maybe_item = found_item_header.read_item(
                     self.flash,
-                    data_buffer,
+                    data_buffer.take().unwrap(),
                     found_item_address,
                     page_data_end_address,
                 )?;
 
                 match maybe_item {
-                    item::MaybeItem::Corrupted(_) => {
+                    item::MaybeItem::Corrupted(_, db) => {
                         self.start_address += found_item_address + S::WORD_SIZE as u32;
+                        data_buffer.replace(db);
                         continue;
                     }
                     item::MaybeItem::Erased(_) => unreachable!("Item is already erased"),
@@ -327,6 +322,7 @@ pub fn pop<'d, S: MultiwriteNorFlash>(
     assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
 
     let oldest_page = find_oldest_page(flash, flash_range.clone())?;
+    let mut data_buffer = Some(data_buffer);
 
     for current_page in get_pages::<S>(flash_range.clone(), oldest_page) {
         let page_data_start_address =
@@ -349,20 +345,17 @@ pub fn pop<'d, S: MultiwriteNorFlash>(
                 }
             },
         )? {
-            let data_buffer = unsafe {
-                core::slice::from_raw_parts_mut(data_buffer.as_mut_ptr(), data_buffer.len())
-            };
-
             let maybe_item = found_item_header.read_item(
                 flash,
-                data_buffer,
+                data_buffer.take().unwrap(),
                 found_item_address,
                 page_data_end_address,
             )?;
 
             match maybe_item {
-                item::MaybeItem::Corrupted(_) => {
+                item::MaybeItem::Corrupted(_, db) => {
                     start_address += found_item_address + S::WORD_SIZE as u32;
+                    data_buffer.replace(db);
                     continue;
                 }
                 item::MaybeItem::Erased(_) => unreachable!("Item is already erased"),

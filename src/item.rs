@@ -91,7 +91,7 @@ impl ItemHeader {
                     return Err(Error::BufferTooSmall(read_len));
                 }
                 if data_address + read_len as u32 > end_address {
-                    return Ok(MaybeItem::Corrupted(self));
+                    return Ok(MaybeItem::Corrupted(self, data_buffer));
                 }
 
                 flash
@@ -107,7 +107,7 @@ impl ItemHeader {
                         data_buffer,
                     }))
                 } else {
-                    return Ok(MaybeItem::Corrupted(self));
+                    return Ok(MaybeItem::Corrupted(self, data_buffer));
                 }
             }
         }
@@ -283,7 +283,7 @@ pub fn read_items<S: NorFlash, R>(
         start_address,
         end_address,
         |flash, header, address| match header.read_item(flash, data_buffer, address, end_address) {
-            Ok(MaybeItem::Corrupted(_)) => {
+            Ok(MaybeItem::Corrupted(_, _)) => {
                 #[cfg(feature = "defmt")]
                 defmt::error!(
                     "Found a corrupted item at {:X}. Skipping...",
@@ -359,7 +359,7 @@ pub fn find_next_free_item_spot<S: NorFlash>(
 
 #[derive(Debug)]
 pub enum MaybeItem<'d> {
-    Corrupted(ItemHeader),
+    Corrupted(ItemHeader, &'d mut [u8]),
     Erased(ItemHeader),
     Present(Item<'d>),
 }
@@ -367,7 +367,7 @@ pub enum MaybeItem<'d> {
 impl<'d> MaybeItem<'d> {
     pub fn unwrap<E>(self) -> Result<Item<'d>, Error<E>> {
         match self {
-            MaybeItem::Corrupted(_) => Err(Error::Corrupted),
+            MaybeItem::Corrupted(_, _) => Err(Error::Corrupted),
             MaybeItem::Erased(_) => panic!("Cannot unwrap an erased item"),
             MaybeItem::Present(item) => Ok(item),
         }
