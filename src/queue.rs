@@ -82,6 +82,7 @@ pub fn push<S: NorFlash>(
     }
 
     let current_page = find_youngest_page(flash, flash_range.clone())?;
+
     let page_data_start_address =
         calculate_page_address::<S>(flash_range.clone(), current_page) + S::WORD_SIZE as u32;
     let page_data_end_address =
