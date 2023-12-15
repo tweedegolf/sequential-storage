@@ -166,42 +166,101 @@ pub fn push<S: NorFlash>(
 /// If you also want to remove the data use [pop_many].
 ///
 /// Returns an iterator-like type that can be used to peek into the data.
-pub fn peek_many<'d, S: NorFlash>(flash: &'d mut S, flash_range: Range<u32>) -> Peeker<'d, S> {
-    assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
-    assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
-
-    assert!(S::ERASE_SIZE >= S::WORD_SIZE * 4);
-    assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
-
-    Peeker {
-        flash,
-        flash_range,
-        oldest_page: None,
-        current_page: 0,
-        start_address: 0,
-    }
-}
-
-/// An iterator-like interface for peeking into events stored in flash.
-pub struct Peeker<'d, S: NorFlash> {
+pub fn peek_many<'d, S: NorFlash>(
     flash: &'d mut S,
     flash_range: Range<u32>,
-    oldest_page: Option<usize>,
-    current_page: usize,
-    start_address: u32,
+) -> PeekIterator<'d, S> {
+    PeekIterator {
+        iter: QueueIterator::new(flash, flash_range),
+    }
 }
 
-impl<'d, S: NorFlash> Peeker<'d, S> {
-    fn next_page(&mut self, current: usize) -> Option<usize> {
-        let next = next_page::<S>(self.flash_range.clone(), current);
-        let oldest = self.oldest_page.unwrap();
-        if next == oldest {
-            None
+/// Peek at the oldest data.
+///
+/// If you also want to remove the data use [pop].
+///
+/// The data is written to the given `data_buffer`` and the part that was written is returned.
+/// It is valid to only use the length of the returned slice and use the original `data_buffer`.
+/// The `data_buffer` may contain extra data on ranges after the returned slice.
+/// You should not depend on that data.
+///
+/// If the data buffer is not big enough an error is returned.
+pub fn peek<'d, S: NorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+    data_buffer: &'d mut [u8],
+) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
+    peek_many(flash, flash_range).next(data_buffer)
+}
+
+/// Pop the data from oldest to newest.
+///
+/// If you don't want to remove the data use [peek_many].
+///
+/// Returns an iterator-like type that can be used to pop the data.
+pub fn pop_many<'d, S: MultiwriteNorFlash>(
+    flash: &'d mut S,
+    flash_range: Range<u32>,
+) -> PopIterator<'d, S> {
+    PopIterator {
+        iter: QueueIterator::new(flash, flash_range),
+    }
+}
+
+/// Pop the oldest data from the queue.
+///
+/// If you don't want to remove the data use [peek].
+///
+/// The data is written to the given `data_buffer`` and the part that was written is returned.
+/// It is valid to only use the length of the returned slice and use the original `data_buffer`.
+/// The `data_buffer` may contain extra data on ranges after the returned slice.
+/// You should not depend on that data.
+///
+/// If the data buffer is not big enough an error is returned.
+pub fn pop<'d, S: MultiwriteNorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+    data_buffer: &'d mut [u8],
+) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
+    pop_many(flash, flash_range).next(data_buffer)
+}
+
+/// Iterator for pop'ing elements in the queue.
+pub struct PopIterator<'d, S: MultiwriteNorFlash> {
+    iter: QueueIterator<'d, S>,
+}
+
+impl<'d, S: MultiwriteNorFlash> PopIterator<'d, S> {
+    /// Pop the next event.
+    ///
+    /// The data is written to the given `data_buffer`` and the part that was written is returned.
+    /// It is valid to only use the length of the returned slice and use the original `data_buffer`.
+    /// The `data_buffer` may contain extra data on ranges after the returned slice.
+    /// You should not depend on that data.
+    ///
+    /// If the data buffer is not big enough an error is returned.
+    pub fn next<'m>(
+        &mut self,
+        data_buffer: &'m mut [u8],
+    ) -> Result<Option<&'m mut [u8]>, Error<S::Error>> {
+        if let Some((item, item_address)) = self.iter.next(data_buffer)? {
+            let (header, data_buffer) = item.destruct();
+            let ret = &mut data_buffer[..header.length as usize];
+            self.iter.erase(header, item_address)?;
+
+            Ok(Some(ret))
         } else {
-            Some(next)
+            Ok(None)
         }
     }
+}
 
+/// Iterator for peek'ing elements in the queue.
+pub struct PeekIterator<'d, S: NorFlash> {
+    iter: QueueIterator<'d, S>,
+}
+
+impl<'d, S: NorFlash> PeekIterator<'d, S> {
     /// Peek at the next event.
     ///
     /// The data is written to the given `data_buffer`` and the part that was written is returned.
@@ -214,6 +273,53 @@ impl<'d, S: NorFlash> Peeker<'d, S> {
         &mut self,
         data_buffer: &'m mut [u8],
     ) -> Result<Option<&'m mut [u8]>, Error<S::Error>> {
+        Ok(self.iter.next(data_buffer)?.map(|(item, _)| {
+            let (header, data_buffer) = item.destruct();
+            &mut data_buffer[..header.length as usize]
+        }))
+    }
+}
+
+/// An iterator-like interface for peeking into events stored in flash.
+pub struct QueueIterator<'d, S: NorFlash> {
+    flash: &'d mut S,
+    flash_range: Range<u32>,
+    oldest_page: Option<usize>,
+    current_page: usize,
+    start_address: u32,
+}
+
+impl<'d, S: NorFlash> QueueIterator<'d, S> {
+    fn new(flash: &'d mut S, flash_range: Range<u32>) -> Self {
+        assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
+        assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
+
+        assert!(S::ERASE_SIZE >= S::WORD_SIZE * 4);
+        assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
+
+        Self {
+            flash,
+            flash_range,
+            oldest_page: None,
+            current_page: 0,
+            start_address: 0,
+        }
+    }
+
+    fn next_page(&mut self, current: usize) -> Option<usize> {
+        let next = next_page::<S>(self.flash_range.clone(), current);
+        let oldest = self.oldest_page.unwrap();
+        if next == oldest {
+            None
+        } else {
+            Some(next)
+        }
+    }
+
+    fn next<'m>(
+        &mut self,
+        data_buffer: &'m mut [u8],
+    ) -> Result<Option<(Item<'m>, u32)>, Error<S::Error>> {
         if self.oldest_page.is_none() {
             let oldest_page = find_oldest_page(self.flash, self.flash_range.clone())?;
             self.oldest_page.replace(oldest_page);
@@ -255,9 +361,8 @@ impl<'d, S: NorFlash> Peeker<'d, S> {
                     item::MaybeItem::Erased(_) => unreachable!("Item is already erased"),
                     item::MaybeItem::Present(item) => {
                         let next_address = item.header.next_item_address::<S>(found_item_address);
-                        let (header, data_buffer) = item.destruct();
                         self.start_address = next_address;
-                        return Ok(Some(&mut data_buffer[..header.length as usize]));
+                        return Ok(Some((item, found_item_address)));
                     }
                 }
             } else {
@@ -278,104 +383,26 @@ impl<'d, S: NorFlash> Peeker<'d, S> {
     }
 }
 
-/// Peek at the oldest data.
-///
-/// If you also want to remove the data use [pop].
-///
-/// The data is written to the given `data_buffer`` and the part that was written is returned.
-/// It is valid to only use the length of the returned slice and use the original `data_buffer`.
-/// The `data_buffer` may contain extra data on ranges after the returned slice.
-/// You should not depend on that data.
-///
-/// If the data buffer is not big enough an error is returned.
-pub fn peek<'d, S: NorFlash>(
-    flash: &mut S,
-    flash_range: Range<u32>,
-    data_buffer: &'d mut [u8],
-) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
-    peek_many(flash, flash_range).next(data_buffer)
-}
-
-/// Pop the oldest data from the queue.
-///
-/// If you don't want to remove the data use [peek].
-///
-/// The data is written to the given `data_buffer`` and the part that was written is returned.
-/// It is valid to only use the length of the returned slice and use the original `data_buffer`.
-/// The `data_buffer` may contain extra data on ranges after the returned slice.
-/// You should not depend on that data.
-///
-/// If the data buffer is not big enough an error is returned.
-pub fn pop<'d, S: MultiwriteNorFlash>(
-    flash: &mut S,
-    flash_range: Range<u32>,
-    data_buffer: &'d mut [u8],
-) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
-    assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
-    assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
-
-    assert!(S::ERASE_SIZE >= S::WORD_SIZE * 4);
-    assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
-
-    let oldest_page = find_oldest_page(flash, flash_range.clone())?;
-    let mut data_buffer = Some(data_buffer);
-
-    for current_page in get_pages::<S>(flash_range.clone(), oldest_page) {
-        let page_data_start_address =
-            calculate_page_address::<S>(flash_range.clone(), current_page) + S::WORD_SIZE as u32;
-        let page_data_end_address =
-            calculate_page_end_address::<S>(flash_range.clone(), current_page)
-                - S::WORD_SIZE as u32;
-
-        let mut start_address = page_data_start_address;
-
-        while let Some((found_item_header, found_item_address)) = read_item_headers(
-            flash,
-            start_address,
-            page_data_end_address,
-            |_, item_header, item_address| {
-                if item_header.crc.is_some() {
-                    ControlFlow::Break((item_header, item_address))
-                } else {
-                    ControlFlow::Continue(())
-                }
-            },
-        )? {
-            let maybe_item = found_item_header.read_item(
-                flash,
-                data_buffer.take().unwrap(),
-                found_item_address,
-                page_data_end_address,
-            )?;
-
-            match maybe_item {
-                item::MaybeItem::Corrupted(_, db) => {
-                    start_address += found_item_address + S::WORD_SIZE as u32;
-                    data_buffer.replace(db);
-                    continue;
-                }
-                item::MaybeItem::Erased(_) => unreachable!("Item is already erased"),
-                item::MaybeItem::Present(item) => {
-                    let (header, data_buffer) = item.destruct();
-                    let header = header.erase_data(flash, found_item_address)?;
-
-                    if current_page != oldest_page {
-                        // The oldest page didn't yield an item, so we can now erase it
-                        flash
-                            .erase(
-                                calculate_page_address::<S>(flash_range.clone(), oldest_page),
-                                calculate_page_end_address::<S>(flash_range.clone(), oldest_page),
-                            )
-                            .map_err(Error::Storage)?;
-                    }
-
-                    return Ok(Some(&mut data_buffer[..header.length as usize]));
-                }
-            };
+impl<'d, S: MultiwriteNorFlash> QueueIterator<'d, S> {
+    fn erase(&mut self, header: ItemHeader, item_address: u32) -> Result<(), Error<S::Error>> {
+        header.erase_data(self.flash, item_address)?;
+        if self.current_page != self.oldest_page.unwrap() {
+            // The oldest page didn't yield an item, so we can now erase it
+            self.flash
+                .erase(
+                    calculate_page_address::<S>(
+                        self.flash_range.clone(),
+                        self.oldest_page.unwrap(),
+                    ),
+                    calculate_page_end_address::<S>(
+                        self.flash_range.clone(),
+                        self.oldest_page.unwrap(),
+                    ),
+                )
+                .map_err(Error::Storage)?;
         }
+        Ok(())
     }
-
-    Ok(None)
 }
 
 fn find_youngest_page<S: NorFlash>(
