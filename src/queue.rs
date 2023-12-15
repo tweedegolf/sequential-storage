@@ -561,7 +561,7 @@ mod tests {
         let flash_range = 0x000..0x1000;
         let mut data_buffer = [0; 1024];
 
-        for a in 0..100 {
+        for _ in 0..100 {
             for i in 0..20 {
                 let data = vec![i as u8; 50];
                 push(&mut flash, flash_range.clone(), &data, false).unwrap();
