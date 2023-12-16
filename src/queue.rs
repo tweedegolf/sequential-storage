@@ -161,6 +161,17 @@ pub fn push<S: NorFlash>(
     Ok(())
 }
 
+/// Peek at the data from oldest to newest.
+///
+/// If you also want to remove the data use [pop_many].
+///
+/// Returns an iterator-like type that can be used to peek into the data.
+pub fn peek_many<S: NorFlash>(flash: &mut S, flash_range: Range<u32>) -> PeekIterator<'_, S> {
+    PeekIterator {
+        iter: QueueIterator::new(flash, flash_range),
+    }
+}
+
 /// Peek at the oldest data.
 ///
 /// If you also want to remove the data use [pop].
@@ -176,61 +187,21 @@ pub fn peek<'d, S: NorFlash>(
     flash_range: Range<u32>,
     data_buffer: &'d mut [u8],
 ) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
-    assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
-    assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
+    peek_many(flash, flash_range).next(data_buffer)
+}
 
-    assert!(S::ERASE_SIZE >= S::WORD_SIZE * 4);
-    assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
-
-    let oldest_page = find_oldest_page(flash, flash_range.clone())?;
-
-    for current_page in get_pages::<S>(flash_range.clone(), oldest_page) {
-        let page_data_start_address =
-            calculate_page_address::<S>(flash_range.clone(), current_page) + S::WORD_SIZE as u32;
-        let page_data_end_address =
-            calculate_page_end_address::<S>(flash_range.clone(), current_page)
-                - S::WORD_SIZE as u32;
-
-        let mut start_address = page_data_start_address;
-
-        while let Some((found_item_header, found_item_address)) = read_item_headers(
-            flash,
-            start_address,
-            page_data_end_address,
-            |_, item_header, item_address| {
-                if item_header.crc.is_some() {
-                    ControlFlow::Break((item_header, item_address))
-                } else {
-                    ControlFlow::Continue(())
-                }
-            },
-        )? {
-            let data_buffer = unsafe {
-                core::slice::from_raw_parts_mut(data_buffer.as_mut_ptr(), data_buffer.len())
-            };
-
-            let maybe_item = found_item_header.read_item(
-                flash,
-                data_buffer,
-                found_item_address,
-                page_data_end_address,
-            )?;
-
-            match maybe_item {
-                item::MaybeItem::Corrupted(_) => {
-                    start_address += found_item_address + S::WORD_SIZE as u32;
-                    continue;
-                }
-                item::MaybeItem::Erased(_) => unreachable!("Item is already erased"),
-                item::MaybeItem::Present(item) => {
-                    let (header, data_buffer) = item.destruct();
-                    return Ok(Some(&mut data_buffer[..header.length as usize]));
-                }
-            };
-        }
+/// Pop the data from oldest to newest.
+///
+/// If you don't want to remove the data use [peek_many].
+///
+/// Returns an iterator-like type that can be used to pop the data.
+pub fn pop_many<S: MultiwriteNorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+) -> PopIterator<'_, S> {
+    PopIterator {
+        iter: QueueIterator::new(flash, flash_range),
     }
-
-    Ok(None)
 }
 
 /// Pop the oldest data from the queue.
@@ -248,73 +219,188 @@ pub fn pop<'d, S: MultiwriteNorFlash>(
     flash_range: Range<u32>,
     data_buffer: &'d mut [u8],
 ) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
-    assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
-    assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
+    pop_many(flash, flash_range).next(data_buffer)
+}
 
-    assert!(S::ERASE_SIZE >= S::WORD_SIZE * 4);
-    assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
+/// Iterator for pop'ing elements in the queue.
+pub struct PopIterator<'d, S: MultiwriteNorFlash> {
+    iter: QueueIterator<'d, S>,
+}
 
-    let oldest_page = find_oldest_page(flash, flash_range.clone())?;
+impl<'d, S: MultiwriteNorFlash> PopIterator<'d, S> {
+    /// Pop the next data.
+    ///
+    /// The data is written to the given `data_buffer` and the part that was written is returned.
+    /// It is valid to only use the length of the returned slice and use the original `data_buffer`.
+    /// The `data_buffer` may contain extra data on ranges after the returned slice.
+    /// You should not depend on that data.
+    ///
+    /// If the data buffer is not big enough an error is returned.
+    pub fn next<'m>(
+        &mut self,
+        data_buffer: &'m mut [u8],
+    ) -> Result<Option<&'m mut [u8]>, Error<S::Error>> {
+        if let Some((item, item_address)) = self.iter.next(data_buffer)? {
+            let (header, data_buffer) = item.destruct();
+            let ret = &mut data_buffer[..header.length as usize];
+            self.iter.erase(header, item_address)?;
 
-    for current_page in get_pages::<S>(flash_range.clone(), oldest_page) {
-        let page_data_start_address =
-            calculate_page_address::<S>(flash_range.clone(), current_page) + S::WORD_SIZE as u32;
-        let page_data_end_address =
-            calculate_page_end_address::<S>(flash_range.clone(), current_page)
-                - S::WORD_SIZE as u32;
+            Ok(Some(ret))
+        } else {
+            Ok(None)
+        }
+    }
+}
 
-        let mut start_address = page_data_start_address;
+/// Iterator for peek'ing elements in the queue.
+pub struct PeekIterator<'d, S: NorFlash> {
+    iter: QueueIterator<'d, S>,
+}
 
-        while let Some((found_item_header, found_item_address)) = read_item_headers(
+impl<'d, S: NorFlash> PeekIterator<'d, S> {
+    /// Peek at the next data.
+    ///
+    /// The data is written to the given `data_buffer` and the part that was written is returned.
+    /// It is valid to only use the length of the returned slice and use the original `data_buffer`.
+    /// The `data_buffer` may contain extra data on ranges after the returned slice.
+    /// You should not depend on that data.
+    ///
+    /// If the data buffer is not big enough an error is returned.
+    pub fn next<'m>(
+        &mut self,
+        data_buffer: &'m mut [u8],
+    ) -> Result<Option<&'m mut [u8]>, Error<S::Error>> {
+        Ok(self.iter.next(data_buffer)?.map(|(item, _)| {
+            let (header, data_buffer) = item.destruct();
+            &mut data_buffer[..header.length as usize]
+        }))
+    }
+}
+
+/// An iterator-like interface for peeking into data stored in flash.
+struct QueueIterator<'d, S: NorFlash> {
+    flash: &'d mut S,
+    flash_range: Range<u32>,
+    oldest_page: Option<usize>,
+    current_page: usize,
+    start_address: u32,
+}
+
+impl<'d, S: NorFlash> QueueIterator<'d, S> {
+    fn new(flash: &'d mut S, flash_range: Range<u32>) -> Self {
+        assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
+        assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
+
+        assert!(S::ERASE_SIZE >= S::WORD_SIZE * 4);
+        assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
+
+        Self {
             flash,
-            start_address,
-            page_data_end_address,
-            |_, item_header, item_address| {
-                if item_header.crc.is_some() {
-                    ControlFlow::Break((item_header, item_address))
-                } else {
-                    ControlFlow::Continue(())
-                }
-            },
-        )? {
-            let data_buffer = unsafe {
-                core::slice::from_raw_parts_mut(data_buffer.as_mut_ptr(), data_buffer.len())
-            };
-
-            let maybe_item = found_item_header.read_item(
-                flash,
-                data_buffer,
-                found_item_address,
-                page_data_end_address,
-            )?;
-
-            match maybe_item {
-                item::MaybeItem::Corrupted(_) => {
-                    start_address += found_item_address + S::WORD_SIZE as u32;
-                    continue;
-                }
-                item::MaybeItem::Erased(_) => unreachable!("Item is already erased"),
-                item::MaybeItem::Present(item) => {
-                    let (header, data_buffer) = item.destruct();
-                    let header = header.erase_data(flash, found_item_address)?;
-
-                    if current_page != oldest_page {
-                        // The oldest page didn't yield an item, so we can now erase it
-                        flash
-                            .erase(
-                                calculate_page_address::<S>(flash_range.clone(), oldest_page),
-                                calculate_page_end_address::<S>(flash_range.clone(), oldest_page),
-                            )
-                            .map_err(Error::Storage)?;
-                    }
-
-                    return Ok(Some(&mut data_buffer[..header.length as usize]));
-                }
-            };
+            flash_range,
+            oldest_page: None,
+            current_page: 0,
+            start_address: 0,
         }
     }
 
-    Ok(None)
+    fn next_page(&mut self, current: usize) -> Option<usize> {
+        let next = next_page::<S>(self.flash_range.clone(), current);
+        let oldest = self.oldest_page.unwrap();
+        if next == oldest {
+            None
+        } else {
+            Some(next)
+        }
+    }
+
+    fn next<'m>(
+        &mut self,
+        data_buffer: &'m mut [u8],
+    ) -> Result<Option<(Item<'m>, u32)>, Error<S::Error>> {
+        if self.oldest_page.is_none() {
+            let oldest_page = find_oldest_page(self.flash, self.flash_range.clone())?;
+            self.oldest_page.replace(oldest_page);
+            self.current_page = oldest_page;
+            self.start_address = calculate_page_address::<S>(self.flash_range.clone(), oldest_page)
+                + S::WORD_SIZE as u32;
+        }
+
+        let mut data_buffer = Some(data_buffer);
+        loop {
+            let page_data_end_address =
+                calculate_page_end_address::<S>(self.flash_range.clone(), self.current_page)
+                    - S::WORD_SIZE as u32;
+            if let Some((found_item_header, found_item_address)) = read_item_headers(
+                self.flash,
+                self.start_address,
+                page_data_end_address,
+                |_, item_header, item_address| {
+                    if item_header.crc.is_some() {
+                        ControlFlow::Break((item_header, item_address))
+                    } else {
+                        ControlFlow::Continue(())
+                    }
+                },
+            )? {
+                let maybe_item = found_item_header.read_item(
+                    self.flash,
+                    data_buffer.take().unwrap(),
+                    found_item_address,
+                    page_data_end_address,
+                )?;
+
+                match maybe_item {
+                    item::MaybeItem::Corrupted(_, db) => {
+                        self.start_address += found_item_address + S::WORD_SIZE as u32;
+                        data_buffer.replace(db);
+                        continue;
+                    }
+                    item::MaybeItem::Erased(_) => unreachable!("Item is already erased"),
+                    item::MaybeItem::Present(item) => {
+                        let next_address = item.header.next_item_address::<S>(found_item_address);
+                        self.start_address = next_address;
+                        return Ok(Some((item, found_item_address)));
+                    }
+                }
+            } else {
+                match self.next_page(self.current_page) {
+                    Some(next) => {
+                        self.current_page = next;
+                        self.start_address =
+                            calculate_page_address::<S>(self.flash_range.clone(), next)
+                                + S::WORD_SIZE as u32;
+                    }
+                    None => {
+                        // No more items left!
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<'d, S: MultiwriteNorFlash> QueueIterator<'d, S> {
+    fn erase(&mut self, header: ItemHeader, item_address: u32) -> Result<(), Error<S::Error>> {
+        header.erase_data(self.flash, item_address)?;
+        if self.current_page != self.oldest_page.unwrap() {
+            // The oldest page didn't yield an item, so we can now erase it
+            self.flash
+                .erase(
+                    calculate_page_address::<S>(
+                        self.flash_range.clone(),
+                        self.oldest_page.unwrap(),
+                    ),
+                    calculate_page_end_address::<S>(
+                        self.flash_range.clone(),
+                        self.oldest_page.unwrap(),
+                    ),
+                )
+                .map_err(Error::Storage)?;
+            self.oldest_page = None;
+        }
+        Ok(())
+    }
 }
 
 fn find_youngest_page<S: NorFlash>(
@@ -491,6 +577,90 @@ mod tests {
                 None,
                 "At {i}"
             );
+        }
+    }
+
+    #[test]
+    fn push_pop_many_oldest_erased() {
+        let mut flash = MockFlashBig::default();
+        let flash_range = 0x00..0x1000;
+        let mut data_buffer = [0; 1024];
+
+        // Fill up over 2 pages worth of data
+        for i in 0..64 {
+            println!("{i}");
+            let data = vec![i as u8; 32];
+            push(&mut flash, flash_range.clone(), &data, false).unwrap();
+        }
+
+        let mut popper = pop_many(&mut flash, flash_range.clone());
+        let mut i = 0;
+        while let Some(v) = popper.next(&mut data_buffer).unwrap() {
+            println!("{i}");
+            let data = vec![i as u8; 32];
+            assert_eq!(&v, &data, "At {i}");
+            i += 1;
+        }
+        // After pop'ing all elements, first two pages should be fully erased
+        assert_eq!(&flash.as_bytes()[..2048], &[0xff; 2048])
+    }
+
+    #[test]
+    fn push_peek_pop_many() {
+        let mut flash = MockFlashBig::default();
+        let flash_range = 0x000..0x1000;
+        let mut data_buffer = [0; 1024];
+
+        for _ in 0..100 {
+            for i in 0..20 {
+                let data = vec![i as u8; 50];
+                push(&mut flash, flash_range.clone(), &data, false).unwrap();
+            }
+
+            let mut peeker = peek_many(&mut flash, flash_range.clone());
+            for i in 0..20 {
+                let data = vec![i as u8; 50];
+                assert_eq!(
+                    &peeker.next(&mut data_buffer).unwrap().unwrap()[..],
+                    &data,
+                    "At {i}"
+                );
+            }
+
+            let mut popper = pop_many(&mut flash, flash_range.clone());
+            for i in 0..5 {
+                let data = vec![i as u8; 50];
+                assert_eq!(
+                    &popper.next(&mut data_buffer).unwrap().unwrap()[..],
+                    &data,
+                    "At {i}"
+                );
+            }
+
+            for i in 20..25 {
+                let data = vec![i as u8; 50];
+                push(&mut flash, flash_range.clone(), &data, false).unwrap();
+            }
+
+            let mut peeker = peek_many(&mut flash, flash_range.clone());
+            for i in 5..25 {
+                let data = vec![i as u8; 50];
+                assert_eq!(
+                    &peeker.next(&mut data_buffer).unwrap().unwrap()[..],
+                    &data,
+                    "At {i}"
+                );
+            }
+
+            let mut popper = pop_many(&mut flash, flash_range.clone());
+            for i in 5..25 {
+                let data = vec![i as u8; 50];
+                assert_eq!(
+                    &popper.next(&mut data_buffer).unwrap().unwrap()[..],
+                    &data,
+                    "At {i}"
+                );
+            }
         }
     }
 
