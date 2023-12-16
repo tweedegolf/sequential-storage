@@ -176,7 +176,7 @@ pub fn peek_many<S: NorFlash>(flash: &mut S, flash_range: Range<u32>) -> PeekIte
 ///
 /// If you also want to remove the data use [pop].
 ///
-/// The data is written to the given `data_buffer`` and the part that was written is returned.
+/// The data is written to the given `data_buffer` and the part that was written is returned.
 /// It is valid to only use the length of the returned slice and use the original `data_buffer`.
 /// The `data_buffer` may contain extra data on ranges after the returned slice.
 /// You should not depend on that data.
@@ -208,7 +208,7 @@ pub fn pop_many<S: MultiwriteNorFlash>(
 ///
 /// If you don't want to remove the data use [peek].
 ///
-/// The data is written to the given `data_buffer`` and the part that was written is returned.
+/// The data is written to the given `data_buffer` and the part that was written is returned.
 /// It is valid to only use the length of the returned slice and use the original `data_buffer`.
 /// The `data_buffer` may contain extra data on ranges after the returned slice.
 /// You should not depend on that data.

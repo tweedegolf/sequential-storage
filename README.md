@@ -76,7 +76,15 @@ You should only lose data when you give permission.
 Peeking and popping look at the oldest data it can find.
 When popping, the item is also erased.
 
+When using peek_many, you can look at all data from oldest to newest.
+
 ## Changelog
+
+(DD-MM-YY)
+
+### 0.6.1 - 16-12-23
+
+- Added queue peek_many and pop_many ([#12](https://github.com/tweedegolf/sequential-storage/pull/12))
 
 ### 0.6.0 - 21-11-23
 
