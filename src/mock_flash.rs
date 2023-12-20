@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 use core::ops::Range;
 use embedded_storage::nor_flash::{
     ErrorType, MultiwriteNorFlash, NorFlash, NorFlashError, NorFlashErrorKind, ReadNorFlash,

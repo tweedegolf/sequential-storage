@@ -1,4 +1,4 @@
-#![cfg_attr(not(any(test, doctest)), no_std)]
+#![cfg_attr(not(any(test, doctest, feature = "_test")), no_std)]
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
@@ -17,7 +17,7 @@ mod item;
 pub mod map;
 pub mod queue;
 
-#[cfg(any(test, doctest))]
+#[cfg(any(test, doctest, feature = "_test"))]
 pub mod mock_flash;
 
 /// The biggest wordsize we support.
