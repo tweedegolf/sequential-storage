@@ -56,7 +56,7 @@
 //!
 //! #[derive(Debug)]
 //! enum Error {
-//!     // We have no errors in this test
+//!     BufferTooSmall
 //! }
 //!
 //! // Initialize the flash. This can be internal or external
