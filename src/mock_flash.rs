@@ -3,6 +3,7 @@ use embedded_storage::nor_flash::{
     ErrorType, MultiwriteNorFlash, NorFlash, NorFlashError, NorFlashErrorKind, ReadNorFlash,
 };
 
+/// State of a word in the flash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Writable {
     /// Twice
@@ -15,14 +16,20 @@ pub enum Writable {
 
 use Writable::*;
 
+/// Base type for in memory flash that can be used for mocking.
 #[derive(Debug, Clone)]
 pub struct MockFlashBase<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> {
     writable: Vec<Writable>,
     data: Vec<u8>,
+    /// Number of erases done.
     pub erases: u32,
+    /// Number of reads done.
     pub reads: u32,
+    /// Number of writes done.
     pub writes: u32,
+    /// The chance for a bit flip to happen.
     pub write_bit_flip_chance: f32,
+    /// Check that all write locations are writeable.
     pub use_strict_write_count: bool,
 }
 
@@ -42,6 +49,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
 
     const PAGE_BYTES: usize = PAGE_WORDS * BYTES_PER_WORD;
 
+    /// Create a new flash instance.
     pub fn new(write_bit_flip_chance: f32, use_strict_write_count: bool) -> Self {
         Self {
             writable: vec![T; Self::CAPACITY_WORDS],
@@ -54,10 +62,12 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
         }
     }
 
+    /// Get a reference to the underlying data.
     pub fn as_bytes(&self) -> &[u8] {
         &self.data
     }
 
+    /// Get a mutable reference to the underlying data.
     pub fn as_bytes_mut(&mut self) -> &mut [u8] {
         &mut self.data
     }
@@ -202,10 +212,14 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
     }
 }
 
+/// Errors reported by mock flash.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MockFlashError {
+    /// Operation out of bounds.
     OutOfBounds,
+    /// Offset or data not aligned.
     NotAligned,
+    /// Location not writeable.
     NotWritable(u32),
 }
 

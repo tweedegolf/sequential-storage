@@ -14,9 +14,11 @@ keywords = ["no_std", "embedded", "flash", "storage"]
 [dependencies]
 embedded-storage = "0.3.0"
 defmt = { version = "0.3", optional = true }
+rand = { version = "0.8.5", optional = true }
 
 [dev-dependencies]
 rand = "0.8.5"
 
 [features]
 defmt = ["dep:defmt"]
+_test = ["rand"]

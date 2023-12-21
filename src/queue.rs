@@ -403,6 +403,89 @@ impl<'d, S: MultiwriteNorFlash> QueueIterator<'d, S> {
     }
 }
 
+/// Find the largest size of data that can be stored.
+///
+/// This will read through the entire flash to find the largest chunk of
+/// data that can be stored, taking alignment requirements of the item into account.
+///
+/// If there is no space left, `None` is returned.
+pub fn find_max_fit<S: NorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+) -> Result<Option<usize>, Error<S::Error>> {
+    assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
+    assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
+
+    assert!(S::ERASE_SIZE >= S::WORD_SIZE * 4);
+    assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
+
+    let current_page = find_youngest_page(flash, flash_range.clone())?;
+
+    // Check if we have space on the next page
+    let next_page = next_page::<S>(flash_range.clone(), current_page);
+    match get_page_state(flash, flash_range.clone(), next_page)? {
+        PageState::Closed => {
+            let next_page_data_start_address =
+                calculate_page_address::<S>(flash_range.clone(), next_page) + S::WORD_SIZE as u32;
+            let next_page_data_end_address =
+                calculate_page_end_address::<S>(flash_range.clone(), next_page)
+                    - S::WORD_SIZE as u32;
+
+            let next_page_empty = read_item_headers(
+                flash,
+                next_page_data_start_address,
+                next_page_data_end_address,
+                |_, header, _| match header.crc {
+                    Some(_) => ControlFlow::Break(()),
+                    None => ControlFlow::Continue(()),
+                },
+            )?
+            .is_none();
+            if next_page_empty {
+                return Ok(Some(S::ERASE_SIZE - (2 * S::WORD_SIZE)));
+            }
+        }
+        PageState::Open => {
+            return Ok(Some(S::ERASE_SIZE - (2 * S::WORD_SIZE)));
+        }
+        PageState::PartialOpen => {
+            // This should never happen
+            return Err(Error::Corrupted);
+        }
+    };
+
+    // See how much space we can ind in the current page.
+    let mut max_free: Option<usize> = None;
+    let page_data_start_address =
+        calculate_page_address::<S>(flash_range.clone(), current_page) + S::WORD_SIZE as u32;
+    let page_data_end_address =
+        calculate_page_end_address::<S>(flash_range.clone(), current_page) - S::WORD_SIZE as u32;
+
+    let mut current_address = page_data_start_address;
+    let end_address = page_data_end_address;
+
+    while current_address < end_address {
+        let result = ItemHeader::read_new(flash, current_address, end_address)?;
+        match result {
+            Some(header) => current_address = header.next_item_address::<S>(current_address),
+            None => {
+                let data_address =
+                    round_up_to_alignment_usize::<S>(current_address as usize + ItemHeader::LENGTH);
+                if data_address <= end_address as usize {
+                    let free = round_down_to_alignment_usize::<S>(
+                        end_address as usize - data_address as usize,
+                    );
+                    max_free = max_free.map(|current| current.max(free)).or(Some(free));
+                }
+
+                break;
+            }
+        }
+    }
+
+    Ok(max_free)
+}
+
 fn find_youngest_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
