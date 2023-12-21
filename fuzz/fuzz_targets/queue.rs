@@ -24,8 +24,6 @@ enum Op {
 
 #[derive(Arbitrary, Debug)]
 struct PushOp {
-    // TODO: Remove this once uncovering the bug
-    #[arbitrary(with = |u: &mut arbitrary::Unstructured| u.int_in_range(1..=255))]
     value_len: u8,
 }
 
@@ -58,23 +56,13 @@ fn fuzz(ops: Input) {
                 let result: Result<(), sequential_storage::Error<MockFlashError>> =
                     sequential_storage::queue::push(&mut flash, flash_range.clone(), &val, false);
 
-                // NOTE: if the queue is full, we can't push anything
-                // if max_fit == 0 && val.is_empty() {
-                //     assert!(result.is_err());
-                //     assert!(matches!(
-                //         result,
-                //         Err::<(), sequential_storage::Error::<MockFlashError>>(
-                //             sequential_storage::Error::<MockFlashError>::FullStorage
-                //         ),
-                //     ));
-                //     continue;
-                // }
-
-                println!("Value length: {}, max fit: {}", val.len(), max_fit);
-
-                if val.len() <= max_fit {
-                    result.unwrap();
-                    order.push_back(val.to_vec());
+                if let Some(max_fit) = max_fit {
+                    if val.len() <= max_fit {
+                        result.unwrap();
+                        order.push_back(val.to_vec());
+                    } else {
+                        assert!(result.is_err());
+                    }
                 } else {
                     assert!(result.is_err());
                 }

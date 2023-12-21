@@ -407,10 +407,12 @@ impl<'d, S: MultiwriteNorFlash> QueueIterator<'d, S> {
 ///
 /// This will read through the entire flash to find the largest chunk of
 /// data that can be stored, taking alignment requirements of the item into account.
+///
+/// If there is no space left, `None` is returned.
 pub fn find_max_fit<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-) -> Result<usize, Error<S::Error>> {
+) -> Result<Option<usize>, Error<S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
 
@@ -420,7 +422,7 @@ pub fn find_max_fit<S: NorFlash>(
     let current_page = find_youngest_page(flash, flash_range.clone())?;
 
     // Find the max space available on each page until we wrap around.
-    let mut max_free: usize = 0;
+    let mut max_free: Option<usize> = None;
     let page_data_start_address =
         calculate_page_address::<S>(flash_range.clone(), current_page) + S::WORD_SIZE as u32;
     let page_data_end_address =
@@ -436,13 +438,11 @@ pub fn find_max_fit<S: NorFlash>(
             None => {
                 let data_address =
                     round_up_to_alignment_usize::<S>(current_address as usize + ItemHeader::LENGTH);
-                if data_address < end_address as usize {
+                if data_address <= end_address as usize {
                     let free = round_down_to_alignment_usize::<S>(
                         end_address as usize - data_address as usize,
                     );
-                    if free > max_free {
-                        max_free = free;
-                    }
+                    max_free = max_free.map(|current| current.max(free)).or(Some(free));
                 }
 
                 break;
@@ -471,11 +471,11 @@ pub fn find_max_fit<S: NorFlash>(
             )?
             .is_none();
             if next_page_empty {
-                max_free = S::ERASE_SIZE - (2 * S::WORD_SIZE);
+                max_free.replace(S::ERASE_SIZE - (2 * S::WORD_SIZE));
             }
         }
         PageState::Open => {
-            max_free = S::ERASE_SIZE - (2 * S::WORD_SIZE);
+            max_free.replace(S::ERASE_SIZE - (2 * S::WORD_SIZE));
         }
         PageState::PartialOpen => {
             // This should never happen
