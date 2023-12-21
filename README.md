@@ -6,7 +6,7 @@ A crate for storing data in flash with minimal erase cycles.
 
 There are two datastructures:
 
-- Map: An key-value pair store
+- Map: A key-value pair store
 - Queue: A fifo store
 
 Each live in their own module. See the module documentation for more info and examples.
