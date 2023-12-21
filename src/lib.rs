@@ -18,6 +18,7 @@ pub mod map;
 pub mod queue;
 
 #[cfg(any(test, doctest, feature = "_test"))]
+/// An in-memory flash type that can be used for mocking.
 pub mod mock_flash;
 
 /// The biggest wordsize we support.

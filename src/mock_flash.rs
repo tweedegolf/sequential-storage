@@ -1,4 +1,3 @@
-//! An in-memory flash type that can be used for mocking.
 use core::ops::Range;
 use embedded_storage::nor_flash::{
     ErrorType, MultiwriteNorFlash, NorFlash, NorFlashError, NorFlashErrorKind, ReadNorFlash,
