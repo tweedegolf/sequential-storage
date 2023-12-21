@@ -2,7 +2,7 @@
 
 use libfuzzer_sys::arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
-use sequential_storage::mock_flash::MockFlashBase;
+use sequential_storage::mock_flash::{MockFlashBase, MockFlashError};
 use std::collections::VecDeque;
 const MAX_VALUE_SIZE: usize = u8::MAX as usize;
 
@@ -24,6 +24,7 @@ enum Op {
 
 #[derive(Arbitrary, Debug)]
 struct PushOp {
+    // TODO: Remove this once uncovering the bug
     #[arbitrary(with = |u: &mut arbitrary::Unstructured| u.int_in_range(1..=255))]
     value_len: u8,
 }
@@ -54,8 +55,20 @@ fn fuzz(ops: Input) {
                     sequential_storage::queue::find_max_fit(&mut flash, flash_range.clone())
                         .unwrap();
 
-                let result =
+                let result: Result<(), sequential_storage::Error<MockFlashError>> =
                     sequential_storage::queue::push(&mut flash, flash_range.clone(), &val, false);
+
+                // NOTE: if the queue is full, we can't push anything
+                // if max_fit == 0 && val.is_empty() {
+                //     assert!(result.is_err());
+                //     assert!(matches!(
+                //         result,
+                //         Err::<(), sequential_storage::Error::<MockFlashError>>(
+                //             sequential_storage::Error::<MockFlashError>::FullStorage
+                //         ),
+                //     ));
+                //     continue;
+                // }
 
                 println!("Value length: {}, max fit: {}", val.len(), max_fit);
 
