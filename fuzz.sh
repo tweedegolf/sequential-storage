@@ -4,4 +4,4 @@ set -euxo pipefail
 
 CPUS=32
 
-cargo fuzz run --sanitizer none -j$CPUS queue 
+cargo fuzz run --sanitizer none -j$CPUS queue
