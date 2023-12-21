@@ -1,6 +1,5 @@
 #![no_main]
 
-use embedded_storage::nor_flash::ReadNorFlash;
 use libfuzzer_sys::arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use sequential_storage::mock_flash::MockFlashBase;
@@ -23,22 +22,25 @@ enum Op {
 
 #[derive(Arbitrary, Debug)]
 struct PushOp {
+    #[arbitrary(with = |u: &mut arbitrary::Unstructured| u.int_in_range(1..=255))]
     value_len: u8,
 }
 
 fn fuzz(ops: Input) {
-    let mut flash = MockFlashBase::<4, 4, 256>::default();
+    const PAGES: usize = 4;
+    const WORD_SIZE: usize = 4;
+    const WORDS_PER_PAGE: usize = 256;
+
+    let mut flash = MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::default();
     let flash_range = 0x000..0x1000;
 
     let mut order = VecDeque::new();
     let mut buf = [0; MAX_VALUE_SIZE + 1];
 
-    let mut used = 0;
-    let capacity = (0.75 * flash.capacity() as f32) as usize;
     for op in ops.ops.into_iter() {
         println!(
-            "==================================================== op: {:?} (used {}/{})",
-            op, used, capacity,
+            "==================================================== op: {:?}",
+            op,
         );
         match op {
             Op::Push(op) => {
@@ -46,15 +48,20 @@ fn fuzz(ops: Input) {
                     .map(|_| rand::random::<u8>())
                     .collect();
 
+                let max_fit =
+                    sequential_storage::queue::find_max_fit(&mut flash, flash_range.clone())
+                        .unwrap();
+
                 let result =
                     sequential_storage::queue::push(&mut flash, flash_range.clone(), &val, false);
-                println!("Item size: {}. Used: {}/{}", val.len(), used, capacity);
-                if used + val.len() > capacity {
-                    assert!(result.is_err());
-                } else {
+
+                println!("Value length: {}, max fit: {}", val.len(), max_fit);
+
+                if val.len() <= max_fit {
                     result.unwrap();
-                    used += val.len();
                     order.push_back(val.to_vec());
+                } else {
+                    assert!(result.is_err());
                 }
             }
             Op::Pop => {
@@ -63,7 +70,6 @@ fn fuzz(ops: Input) {
                         sequential_storage::queue::pop(&mut flash, flash_range.clone(), &mut buf);
                     assert!(result.is_ok());
                     assert_eq!(result.unwrap().unwrap(), expected);
-                    used -= expected.len();
                 } else {
                     assert!(sequential_storage::queue::pop(
                         &mut flash,
@@ -82,7 +88,6 @@ fn fuzz(ops: Input) {
                         let result = popper.next(&mut buf);
                         assert!(result.is_ok());
                         assert_eq!(result.unwrap().unwrap(), expected);
-                        used -= expected.len();
                     } else {
                         assert!(popper.next(&mut buf).unwrap().is_none());
                     }
