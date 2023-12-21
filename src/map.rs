@@ -43,9 +43,8 @@
 //!         Ok(5)
 //!     }
 //!     fn deserialize_from(buffer: &[u8]) -> Result<Self, Self::Error> {
-//!         if buffer.len() < 5 {
-//!             return Err(Error::BufferTooSmall);
-//!         }
+//!         // We don't have to check the length. This buffer has the same length
+//!         // as what we serialized, so in this case it's always 5.
 //!         
 //!         Ok(Self {
 //!             key: buffer[0],
@@ -55,13 +54,9 @@
 //!     fn key(&self) -> Self::Key { self.key }
 //! }
 //!
-//! // We never tell the crate the max length of our type.
-//! // Instead we need to tell the crate when the provided buffer is too small.
-//! // That's done with the StorageItemError trait which needs to be implemented by the error type.
-//!
 //! #[derive(Debug)]
 //! enum Error {
-//!     BufferTooSmall,
+//!     // We have no errors in this test
 //! }
 //!
 //! // Initialize the flash. This can be internal or external
@@ -451,8 +446,12 @@ pub trait StorageItem {
 
     /// Serialize the key-value item into the given buffer.
     /// Returns the number of bytes the buffer was filled with or an error.
+    /// 
+    /// The serialized data does not have to self-describe its length or do framing.
+    /// This crate already stores the length of any item in flash.
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, Self::Error>;
-    /// Deserialize the key-value item from the given buffer.
+    /// Deserialize the key-value item from the given buffer. This buffer should be as long
+    /// as what was serialized before.
     fn deserialize_from(buffer: &[u8]) -> Result<Self, Self::Error>
     where
         Self: Sized;
