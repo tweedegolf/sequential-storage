@@ -1,9 +1,11 @@
 #![no_main]
 
+use embedded_storage::nor_flash::ReadNorFlash;
 use libfuzzer_sys::arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use sequential_storage::mock_flash::MockFlashBase;
-const MAX_VALUE_SIZE: usize = 255;
+use std::collections::VecDeque;
+const MAX_VALUE_SIZE: usize = u8::MAX as usize;
 
 fuzz_target!(|data: Input| fuzz(data));
 
@@ -21,45 +23,47 @@ enum Op {
 
 #[derive(Arbitrary, Debug)]
 struct PushOp {
-    key: u16,
     value_len: u8,
 }
 
 fn fuzz(ops: Input) {
-    let mut flash = MockFlashBase::<4, 4, 131072>::default();
-    let flash_range = 0x000..0x200000;
+    let mut flash = MockFlashBase::<4, 4, 256>::default();
+    let flash_range = 0x000..0x1000;
 
-    let mut order = Vec::new();
-    let mut buf = [0; MAX_VALUE_SIZE + 64];
+    let mut order = VecDeque::new();
+    let mut buf = [0; MAX_VALUE_SIZE + 1];
 
-    for (i, op) in ops.ops.into_iter().enumerate() {
+    let mut used = 0;
+    let capacity = (0.75 * flash.capacity() as f32) as usize;
+    for op in ops.ops.into_iter() {
         println!(
-            "==================================================== op: {:?}",
-            op
+            "==================================================== op: {:?} (used {}/{})",
+            op, used, capacity,
         );
         match op {
-            Op::Push(mut op) => {
-                op.value_len %= MAX_VALUE_SIZE as u8;
+            Op::Push(op) => {
+                let val: Vec<u8> = (0..op.value_len as usize)
+                    .map(|_| rand::random::<u8>())
+                    .collect();
 
-                let key = op.key.to_be_bytes();
-                let mut val = vec![0; op.value_len as usize];
-                let val_num = i.to_be_bytes();
-                let n = val_num.len().min(val.len());
-                val[..n].copy_from_slice(&val_num[..n]);
-
-                sequential_storage::queue::push(&mut flash, flash_range.clone(), &val, false)
-                    .unwrap();
-                order.push(key.to_vec());
+                let result =
+                    sequential_storage::queue::push(&mut flash, flash_range.clone(), &val, false);
+                println!("Item size: {}. Used: {}/{}", val.len(), used, capacity);
+                if used + val.len() > capacity {
+                    assert!(result.is_err());
+                } else {
+                    result.unwrap();
+                    used += val.len();
+                    order.push_back(val.to_vec());
+                }
             }
             Op::Pop => {
-                if let Some(_key) = order.pop() {
-                    assert!(sequential_storage::queue::pop(
-                        &mut flash,
-                        flash_range.clone(),
-                        &mut buf
-                    )
-                    .unwrap()
-                    .is_some());
+                if let Some(expected) = order.pop_front() {
+                    let result =
+                        sequential_storage::queue::pop(&mut flash, flash_range.clone(), &mut buf);
+                    assert!(result.is_ok());
+                    assert_eq!(result.unwrap().unwrap(), expected);
+                    used -= expected.len();
                 } else {
                     assert!(sequential_storage::queue::pop(
                         &mut flash,
@@ -70,13 +74,15 @@ fn fuzz(ops: Input) {
                     .is_none());
                 }
             }
-
             Op::PopMany(n) => {
                 let mut popper =
                     sequential_storage::queue::pop_many(&mut flash, flash_range.clone());
                 for _i in 0..n {
-                    if let Some(_key) = order.pop() {
-                        assert!(popper.next(&mut buf).unwrap().is_some());
+                    if let Some(expected) = order.pop_front() {
+                        let result = popper.next(&mut buf);
+                        assert!(result.is_ok());
+                        assert_eq!(result.unwrap().unwrap(), expected);
+                        used -= expected.len();
                     } else {
                         assert!(popper.next(&mut buf).unwrap().is_none());
                     }
