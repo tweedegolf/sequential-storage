@@ -320,7 +320,7 @@ pub fn find_next_free_item_spot<S: NorFlash>(
             Ok(None) => {
                 if ItemHeader::data_address::<S>(current_address)
                     + round_up_to_alignment::<S>(data_length)
-                    >= end_address
+                    > end_address
                 {
                     // Items does not fit anymore between the current address and the end address
                     return Ok(None);
