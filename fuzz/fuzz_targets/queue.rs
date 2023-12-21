@@ -17,6 +17,8 @@ struct Input {
 enum Op {
     Push(PushOp),
     PopMany(u8),
+    PeekMany(u8),
+    Peek,
     Pop,
 }
 
@@ -90,6 +92,36 @@ fn fuzz(ops: Input) {
                         assert_eq!(result.unwrap().unwrap(), expected);
                     } else {
                         assert!(popper.next(&mut buf).unwrap().is_none());
+                    }
+                }
+            }
+
+            Op::Peek => {
+                if let Some(expected) = order.get(0) {
+                    let result =
+                        sequential_storage::queue::peek(&mut flash, flash_range.clone(), &mut buf);
+                    assert!(result.is_ok());
+                    assert_eq!(result.unwrap().unwrap(), expected);
+                } else {
+                    assert!(sequential_storage::queue::peek(
+                        &mut flash,
+                        flash_range.clone(),
+                        &mut buf
+                    )
+                    .unwrap()
+                    .is_none());
+                }
+            }
+            Op::PeekMany(n) => {
+                let mut peeker =
+                    sequential_storage::queue::peek_many(&mut flash, flash_range.clone());
+                for i in 0..n {
+                    if let Some(expected) = order.get(i as usize) {
+                        let result = peeker.next(&mut buf);
+                        assert!(result.is_ok());
+                        assert_eq!(result.unwrap().unwrap(), expected);
+                    } else {
+                        assert!(peeker.next(&mut buf).unwrap().is_none());
                     }
                 }
             }
