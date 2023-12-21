@@ -421,7 +421,40 @@ pub fn find_max_fit<S: NorFlash>(
 
     let current_page = find_youngest_page(flash, flash_range.clone())?;
 
-    // Find the max space available on each page until we wrap around.
+    // Check if we have space on the next page
+    let next_page = next_page::<S>(flash_range.clone(), current_page);
+    match get_page_state(flash, flash_range.clone(), next_page)? {
+        PageState::Closed => {
+            let next_page_data_start_address =
+                calculate_page_address::<S>(flash_range.clone(), next_page) + S::WORD_SIZE as u32;
+            let next_page_data_end_address =
+                calculate_page_end_address::<S>(flash_range.clone(), next_page)
+                    - S::WORD_SIZE as u32;
+
+            let next_page_empty = read_item_headers(
+                flash,
+                next_page_data_start_address,
+                next_page_data_end_address,
+                |_, header, _| match header.crc {
+                    Some(_) => ControlFlow::Break(()),
+                    None => ControlFlow::Continue(()),
+                },
+            )?
+            .is_none();
+            if next_page_empty {
+                return Ok(Some(S::ERASE_SIZE - (2 * S::WORD_SIZE)));
+            }
+        }
+        PageState::Open => {
+            return Ok(Some(S::ERASE_SIZE - (2 * S::WORD_SIZE)));
+        }
+        PageState::PartialOpen => {
+            // This should never happen
+            return Err(Error::Corrupted);
+        }
+    };
+
+    // See how much space we can ind in the current page.
     let mut max_free: Option<usize> = None;
     let page_data_start_address =
         calculate_page_address::<S>(flash_range.clone(), current_page) + S::WORD_SIZE as u32;
@@ -449,39 +482,6 @@ pub fn find_max_fit<S: NorFlash>(
             }
         }
     }
-
-    // Check if we have space on the next page
-    let next_page = next_page::<S>(flash_range.clone(), current_page);
-    match get_page_state(flash, flash_range.clone(), next_page)? {
-        PageState::Closed => {
-            let next_page_data_start_address =
-                calculate_page_address::<S>(flash_range.clone(), next_page) + S::WORD_SIZE as u32;
-            let next_page_data_end_address =
-                calculate_page_end_address::<S>(flash_range.clone(), next_page)
-                    - S::WORD_SIZE as u32;
-
-            let next_page_empty = read_item_headers(
-                flash,
-                next_page_data_start_address,
-                next_page_data_end_address,
-                |_, header, _| match header.crc {
-                    Some(_) => ControlFlow::Break(()),
-                    None => ControlFlow::Continue(()),
-                },
-            )?
-            .is_none();
-            if next_page_empty {
-                max_free.replace(S::ERASE_SIZE - (2 * S::WORD_SIZE));
-            }
-        }
-        PageState::Open => {
-            max_free.replace(S::ERASE_SIZE - (2 * S::WORD_SIZE));
-        }
-        PageState::PartialOpen => {
-            // This should never happen
-            return Err(Error::Corrupted);
-        }
-    };
 
     Ok(max_free)
 }
