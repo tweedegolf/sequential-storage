@@ -446,7 +446,7 @@ pub trait StorageItem {
 
     /// Serialize the key-value item into the given buffer.
     /// Returns the number of bytes the buffer was filled with or an error.
-    /// 
+    ///
     /// The serialized data does not have to self-describe its length or do framing.
     /// This crate already stores the length of any item in flash.
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, Self::Error>;
