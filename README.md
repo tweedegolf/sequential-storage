@@ -54,7 +54,7 @@ An item is considered erased when its data CRC field is 0.
 *NOTE: This means the data itself is still stored on the flash when it's considered erased.*
 *Depending on your usecase, this might not be secure*
 
-The length is a u16, so any item cannot be longer than 0xFFFF.
+The length is a u16, so any item cannot be longer than 0xFFFF or `page size - the item header (aligned to word boundary) - page state (2 words)`.
 
 ### Inner workings for map
 
