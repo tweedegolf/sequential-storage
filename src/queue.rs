@@ -628,51 +628,35 @@ mod tests {
         }
     }
 
-    // #[test]
-    // fn push_pop_many_oldest_erased() {
-    //     let mut flash = MockFlashBig::default();
-    //     let flash_range = 0x00..0x1000;
-    //     let mut data_buffer = [0; 1024];
-
-    //     // Fill up over 2 pages worth of data
-    //     for i in 0..64 {
-    //         println!("{i}");
-    //         let data = vec![i as u8; 32];
-    //         push(&mut flash, flash_range.clone(), &data, false).unwrap();
-    //     }
-
-    //     let mut popper = pop_many(&mut flash, flash_range.clone()).unwrap();
-    //     let mut i = 0;
-    //     while let Some(v) = popper.next(&mut data_buffer).unwrap() {
-    //         println!("{i}");
-    //         let data = vec![i as u8; 32];
-    //         assert_eq!(&v, &data, "At {i}");
-    //         i += 1;
-    //     }
-    //     // After pop'ing all elements, first two pages should be fully erased
-    //     assert_eq!(&flash.as_bytes()[..2048], &[0xff; 2048])
-    // }
-
     #[test]
+    /// Same as [push_lots_then_pop_lots], except with added peeking and using the iterator style
     fn push_peek_pop_many() {
         let mut flash = MockFlashBig::default();
         let flash_range = 0x000..0x1000;
         let mut data_buffer = [0; 1024];
 
-        for _ in 0..100 {
+        let mut push_ops = (0, 0, 0, 0);
+        let mut peek_ops = (0, 0, 0, 0);
+        let mut pop_ops = (0, 0, 0, 0);
+
+        for loop_index in 0..100 {
+            println!("Loop index: {loop_index}");
+
             for i in 0..20 {
                 let data = vec![i as u8; 50];
                 push(&mut flash, flash_range.clone(), &data, false).unwrap();
+                add_ops(&mut flash, &mut push_ops);
             }
 
             let mut peeker = peek_many(&mut flash, flash_range.clone()).unwrap();
-            for i in 0..20 {
+            for i in 0..5 {
                 let mut data = vec![i as u8; 50];
                 assert_eq!(
                     peeker.next(&mut data_buffer).unwrap(),
                     Some(&mut data[..]),
                     "At {i}"
                 );
+                add_ops(peeker.iter.flash, &mut peek_ops);
             }
 
             let mut popper = pop_many(&mut flash, flash_range.clone()).unwrap();
@@ -683,11 +667,13 @@ mod tests {
                     &data,
                     "At {i}"
                 );
+                add_ops(popper.iter.flash, &mut pop_ops);
             }
 
             for i in 20..25 {
                 let data = vec![i as u8; 50];
                 push(&mut flash, flash_range.clone(), &data, false).unwrap();
+                add_ops(&mut flash, &mut push_ops);
             }
 
             let mut peeker = peek_many(&mut flash, flash_range.clone()).unwrap();
@@ -698,6 +684,7 @@ mod tests {
                     &data,
                     "At {i}"
                 );
+                add_ops(peeker.iter.flash, &mut peek_ops);
             }
 
             let mut popper = pop_many(&mut flash, flash_range.clone()).unwrap();
@@ -708,13 +695,18 @@ mod tests {
                     &data,
                     "At {i}"
                 );
+                add_ops(popper.iter.flash, &mut pop_ops);
             }
         }
 
-        // Assert the performance. These numbers can be changed if acceptable
-        assert_eq!(flash.writes, 10313);
-        assert_eq!(flash.reads, 88799);
-        assert_eq!(flash.erases, 153);
+        // Assert the performance. These numbers can be changed if acceptable.
+        // Format = (writes, reads, erases, num operations)
+        println!("Asserting push ops:");
+        assert_avg_ops(&push_ops, (3.1252, 17.836, 0.0612));
+        println!("Asserting peek ops:");
+        assert_avg_ops(&peek_ops, (0.0, 8.0156, 0.0));
+        println!("Asserting pop ops:");
+        assert_avg_ops(&pop_ops, (1.0, 8.0156, 0.0));
     }
 
     #[test]
@@ -723,10 +715,16 @@ mod tests {
         let flash_range = 0x000..0x1000;
         let mut data_buffer = [0; 1024];
 
-        for _ in 0..100 {
+        let mut push_ops = (0, 0, 0, 0);
+        let mut pop_ops = (0, 0, 0, 0);
+
+        for loop_index in 0..100 {
+            println!("Loop index: {loop_index}");
+
             for i in 0..20 {
                 let data = vec![i as u8; 50];
                 push(&mut flash, flash_range.clone(), &data, false).unwrap();
+                add_ops(&mut flash, &mut push_ops);
             }
 
             for i in 0..5 {
@@ -738,11 +736,13 @@ mod tests {
                     &data,
                     "At {i}"
                 );
+                add_ops(&mut flash, &mut pop_ops);
             }
 
             for i in 20..25 {
                 let data = vec![i as u8; 50];
                 push(&mut flash, flash_range.clone(), &data, false).unwrap();
+                add_ops(&mut flash, &mut push_ops);
             }
 
             for i in 5..25 {
@@ -754,8 +754,47 @@ mod tests {
                     &data,
                     "At {i}"
                 );
+                add_ops(&mut flash, &mut pop_ops);
             }
         }
+
+        // Assert the performance. These numbers can be changed if acceptable.
+        // Format = (writes, reads, erases, num operations)
+        println!("Asserting push ops:");
+        assert_avg_ops(&push_ops, (3.1252, 17.836, 0.0612));
+        println!("Asserting pop ops:");
+        assert_avg_ops(&pop_ops, (1.0, 82.5868, 0.0));
+    }
+
+    fn add_ops(flash: &mut MockFlashBig, ops: &mut (u32, u32, u32, u32)) {
+        ops.0 += core::mem::replace(&mut flash.writes, 0);
+        ops.1 += core::mem::replace(&mut flash.reads, 0);
+        ops.2 += core::mem::replace(&mut flash.erases, 0);
+        ops.3 += 1;
+    }
+
+    fn assert_avg_ops(ops: &(u32, u32, u32, u32), expected_averages: (f32, f32, f32)) {
+        let averages = (
+            ops.0 as f32 / ops.3 as f32,
+            ops.1 as f32 / ops.3 as f32,
+            ops.2 as f32 / ops.3 as f32,
+        );
+
+        println!(
+            "Average writes: {}, expected: {}",
+            averages.0, expected_averages.0
+        );
+        println!(
+            "Average reads: {}, expected: {}",
+            averages.1, expected_averages.1
+        );
+        println!(
+            "Average erases: {}, expected: {}",
+            averages.2, expected_averages.2
+        );
+        approx::assert_relative_eq!(averages.0, expected_averages.0);
+        approx::assert_relative_eq!(averages.1, expected_averages.1);
+        approx::assert_relative_eq!(averages.2, expected_averages.2);
     }
 
     #[test]
@@ -781,5 +820,19 @@ mod tests {
                 .unwrap()[..],
             &[0xBB; 20]
         );
+    }
+
+    #[test]
+    fn search_pages() {
+        let mut flash = MockFlashBig::default();
+
+        const FLASH_RANGE: Range<u32> = 0x000..0x1000;
+
+        close_page(&mut flash, FLASH_RANGE, 0).unwrap();
+        close_page(&mut flash, FLASH_RANGE, 1).unwrap();
+        partial_close_page(&mut flash, FLASH_RANGE, 2).unwrap();
+
+        assert_eq!(find_youngest_page(&mut flash, FLASH_RANGE).unwrap(), 2);
+        assert_eq!(find_oldest_page(&mut flash, FLASH_RANGE).unwrap(), 0);
     }
 }

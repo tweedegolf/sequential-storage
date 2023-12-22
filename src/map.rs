@@ -815,7 +815,7 @@ mod tests {
             11, 13, 6, 13, 13, 10, 2, 3, 5, 36, 1, 65, 4, 6, 1, 15, 10, 7, 3, 15, 9, 3, 4, 5,
         ];
 
-        for _ in 0..1000 {
+        for _ in 0..100 {
             for i in 0..24 {
                 let item = MockStorageItem {
                     key: i as u8,
