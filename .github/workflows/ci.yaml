@@ -42,7 +42,7 @@ jobs:
 
       - name: Smoke-test fuzz targets
         run: |
-          cargo fuzz build
+          cargo fuzz build --sanitizer none
           for target in $(cargo fuzz list) ; do
             cargo fuzz run --sanitizer none $target -- -max_total_time=10
           done

@@ -98,7 +98,7 @@ fn fuzz(ops: Input) {
             }
 
             Op::Peek => {
-                if let Some(expected) = order.get(0) {
+                if let Some(expected) = order.front() {
                     let result =
                         sequential_storage::queue::peek(&mut flash, flash_range.clone(), &mut buf);
                     assert!(result.is_ok());
