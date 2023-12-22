@@ -19,13 +19,15 @@
 //! The crc is calculated by [crc16] which never produces a 0 or 0xFFFF value on its own.
 //!
 
+use core::ops::Range;
 use core::{num::NonZeroU16, ops::ControlFlow};
 
 use embedded_storage::nor_flash::{MultiwriteNorFlash, NorFlash};
 
 use crate::{
-    round_down_to_alignment, round_down_to_alignment_usize, round_up_to_alignment,
-    round_up_to_alignment_usize, Error, NorFlashExt, MAX_WORD_SIZE,
+    calculate_page_address, calculate_page_end_address, get_page_state, round_down_to_alignment,
+    round_down_to_alignment_usize, round_up_to_alignment, round_up_to_alignment_usize, Error,
+    NorFlashExt, PageState, MAX_WORD_SIZE,
 };
 
 #[derive(Debug)]
@@ -91,7 +93,7 @@ impl ItemHeader {
                     return Err(Error::BufferTooSmall(read_len));
                 }
                 if data_address + read_len as u32 > end_address {
-                    return Ok(MaybeItem::Corrupted(self, data_buffer));
+                    return Ok(MaybeItem::Corrupted(data_buffer));
                 }
 
                 flash
@@ -107,7 +109,7 @@ impl ItemHeader {
                         data_buffer,
                     }))
                 } else {
-                    return Ok(MaybeItem::Corrupted(self, data_buffer));
+                    return Ok(MaybeItem::Corrupted(data_buffer));
                 }
             }
         }
@@ -283,7 +285,7 @@ pub fn read_items<S: NorFlash, R>(
         start_address,
         end_address,
         |flash, header, address| match header.read_item(flash, data_buffer, address, end_address) {
-            Ok(MaybeItem::Corrupted(_, _)) => {
+            Ok(MaybeItem::Corrupted(_)) => {
                 #[cfg(feature = "defmt")]
                 defmt::error!(
                     "Found a corrupted item at {:X}. Skipping...",
@@ -322,7 +324,7 @@ pub fn find_next_free_item_spot<S: NorFlash>(
                     + round_up_to_alignment::<S>(data_length)
                     > end_address
                 {
-                    // Items does not fit anymore between the current address and the end address
+                    // Item does not fit anymore between the current address and the end address
                     return Ok(None);
                 } else {
                     if corruption_detected {
@@ -359,7 +361,7 @@ pub fn find_next_free_item_spot<S: NorFlash>(
 
 #[derive(Debug)]
 pub enum MaybeItem<'d> {
-    Corrupted(ItemHeader, &'d mut [u8]),
+    Corrupted(&'d mut [u8]),
     Erased(ItemHeader),
     Present(Item<'d>),
 }
@@ -367,7 +369,7 @@ pub enum MaybeItem<'d> {
 impl<'d> MaybeItem<'d> {
     pub fn unwrap<E>(self) -> Result<Item<'d>, Error<E>> {
         match self {
-            MaybeItem::Corrupted(_, _) => Err(Error::Corrupted),
+            MaybeItem::Corrupted(_) => Err(Error::Corrupted),
             MaybeItem::Erased(_) => panic!("Cannot unwrap an erased item"),
             MaybeItem::Present(item) => Ok(item),
         }
@@ -392,5 +394,45 @@ fn crc16(data: &[u8]) -> NonZeroU16 {
         0 => NonZeroU16::new(1).unwrap(),
         0xFFFF => NonZeroU16::new(0xFFFE).unwrap(),
         non_zero => NonZeroU16::new(non_zero).unwrap(),
+    }
+}
+
+/// Checks if the page is open or closed with all items erased.
+/// By definition a partial-open page is not empty since it can still be written.
+///
+/// The page state can optionally be given if it's already known.
+/// In that case the state will not be checked again.
+pub fn is_page_empty<S: NorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+    page_index: usize,
+    page_state: Option<PageState>,
+) -> Result<bool, Error<S::Error>> {
+    let page_state = match page_state {
+        Some(page_state) => page_state,
+        None => get_page_state::<S>(flash, flash_range.clone(), page_index)?,
+    };
+
+    match page_state {
+        PageState::Closed => {
+            let page_data_start_address =
+                calculate_page_address::<S>(flash_range.clone(), page_index) + S::WORD_SIZE as u32;
+            let page_data_end_address =
+                calculate_page_end_address::<S>(flash_range.clone(), page_index)
+                    - S::WORD_SIZE as u32;
+
+            Ok(read_item_headers(
+                flash,
+                page_data_start_address,
+                page_data_end_address,
+                |_, header, _| match header.crc {
+                    Some(_) => ControlFlow::Break(()),
+                    None => ControlFlow::Continue(()),
+                },
+            )?
+            .is_none())
+        }
+        PageState::PartialOpen => Ok(false),
+        PageState::Open => Ok(true),
     }
 }

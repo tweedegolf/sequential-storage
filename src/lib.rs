@@ -74,16 +74,19 @@ fn previous_page<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> usi
 }
 
 /// Calculate the first address of the given page
-fn calculate_page_address<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> u32 {
+const fn calculate_page_address<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> u32 {
     flash_range.start + (S::ERASE_SIZE * page_index) as u32
 }
 /// Calculate the last address (exclusive) of the given page
-fn calculate_page_end_address<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> u32 {
+const fn calculate_page_end_address<S: NorFlash>(
+    flash_range: Range<u32>,
+    page_index: usize,
+) -> u32 {
     flash_range.start + (S::ERASE_SIZE * (page_index + 1)) as u32
 }
 /// Get the page index from any address located inside that page
 #[allow(unused)]
-fn calculate_page_index<S: NorFlash>(flash_range: Range<u32>, address: u32) -> usize {
+const fn calculate_page_index<S: NorFlash>(flash_range: Range<u32>, address: u32) -> usize {
     (address - flash_range.start) as usize / S::ERASE_SIZE
 }
 

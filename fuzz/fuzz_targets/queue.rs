@@ -39,10 +39,10 @@ fn fuzz(ops: Input) {
     let mut buf = [0; MAX_VALUE_SIZE + 1];
 
     for op in ops.ops.into_iter() {
-        println!(
-            "==================================================== op: {:?}",
-            op,
-        );
+        // println!(
+        //     "==================================================== op: {:?}",
+        //     op,
+        // );
         match op {
             Op::Push(op) => {
                 let val: Vec<u8> = (0..op.value_len as usize)
@@ -85,7 +85,7 @@ fn fuzz(ops: Input) {
             }
             Op::PopMany(n) => {
                 let mut popper =
-                    sequential_storage::queue::pop_many(&mut flash, flash_range.clone());
+                    sequential_storage::queue::pop_many(&mut flash, flash_range.clone()).unwrap();
                 for _i in 0..n {
                     if let Some(expected) = order.pop_front() {
                         let result = popper.next(&mut buf);
@@ -115,7 +115,7 @@ fn fuzz(ops: Input) {
             }
             Op::PeekMany(n) => {
                 let mut peeker =
-                    sequential_storage::queue::peek_many(&mut flash, flash_range.clone());
+                    sequential_storage::queue::peek_many(&mut flash, flash_range.clone()).unwrap();
                 for i in 0..n {
                     if let Some(expected) = order.get(i as usize) {
                         let result = peeker.next(&mut buf);
