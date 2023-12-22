@@ -2,6 +2,6 @@
 
 set -euxo pipefail
 
-CPUS=32
+CPUS=$(nproc --all)
 
-cargo fuzz run --sanitizer none -j$CPUS queue
+cargo fuzz run --sanitizer none -j$CPUS $1

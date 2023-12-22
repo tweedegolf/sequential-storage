@@ -65,7 +65,8 @@
 //! // The crate will not read, write or erase outside of this range.
 //! let flash_range = 0x1000..0x3000;
 //! // We need to give the crate a buffer to work with.
-//! // It must be big enough to serialize the biggest value of your storage type in.
+//! // It must be big enough to serialize the biggest value of your storage type in,
+//! // rounded up to to word alignment of the flash.
 //! let mut data_buffer = [0; 100];
 //!
 //! // We can fetch an item from the flash.
@@ -114,7 +115,8 @@ use super::*;
 ///
 /// If no value with the key is found, None is returned.
 ///
-/// The data buffer must be long enough to hold the longest serialized data of your [StorageItem] type.
+/// The data buffer must be long enough to hold the longest serialized data of your [StorageItem] type,
+/// rounded up to flash word alignment.
 ///
 /// *Note: On a given flash range, make sure to use only the same type as [StorageItem] every time
 /// or types that serialize and deserialize the key in the same way.*

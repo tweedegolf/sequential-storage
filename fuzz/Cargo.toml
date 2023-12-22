@@ -26,3 +26,9 @@ name = "queue"
 path = "fuzz_targets/queue.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "map"
+path = "fuzz_targets/map.rs"
+test = false
+doc = false
