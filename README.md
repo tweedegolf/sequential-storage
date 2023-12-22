@@ -82,6 +82,10 @@ When using peek_many, you can look at all data from oldest to newest.
 
 (DD-MM-YY)
 
+### 0.6.2 - 22-12-23
+
+- Small bug fixes and refactorings including an off-by-one error. Found with added fuzzing from ([#13](https://github.com/tweedegolf/sequential-storage/pull/13))
+
 ### 0.6.1 - 16-12-23
 
 - Added queue peek_many and pop_many ([#12](https://github.com/tweedegolf/sequential-storage/pull/12))
