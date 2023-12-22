@@ -1,4 +1,4 @@
-name: Check project
+name: CI
 
 on:
   push:
@@ -28,4 +28,22 @@ jobs:
     - uses: actions/checkout@v3
     - uses: dtolnay/rust-toolchain@stable
     - run: cargo clippy -- -D warnings
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo fuzz
+        uses: taiki-e/install-action@70233fe3d27d863712ee34eede2087e36bde6b5e
+        with:
+          tool: cargo-fuzz
+
+      - name: Smoke-test fuzz targets
+        run: |
+          cargo fuzz build --sanitizer none
+          for target in $(cargo fuzz list) ; do
+            cargo fuzz run --sanitizer none $target -- -max_total_time=10
+          done
     
