@@ -82,6 +82,13 @@ When using peek_many, you can look at all data from oldest to newest.
 
 (DD-MM-YY)
 
+### Unreleased
+
+- *Breaking* Data CRC has been upgraded to 32-bit from 16-bit. Turns out 16-bit has too many collisions.
+  This increases the item header size from 6 to 8.
+- Closed pages that were partially erased now can be detected and repaired. This comes at the cost of always
+  reading both page markers to determine the page state.
+
 ### 0.6.2 - 22-12-23
 
 - Small bug fixes and refactorings including an off-by-one error. Found with added fuzzing from ([#13](https://github.com/tweedegolf/sequential-storage/pull/13))

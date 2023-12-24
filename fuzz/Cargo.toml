@@ -12,7 +12,7 @@ libfuzzer-sys = "0.4"
 sequential-storage = { path = "..", features = ["_test"] }
 arbitrary = { version = "1.2.2", features = ["derive"] }
 rand = "0.8.5"
-embedded-storage = "0.3.0"
+rand_pcg = "0.3.1"
 
 # Prevent this from interfering with workspaces
 [workspace]
@@ -30,5 +30,11 @@ doc = false
 [[bin]]
 name = "map"
 path = "fuzz_targets/map.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "map-with-shutoff"
+path = "fuzz_targets/map_with_shutoff.rs"
 test = false
 doc = false

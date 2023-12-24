@@ -31,13 +31,15 @@ pub struct MockFlashBase<const PAGES: usize, const BYTES_PER_WORD: usize, const 
     pub write_bit_flip_chance: f32,
     /// Check that all write locations are writeable.
     pub use_strict_write_count: bool,
+    /// A countdown to shutoff. When some and 0, an early shutoff will happen.
+    pub bytes_until_shutoff: Option<u32>,
 }
 
 impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> Default
     for MockFlashBase<PAGES, BYTES_PER_WORD, PAGE_WORDS>
 {
     fn default() -> Self {
-        Self::new(0.0, true)
+        Self::new(0.0, true, None)
     }
 }
 
@@ -49,8 +51,15 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
 
     const PAGE_BYTES: usize = PAGE_WORDS * BYTES_PER_WORD;
 
+    /// The full address range of this flash
+    pub const FULL_FLASH_RANGE: Range<u32> = 0..(PAGES * PAGE_WORDS * BYTES_PER_WORD) as u32;
+
     /// Create a new flash instance.
-    pub fn new(write_bit_flip_chance: f32, use_strict_write_count: bool) -> Self {
+    pub fn new(
+        write_bit_flip_chance: f32,
+        use_strict_write_count: bool,
+        bytes_until_shutoff: Option<u32>,
+    ) -> Self {
         Self {
             writable: vec![T; Self::CAPACITY_WORDS],
             data: vec![u8::MAX; Self::CAPACITY_BYTES],
@@ -59,6 +68,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
             writes: 0,
             write_bit_flip_chance,
             use_strict_write_count,
+            bytes_until_shutoff,
         }
     }
 
@@ -99,6 +109,75 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
         }
 
         Ok(range)
+    }
+
+    fn check_shutoff(&mut self, _address: u32, _operation: &str) -> Result<(), MockFlashError> {
+        if let Some(bytes_until_shutoff) = self.bytes_until_shutoff.as_mut() {
+            if let Some(next) = bytes_until_shutoff.checked_sub(1) {
+                *bytes_until_shutoff = next;
+                Ok(())
+            } else {
+                #[cfg(fuzzing_repro)]
+                eprintln!("!!! Shutoff at {_address} while doing '{_operation}' !!!");
+                self.bytes_until_shutoff = None;
+                Err(MockFlashError::EarlyShutoff)
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "_test")]
+    /// Print all items in flash to the returned string
+    pub fn print_items(&mut self) -> String {
+        use crate::NorFlashExt;
+        use std::fmt::Write;
+
+        let mut buf = [0; 1024 * 16];
+
+        let mut s = String::new();
+
+        writeln!(s, "Items in flash:").unwrap();
+        writeln!(s, "  Bytes until shutoff: {:?}", self.bytes_until_shutoff).unwrap();
+
+        for page_index in 0..PAGES {
+            writeln!(
+                s,
+                "  Page {page_index} ({}):",
+                match crate::get_page_state(self, Self::FULL_FLASH_RANGE, page_index) {
+                    Ok(value) => format!("{value:?}"),
+                    Err(e) => format!("Error ({e:?})"),
+                }
+            )
+            .unwrap();
+            let page_data_start =
+                crate::calculate_page_address::<Self>(Self::FULL_FLASH_RANGE, page_index)
+                    + Self::WORD_SIZE as u32;
+            let page_data_end =
+                crate::calculate_page_end_address::<Self>(Self::FULL_FLASH_RANGE, page_index)
+                    - Self::WORD_SIZE as u32;
+
+            crate::item::read_item_headers(
+                self,
+                page_data_start,
+                page_data_end,
+                |flash, header, item_address| {
+                    let next_item_address = header.next_item_address::<Self>(item_address);
+                    let maybe_item = header
+                        .read_item(flash, &mut buf, item_address, page_data_end)
+                        .unwrap();
+                    writeln!(
+                        s,
+                        "   Item {maybe_item:?} at {item_address}..{next_item_address}"
+                    )
+                    .unwrap();
+                    core::ops::ControlFlow::<(), ()>::Continue(())
+                },
+            )
+            .unwrap();
+        }
+
+        s
     }
 }
 
@@ -160,13 +239,13 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
             return Err(MockFlashError::NotAligned);
         }
 
-        for byte in self.as_bytes_mut()[from..to].iter_mut() {
-            *byte = u8::MAX;
-        }
+        for index in from..to {
+            self.check_shutoff(index as u32, "erase")?;
+            self.as_bytes_mut()[index] = u8::MAX;
 
-        let range = from / BYTES_PER_WORD..to / BYTES_PER_WORD;
-        for word_writable in self.writable[range].iter_mut() {
-            *word_writable = T;
+            if index % BYTES_PER_WORD == 0 {
+                self.writable[index / BYTES_PER_WORD] = T;
+            }
         }
 
         Ok(())
@@ -181,31 +260,31 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
             panic!("any write must be a multiple of Self::WRITE_SIZE bytes");
         }
 
-        let start_word = range.start / BYTES_PER_WORD;
-        let end_word = (range.end + BYTES_PER_WORD - 1) / BYTES_PER_WORD;
+        // let write_bit_flip_chance = self.write_bit_flip_chance;
 
-        let write_bit_flip_chance = self.write_bit_flip_chance;
+        for (index, source) in range.zip(bytes.iter()) {
+            let source = *source;
 
-        for (target, source) in self.as_bytes_mut()[range].iter_mut().zip(bytes.iter()) {
-            let mut source = *source;
+            self.check_shutoff(index as u32, "write")?;
 
-            if write_bit_flip_chance > 0.0 {
-                for bit in 0..8 {
-                    if rand::random::<f32>() < write_bit_flip_chance {
-                        source ^= 1 << bit;
-                    }
-                }
+            // if write_bit_flip_chance > 0.0 {
+            //     for bit in 0..8 {
+            //         if rand::random::<f32>() < write_bit_flip_chance {
+            //             source ^= 1 << bit;
+            //         }
+            //     }
+            // }
+
+            self.as_bytes_mut()[index] &= source;
+
+            if index % BYTES_PER_WORD == 0 {
+                let word_writable = &mut self.writable[index / BYTES_PER_WORD];
+                *word_writable = match *word_writable {
+                    Writable::T => Writable::O,
+                    Writable::O => Writable::N,
+                    Writable::N => Writable::N,
+                };
             }
-
-            *target &= source;
-        }
-
-        for word_writable in self.writable[start_word..end_word].iter_mut() {
-            *word_writable = match *word_writable {
-                Writable::T => Writable::O,
-                Writable::O => Writable::N,
-                Writable::N => Writable::N,
-            };
         }
 
         Ok(())
@@ -221,6 +300,8 @@ pub enum MockFlashError {
     NotAligned,
     /// Location not writeable.
     NotWritable(u32),
+    /// We got a shutoff
+    EarlyShutoff,
 }
 
 impl NorFlashError for MockFlashError {
@@ -229,6 +310,7 @@ impl NorFlashError for MockFlashError {
             MockFlashError::OutOfBounds => NorFlashErrorKind::OutOfBounds,
             MockFlashError::NotAligned => NorFlashErrorKind::NotAligned,
             MockFlashError::NotWritable(_) => NorFlashErrorKind::Other,
+            MockFlashError::EarlyShutoff => NorFlashErrorKind::Other,
         }
     }
 }

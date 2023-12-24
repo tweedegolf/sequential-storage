@@ -18,12 +18,12 @@ struct Input {
 #[derive(Arbitrary, Debug)]
 enum Op {
     Store(StoreOp),
-    Fetch(u16),
+    Fetch(u8),
 }
 
 #[derive(Arbitrary, Debug)]
 struct StoreOp {
-    key: u16,
+    key: u8,
     value_len: u8,
 }
 
@@ -40,24 +40,24 @@ impl StoreOp {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TestItem {
-    key: u16,
+    key: u8,
     value: Vec<u8>,
 }
 
 impl StorageItem for TestItem {
-    type Key = u16;
+    type Key = u8;
 
     type Error = ();
 
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
-        if buffer.len() < 2 + self.value.len() {
+        if buffer.len() < 1 + self.value.len() {
             return Err(());
         }
 
-        buffer[0..2].copy_from_slice(&self.key.to_ne_bytes());
-        buffer[2..][..self.value.len()].copy_from_slice(&self.value);
+        buffer[0] = self.key;
+        buffer[1..][..self.value.len()].copy_from_slice(&self.value);
 
-        Ok(2 + self.value.len())
+        Ok(1 + self.value.len())
     }
 
     fn deserialize_from(buffer: &[u8]) -> Result<Self, Self::Error>
@@ -65,8 +65,8 @@ impl StorageItem for TestItem {
         Self: Sized,
     {
         Ok(Self {
-            key: u16::from_ne_bytes(buffer[0..2].try_into().unwrap()),
-            value: buffer[2..].to_vec(),
+            key: buffer[0],
+            value: buffer[1..].to_vec(),
         })
     }
 
@@ -78,7 +78,7 @@ impl StorageItem for TestItem {
     where
         Self: Sized,
     {
-        Ok(u16::from_ne_bytes(buffer[0..2].try_into().unwrap()))
+        Ok(buffer[0])
     }
 }
 

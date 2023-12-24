@@ -341,6 +341,11 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
                     return Err(MapError::Corrupted);
                 }
 
+                // Since we're gonna write data here, let's already partially close the page
+                // This could be done after moving the data, but this is more robust in the
+                // face of shutdowns and cancellations
+                partial_close_page(flash, flash_range.clone(), next_page_to_use)?;
+
                 let next_buffer_page = next_page::<S>(flash_range.clone(), next_page_to_use);
                 let next_buffer_page_state =
                     get_page_state(flash, flash_range.clone(), next_buffer_page)?;
@@ -406,8 +411,6 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
                         )
                         .map_err(MapError::Storage)?;
                 }
-
-                partial_close_page(flash, flash_range.clone(), next_page_to_use)?;
             }
             None => {
                 // There's no partial open page, so we just gotta turn the first open page into a partial open one
@@ -718,7 +721,7 @@ mod tests {
 
     #[test]
     fn store_too_many_items() {
-        const UPPER_BOUND: u8 = 3;
+        const UPPER_BOUND: u8 = 2;
 
         let mut tiny_flash = MockFlashTiny::default();
         let mut data_buffer = [0; 128];

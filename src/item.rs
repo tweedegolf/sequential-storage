@@ -3,24 +3,25 @@
 //!
 //! Memory layout of item:
 //! ```text
-//! ┌──────┬──────┬──────┬──────┬──────┬──────┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
-//! │      :      │      :      │      :      │  :  :  :  :  :  │  :  :  :  :  :  :  :  :  :  │  :  :  :  :  :  │
-//! │   Length    │   Length'   │     CRC     │Pad to word align│            Data             │Pad to word align│
-//! │      :      │      :      │      :      │  :  :  :  :  :  │  :  :  :  :  :   :  :  :  : │  :  :  :  :  :  │
-//! └──────┴──────┴──────┴──────┴──────┴──────┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴───┴──┴──┴──┴─┴──┴──┴──┴──┴──┴──┘
-//! 0      1      2      3      4      5      6                 6+padding                     6+padding+length  6+padding+length+endpadding
+//! ┌──────┬──────┬──────┬──────┬──────┬──────┬──────┬──────┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
+//! │      :      │      :      │      :      :      :      │  :  :  :  :  :  │  :  :  :  :  :  :  :  :  :  │  :  :  :  :  :  │
+//! │   Length    │   Length'   │            CRC            │Pad to word align│            Data             │Pad to word align│
+//! │      :      │      :      │      :      :      :      │  :  :  :  :  :  │  :  :  :  :  :   :  :  :  : │  :  :  :  :  :  │
+//! └──────┴──────┴──────┴──────┴──────┴──────┴──────┴──────┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴───┴──┴──┴──┴─┴──┴──┴──┴──┴──┴──┘
+//! 0      1      2      3      4      5      6      7      8                 8+padding                     8+padding+length  8+padding+length+endpadding
 //! ```
 //!
 //! An item consists of an [ItemHeader] and some data.
-//! The header has a length field that encodes the length of the data, a crc of the length (`Length'`)
+//! The header has a length field that encodes the length of the data, a [crc16] of the length (`Length'`)
 //! and a crc field that encodes the checksum of the data.
 //!
 //! If the crc is 0, then the item is counted as being erased.
-//! The crc is calculated by [crc16] which never produces a 0 or 0xFFFF value on its own.
+//! The crc is calculated by [crc32] which never produces a 0 value on its own.
 //!
 
+use core::num::NonZeroU32;
+use core::ops::ControlFlow;
 use core::ops::Range;
-use core::{num::NonZeroU16, ops::ControlFlow};
 
 use embedded_storage::nor_flash::{MultiwriteNorFlash, NorFlash};
 
@@ -34,11 +35,11 @@ use crate::{
 pub struct ItemHeader {
     /// Length of the item payload (so not including the header and not including word alignment)
     pub length: u16,
-    pub crc: Option<NonZeroU16>,
+    pub crc: Option<NonZeroU32>,
 }
 
 impl ItemHeader {
-    pub(crate) const LENGTH: usize = 6;
+    pub(crate) const LENGTH: usize = 8;
 
     pub fn read_new<S: NorFlash>(
         flash: &mut S,
@@ -60,7 +61,7 @@ impl ItemHeader {
         }
 
         let length_crc = u16::from_le_bytes(header_slice[2..4].try_into().unwrap());
-        let calculated_length_crc = crc16(&header_slice[0..2]).get();
+        let calculated_length_crc = crc16(&header_slice[0..2]);
 
         if calculated_length_crc != length_crc {
             return Err(Error::Corrupted);
@@ -69,9 +70,9 @@ impl ItemHeader {
         Ok(Some(Self {
             length: u16::from_le_bytes(header_slice[0..2].try_into().unwrap()),
             crc: {
-                match u16::from_le_bytes(header_slice[4..6].try_into().unwrap()) {
+                match u32::from_le_bytes(header_slice[4..8].try_into().unwrap()) {
                     0 => None,
-                    value => Some(NonZeroU16::new(value).unwrap()),
+                    value => Some(NonZeroU32::new(value).unwrap()),
                 }
             },
         }))
@@ -93,7 +94,7 @@ impl ItemHeader {
                     return Err(Error::BufferTooSmall(read_len));
                 }
                 if data_address + read_len as u32 > end_address {
-                    return Ok(MaybeItem::Corrupted(data_buffer));
+                    return Ok(MaybeItem::Corrupted(self, data_buffer));
                 }
 
                 flash
@@ -101,7 +102,10 @@ impl ItemHeader {
                     .map_err(Error::Storage)?;
 
                 let data = &data_buffer[..self.length as usize];
-                let data_crc = crc16(data);
+                let data_crc = match crc32(data) {
+                    0 => NonZeroU32::new(1).unwrap(),
+                    other => NonZeroU32::new(other).unwrap(),
+                };
 
                 if data_crc == header_crc {
                     Ok(MaybeItem::Present(Item {
@@ -109,7 +113,7 @@ impl ItemHeader {
                         data_buffer,
                     }))
                 } else {
-                    return Ok(MaybeItem::Corrupted(data_buffer));
+                    return Ok(MaybeItem::Corrupted(self, data_buffer));
                 }
             }
         }
@@ -119,8 +123,8 @@ impl ItemHeader {
         let mut buffer = [0xFF; MAX_WORD_SIZE];
 
         buffer[0..2].copy_from_slice(&self.length.to_le_bytes());
-        buffer[2..4].copy_from_slice(&crc16(&self.length.to_le_bytes()).get().to_le_bytes());
-        buffer[4..6].copy_from_slice(&self.crc.map(|crc| crc.get()).unwrap_or(0).to_le_bytes());
+        buffer[2..4].copy_from_slice(&crc16(&self.length.to_le_bytes()).to_le_bytes());
+        buffer[4..8].copy_from_slice(&self.crc.map(|crc| crc.get()).unwrap_or(0).to_le_bytes());
 
         flash
             .write(
@@ -181,7 +185,10 @@ impl<'d> Item<'d> {
     ) -> Result<ItemHeader, Error<S::Error>> {
         let header = ItemHeader {
             length: data.len() as u16,
-            crc: Some(crc16(data)),
+            crc: Some(match crc32(data) {
+                0 => NonZeroU32::new(1).unwrap(),
+                other => NonZeroU32::new(other).unwrap(),
+            }),
         };
 
         Self::write_raw(&header, data, flash, address)?;
@@ -285,7 +292,7 @@ pub fn read_items<S: NorFlash, R>(
         start_address,
         end_address,
         |flash, header, address| match header.read_item(flash, data_buffer, address, end_address) {
-            Ok(MaybeItem::Corrupted(_)) => {
+            Ok(MaybeItem::Corrupted(_, _)) => {
                 #[cfg(feature = "defmt")]
                 defmt::error!(
                     "Found a corrupted item at {:X}. Skipping...",
@@ -359,25 +366,38 @@ pub fn find_next_free_item_spot<S: NorFlash>(
     Ok(None)
 }
 
-#[derive(Debug)]
 pub enum MaybeItem<'d> {
-    Corrupted(&'d mut [u8]),
+    Corrupted(ItemHeader, &'d mut [u8]),
     Erased(ItemHeader),
     Present(Item<'d>),
+}
+
+impl<'d> core::fmt::Debug for MaybeItem<'d> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Corrupted(arg0, arg1) => f
+                .debug_tuple("Corrupted")
+                .field(arg0)
+                .field(&arg1.get(..arg0.length as usize))
+                .finish(),
+            Self::Erased(arg0) => f.debug_tuple("Erased").field(arg0).finish(),
+            Self::Present(arg0) => f.debug_tuple("Present").field(arg0).finish(),
+        }
+    }
 }
 
 impl<'d> MaybeItem<'d> {
     pub fn unwrap<E>(self) -> Result<Item<'d>, Error<E>> {
         match self {
-            MaybeItem::Corrupted(_) => Err(Error::Corrupted),
+            MaybeItem::Corrupted(_, _) => Err(Error::Corrupted),
             MaybeItem::Erased(_) => panic!("Cannot unwrap an erased item"),
             MaybeItem::Present(item) => Ok(item),
         }
     }
 }
 
-/// A crc that never returns 0 or 0xFFFF
-fn crc16(data: &[u8]) -> NonZeroU16 {
+/// A crc that never returns 0xFFFF
+fn crc16(data: &[u8]) -> u16 {
     let mut crc = 0xffff;
     for byte in data.iter() {
         crc ^= *byte as u16;
@@ -391,10 +411,35 @@ fn crc16(data: &[u8]) -> NonZeroU16 {
     }
     crc ^= 0xffff;
     match crc {
-        0 => NonZeroU16::new(1).unwrap(),
-        0xFFFF => NonZeroU16::new(0xFFFE).unwrap(),
-        non_zero => NonZeroU16::new(non_zero).unwrap(),
+        0xFFFF => 0xFFFE,
+        other => other,
     }
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    // We use a modified initial value because the normal 0xFFFFFFF does not pass
+    // the `crc32_all_ones_resistant` test
+    crc32_with_initial(data, 0xEEEEEEEE)
+}
+
+fn crc32_with_initial(data: &[u8], initial: u32) -> u32 {
+    const POLY: u32 = 0x82f63b78; // Castagnoli
+
+    let mut crc = initial;
+
+    for byte in data {
+        crc ^= *byte as u32;
+
+        for _ in 0..8 {
+            let lowest_bit_set = crc & 1 > 0;
+            crc >>= 1;
+            if lowest_bit_set {
+                crc ^= POLY;
+            }
+        }
+    }
+
+    !crc
 }
 
 /// Checks if the page is open or closed with all items erased.
@@ -434,5 +479,26 @@ pub fn is_page_empty<S: NorFlash>(
         }
         PageState::PartialOpen => Ok(false),
         PageState::Open => Ok(true),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crc32_all_ones_resistant() {
+        const DATA: [u8; 1024] = [0xFF; 1024];
+
+        // Note: This should hold for all lengths up to the max item length
+        // We do not test that because it takes too long.
+        // Instead we only test the first couple because those are most likely to go bad.
+        for length in 0..DATA.len() {
+            let crc = crc32(&DATA[..length]);
+
+            // println!("Num 0xFF bytes: {length}, crc: {crc:08X}");
+
+            assert_ne!(crc, u32::MAX);
+        }
     }
 }

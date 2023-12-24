@@ -355,7 +355,7 @@ impl<'d, S: NorFlash> QueueIterator<'d, S> {
                 )?;
 
                 match maybe_item {
-                    item::MaybeItem::Corrupted(db) => {
+                    item::MaybeItem::Corrupted(_, db) => {
                         let next_address = found_item_address + S::WORD_SIZE as u32;
                         self.current_address = if next_address >= page_data_end_address {
                             CurrentAddress::PageAfter(current_page)
@@ -499,7 +499,7 @@ mod tests {
         let mut flash = MockFlashTiny::default();
         let flash_range = 0x00..0x40;
         let mut data_buffer = [0; 1024];
-        const DATA_SIZE: usize = 24;
+        const DATA_SIZE: usize = 22;
 
         assert_eq!(
             peek(&mut flash, flash_range.clone(), &mut data_buffer).unwrap(),
@@ -702,11 +702,11 @@ mod tests {
         // Assert the performance. These numbers can be changed if acceptable.
         // Format = (writes, reads, erases, num operations)
         println!("Asserting push ops:");
-        assert_avg_ops(&push_ops, (3.1252, 17.836, 0.0612));
+        assert_avg_ops(&push_ops, (3.1252, 17.902, 0.0612));
         println!("Asserting peek ops:");
-        assert_avg_ops(&peek_ops, (0.0, 8.0156, 0.0));
+        assert_avg_ops(&peek_ops, (0.0, 8.0188, 0.0));
         println!("Asserting pop ops:");
-        assert_avg_ops(&pop_ops, (1.0, 8.0156, 0.0));
+        assert_avg_ops(&pop_ops, (1.0, 8.0188, 0.0));
     }
 
     #[test]
@@ -761,9 +761,9 @@ mod tests {
         // Assert the performance. These numbers can be changed if acceptable.
         // Format = (writes, reads, erases, num operations)
         println!("Asserting push ops:");
-        assert_avg_ops(&push_ops, (3.1252, 17.836, 0.0612));
+        assert_avg_ops(&push_ops, (3.1252, 17.902, 0.0612));
         println!("Asserting pop ops:");
-        assert_avg_ops(&pop_ops, (1.0, 82.5868, 0.0));
+        assert_avg_ops(&pop_ops, (1.0, 82.618, 0.0));
     }
 
     fn add_ops(flash: &mut MockFlashBig, ops: &mut (u32, u32, u32, u32)) {
@@ -773,6 +773,7 @@ mod tests {
         ops.3 += 1;
     }
 
+    #[track_caller]
     fn assert_avg_ops(ops: &(u32, u32, u32, u32), expected_averages: (f32, f32, f32)) {
         let averages = (
             ops.0 as f32 / ops.3 as f32,
