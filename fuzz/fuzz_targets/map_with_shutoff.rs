@@ -110,7 +110,7 @@ fn fuzz(ops: Input) {
             #[cfg(fuzzing_repro)]
             eprintln!("{}", flash.print_items());
             #[cfg(fuzzing_repro)]
-            eprintln!("=== OP: {op:?}");
+            eprintln!("=== OP: {op:?} ===");
 
             match op.clone() {
                 Op::Store(op) => {
@@ -125,7 +125,10 @@ fn fuzz(ops: Input) {
                             map.insert(item.key, item.value);
                         }
                         Err(MapError::FullStorage) => {}
-                        Err(MapError::Storage(MockFlashError::EarlyShutoff)) => {
+                        Err(MapError::Storage {
+                            value: MockFlashError::EarlyShutoff,
+                            backtrace: _backtrace,
+                        }) => {
                             match sequential_storage::map::fetch_item::<TestItem, _>(
                                 &mut flash,
                                 FLASH_RANGE,
@@ -137,21 +140,23 @@ fn fuzz(ops: Input) {
                                         && check_item.value == item.value =>
                                 {
                                     #[cfg(fuzzing_repro)]
-                                    eprintln!("Early shutoff when storing {item:?}! (but it still stored fully)");
+                                    eprintln!("Early shutoff when storing {item:?}! (but it still stored fully). Originated from:\n{_backtrace:#}");
                                     // Even though we got a shutoff, it still managed to store well
                                     map.insert(item.key, item.value);
                                 }
                                 _ => {
                                     // Could not fetch the item we stored...
                                     #[cfg(fuzzing_repro)]
-                                    eprintln!("Early shutoff when storing {item:?}!");
+                                    eprintln!("Early shutoff when storing {item:?}! Originated from:\n{_backtrace:#}");
                                 }
                             }
                         }
-                        Err(MapError::Corrupted) if !corruption_repaired => {
+                        Err(MapError::Corrupted {
+                            backtrace: _backtrace,
+                        }) if !corruption_repaired => {
                             #[cfg(fuzzing_repro)]
                             eprintln!(
-                                "### Encountered curruption while storing! Repairing now. ###"
+                                "### Encountered curruption while storing! Repairing now. Originated from:\n{_backtrace:#}"
                             );
 
                             sequential_storage::try_repair(&mut flash, FLASH_RANGE).unwrap();
@@ -178,14 +183,21 @@ fn fuzz(ops: Input) {
                         Ok(None) => {
                             assert_eq!(None, map.get(&key));
                         }
-                        Err(MapError::Storage(MockFlashError::EarlyShutoff)) => {
-                            #[cfg(fuzzing_repro)]
-                            eprintln!("Early shutoff when fetching!");
-                        }
-                        Err(MapError::Corrupted) if !corruption_repaired => {
+                        Err(MapError::Storage {
+                            value: MockFlashError::EarlyShutoff,
+                            backtrace: _backtrace,
+                        }) => {
                             #[cfg(fuzzing_repro)]
                             eprintln!(
-                                "### Encountered curruption while fetching! Repairing now. ###"
+                                "Early shutoff when fetching! Originated from:\n{_backtrace:#}"
+                            );
+                        }
+                        Err(MapError::Corrupted {
+                            backtrace: _backtrace,
+                        }) if !corruption_repaired => {
+                            #[cfg(fuzzing_repro)]
+                            eprintln!(
+                                "### Encountered curruption while fetching! Repairing now. Originated from:\n{_backtrace:#}"
                             );
 
                             sequential_storage::try_repair(&mut flash, FLASH_RANGE).unwrap();

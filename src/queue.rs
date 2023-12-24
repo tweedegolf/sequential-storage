@@ -124,7 +124,11 @@ pub fn push<S: NorFlash>(
                         calculate_page_address::<S>(flash_range.clone(), next_page),
                         calculate_page_end_address::<S>(flash_range.clone(), next_page),
                     )
-                    .map_err(Error::Storage)?;
+                    .map_err(|e| Error::Storage {
+                        value: e,
+                        #[cfg(feature = "_test")]
+                        backtrace: std::backtrace::Backtrace::capture(),
+                    })?;
 
                 partial_close_page(flash, flash_range.clone(), next_page)?;
                 next_address = Some(next_page_data_start_address);
@@ -133,7 +137,10 @@ pub fn push<S: NorFlash>(
                 // This should never happen
                 #[cfg(feature = "defmt")]
                 defmt::error!("Corrupted: A we expected an open or closed page, but found a partial open page");
-                return Err(Error::Corrupted);
+                return Err(Error::Corrupted {
+                    #[cfg(feature = "_test")]
+                    backtrace: std::backtrace::Backtrace::capture(),
+                });
             }
         }
 
@@ -415,7 +422,10 @@ pub fn find_max_fit<S: NorFlash>(
         }
         PageState::PartialOpen => {
             // This should never happen
-            return Err(Error::Corrupted);
+            return Err(Error::Corrupted {
+                #[cfg(feature = "_test")]
+                backtrace: std::backtrace::Backtrace::capture(),
+            });
         }
     };
 
@@ -472,7 +482,10 @@ fn find_youngest_page<S: NorFlash>(
     #[cfg(feature = "defmt")]
     defmt::error!("Corrupted: All pages are closed");
 
-    Err(Error::Corrupted)
+    Err(Error::Corrupted {
+        #[cfg(feature = "_test")]
+        backtrace: std::backtrace::Backtrace::capture(),
+    })
 }
 
 fn find_oldest_page<S: NorFlash>(

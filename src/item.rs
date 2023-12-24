@@ -53,7 +53,13 @@ impl ItemHeader {
             return Ok(None);
         }
 
-        flash.read(address, header_slice).map_err(Error::Storage)?;
+        flash
+            .read(address, header_slice)
+            .map_err(|e| Error::Storage {
+                value: e,
+                #[cfg(feature = "_test")]
+                backtrace: std::backtrace::Backtrace::capture(),
+            })?;
 
         if header_slice.iter().all(|b| *b == 0xFF) {
             // What we read was fully erased bytes, so there's no header here
@@ -64,7 +70,10 @@ impl ItemHeader {
         let calculated_length_crc = crc16(&header_slice[0..2]);
 
         if calculated_length_crc != length_crc {
-            return Err(Error::Corrupted);
+            return Err(Error::Corrupted {
+                #[cfg(feature = "_test")]
+                backtrace: std::backtrace::Backtrace::capture(),
+            });
         }
 
         Ok(Some(Self {
@@ -99,7 +108,11 @@ impl ItemHeader {
 
                 flash
                     .read(data_address, &mut data_buffer[..read_len])
-                    .map_err(Error::Storage)?;
+                    .map_err(|e| Error::Storage {
+                        value: e,
+                        #[cfg(feature = "_test")]
+                        backtrace: std::backtrace::Backtrace::capture(),
+                    })?;
 
                 let data = &data_buffer[..self.length as usize];
                 let data_crc = match crc32(data) {
@@ -131,7 +144,11 @@ impl ItemHeader {
                 address,
                 &buffer[..round_up_to_alignment_usize::<S>(Self::LENGTH)],
             )
-            .map_err(Error::Storage)
+            .map_err(|e| Error::Storage {
+                value: e,
+                #[cfg(feature = "_test")]
+                backtrace: std::backtrace::Backtrace::capture(),
+            })
     }
 
     pub fn erase_data<S: MultiwriteNorFlash>(
@@ -209,7 +226,11 @@ impl<'d> Item<'d> {
         let data_address = ItemHeader::data_address::<S>(address);
         flash
             .write(data_address, data_block)
-            .map_err(Error::Storage)?;
+            .map_err(|e| Error::Storage {
+                value: e,
+                #[cfg(feature = "_test")]
+                backtrace: std::backtrace::Backtrace::capture(),
+            })?;
 
         if !data_left.is_empty() {
             let mut buffer = [0; MAX_WORD_SIZE];
@@ -219,7 +240,11 @@ impl<'d> Item<'d> {
                     data_address + data_block.len() as u32,
                     &buffer[..round_up_to_alignment_usize::<S>(data_left.len())],
                 )
-                .map_err(Error::Storage)?;
+                .map_err(|e| Error::Storage {
+                    value: e,
+                    #[cfg(feature = "_test")]
+                    backtrace: std::backtrace::Backtrace::capture(),
+                })?;
         }
 
         Ok(())
@@ -267,7 +292,7 @@ pub fn read_item_headers<S: NorFlash, R>(
                 current_address = next_address;
             }
             Ok(None) => return Ok(None),
-            Err(Error::Corrupted) => {
+            Err(Error::Corrupted { .. }) => {
                 #[cfg(feature = "defmt")]
                 defmt::error!(
                     "Found a corrupted item header at {:X}. Skipping...",
@@ -343,7 +368,13 @@ pub fn find_next_free_item_spot<S: NorFlash>(
                         for address in (data_start..data_end).step_by(MAX_WORD_SIZE) {
                             let buffer_slice =
                                 &mut buffer[..((data_end - address) as usize).min(MAX_WORD_SIZE)];
-                            flash.read(address, buffer_slice).map_err(Error::Storage)?;
+                            flash
+                                .read(address, buffer_slice)
+                                .map_err(|e| Error::Storage {
+                                    value: e,
+                                    #[cfg(feature = "_test")]
+                                    backtrace: std::backtrace::Backtrace::capture(),
+                                })?;
 
                             if buffer_slice.iter().any(|byte| *byte != 0xFF) {
                                 current_address = address + MAX_WORD_SIZE as u32;
@@ -355,7 +386,7 @@ pub fn find_next_free_item_spot<S: NorFlash>(
                     return Ok(Some(current_address));
                 }
             }
-            Err(Error::Corrupted) => {
+            Err(Error::Corrupted { .. }) => {
                 current_address += S::WORD_SIZE as u32;
                 corruption_detected = true;
             }
@@ -389,7 +420,10 @@ impl<'d> core::fmt::Debug for MaybeItem<'d> {
 impl<'d> MaybeItem<'d> {
     pub fn unwrap<E>(self) -> Result<Item<'d>, Error<E>> {
         match self {
-            MaybeItem::Corrupted(_, _) => Err(Error::Corrupted),
+            MaybeItem::Corrupted(_, _) => Err(Error::Corrupted {
+                #[cfg(feature = "_test")]
+                backtrace: std::backtrace::Backtrace::capture(),
+            }),
             MaybeItem::Erased(_) => panic!("Cannot unwrap an erased item"),
             MaybeItem::Present(item) => Ok(item),
         }
