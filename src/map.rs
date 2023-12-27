@@ -277,14 +277,30 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
             return Err(MapError::FullStorage);
         }
 
-        let mut next_page_to_use = None;
-
         // If there is a partial open page, we try to write in that first if there is enough space
-        if let Some(partial_open_page) =
+        let next_page_to_use = if let Some(partial_open_page) =
             find_first_page(flash, flash_range.clone(), 0, PageState::PartialOpen)?
         {
             #[cfg(feature = "defmt")]
             defmt::trace!("Partial open page found: {}", partial_open_page);
+
+            // We found a partial open page, but at this point it's relatively cheap to do a consistency check
+            if !get_page_state(
+                flash,
+                flash_range.clone(),
+                next_page::<S>(flash_range.clone(), partial_open_page),
+            )?
+            .is_open()
+            {
+                // Oh oh, the next page which serves as the buffer page is not open. We're corrupt.
+                // This likely happened because of an unexpected shutdown during data migration from the
+                // then new buffer page to the new partial open page.
+                // The repair function should be able to repair this.
+                return Err(MapError::Corrupted {
+                    #[cfg(feature = "_test")]
+                    backtrace: std::backtrace::Backtrace::capture(),
+                });
+            }
 
             // We've got to search where the free space is since the page starts with items present already
 
@@ -322,10 +338,12 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
 
                     // The item doesn't fit here, so we need to close this page and move to the next
                     close_page(flash, flash_range.clone(), partial_open_page)?;
-                    next_page_to_use = Some(next_page::<S>(flash_range.clone(), partial_open_page));
+                    Some(next_page::<S>(flash_range.clone(), partial_open_page))
                 }
             }
-        }
+        } else {
+            None
+        };
 
         // If we get here, there was no partial page found or the partial page has now been closed because the item didn't fit.
         // If there was a partial page, then we need to look at the next page. It's supposed to be open since it was the previous empty buffer page.
@@ -357,72 +375,13 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
                     get_page_state(flash, flash_range.clone(), next_buffer_page)?;
 
                 if !next_buffer_page_state.is_open() {
-                    // We need to move the data from the next buffer page to the next_page_to_use, but only if that data
-                    // doesn't have a newer value somewhere else.
-
-                    let mut next_page_write_address =
-                        calculate_page_address::<S>(flash_range.clone(), next_page_to_use)
-                            + S::WORD_SIZE as u32;
-
-                    if let Some(e) = read_items(
+                    migrate_items::<I, _>(
                         flash,
-                        calculate_page_address::<S>(flash_range.clone(), next_buffer_page)
-                            + S::WORD_SIZE as u32,
-                        calculate_page_end_address::<S>(flash_range.clone(), next_buffer_page)
-                            - S::WORD_SIZE as u32,
+                        flash_range.clone(),
                         data_buffer,
-                        |flash, item, item_address| {
-                            let key = I::deserialize_key_only(item.data())
-                                .map_err(MapError::Item)
-                                .to_controlflow()?;
-                            let (item_header, data_buffer) = item.destruct();
-
-                            // Search for the newest item with the key we found
-                            let Some((_, found_address, _)) = fetch_item_with_location::<I, S>(
-                                flash,
-                                flash_range.clone(),
-                                data_buffer,
-                                key,
-                            )
-                            .to_controlflow()?
-                            else {
-                                // We couldn't even find our own item?
-                                return ControlFlow::Break(MapError::Corrupted {
-                                    #[cfg(feature = "_test")]
-                                    backtrace: std::backtrace::Backtrace::capture(),
-                                });
-                            };
-
-                            if found_address == item_address {
-                                // The newest item with this key is the item we're about to erase
-                                // This means we need to copy it over to the next_page_to_use
-                                let item = item_header
-                                    .read_item(flash, data_buffer, item_address, u32::MAX)
-                                    .to_controlflow()?
-                                    .unwrap()
-                                    .to_controlflow()?;
-                                item.write(flash, next_page_write_address)
-                                    .to_controlflow()?;
-                                next_page_write_address =
-                                    item.header.next_item_address::<S>(next_page_write_address);
-                            }
-
-                            ControlFlow::<MapError<_, S::Error>, ()>::Continue(())
-                        },
-                    )? {
-                        return Err(e);
-                    }
-
-                    flash
-                        .erase(
-                            calculate_page_address::<S>(flash_range.clone(), next_buffer_page),
-                            calculate_page_end_address::<S>(flash_range.clone(), next_buffer_page),
-                        )
-                        .map_err(|e| MapError::Storage {
-                            value: e,
-                            #[cfg(feature = "_test")]
-                            backtrace: std::backtrace::Backtrace::capture(),
-                        })?;
+                        next_buffer_page,
+                        next_page_to_use,
+                    )?;
                 }
             }
             None => {
@@ -558,6 +517,128 @@ impl<S: PartialEq, I: PartialEq> PartialEq for MapError<I, S> {
             _ => core::mem::discriminant(self) == core::mem::discriminant(other),
         }
     }
+}
+
+fn migrate_items<I: StorageItem, S: NorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+    data_buffer: &mut [u8],
+    source_page: usize,
+    target_page: usize,
+) -> Result<(), MapError<I::Error, S::Error>> {
+    // We need to move the data from the next buffer page to the next_page_to_use, but only if that data
+    // doesn't have a newer value somewhere else.
+
+    let mut next_page_write_address =
+        calculate_page_address::<S>(flash_range.clone(), target_page) + S::WORD_SIZE as u32;
+
+    if let Some(e) = read_items(
+        flash,
+        calculate_page_address::<S>(flash_range.clone(), source_page) + S::WORD_SIZE as u32,
+        calculate_page_end_address::<S>(flash_range.clone(), source_page) - S::WORD_SIZE as u32,
+        data_buffer,
+        |flash, item, item_address| {
+            let key = I::deserialize_key_only(item.data())
+                .map_err(MapError::Item)
+                .to_controlflow()?;
+            let (item_header, data_buffer) = item.destruct();
+
+            // Search for the newest item with the key we found
+            let Some((_, found_address, _)) =
+                fetch_item_with_location::<I, S>(flash, flash_range.clone(), data_buffer, key)
+                    .to_controlflow()?
+            else {
+                // We couldn't even find our own item?
+                return ControlFlow::Break(MapError::Corrupted {
+                    #[cfg(feature = "_test")]
+                    backtrace: std::backtrace::Backtrace::capture(),
+                });
+            };
+
+            if found_address == item_address {
+                // The newest item with this key is the item we're about to erase
+                // This means we need to copy it over to the next_page_to_use
+                let item = item_header
+                    .read_item(flash, data_buffer, item_address, u32::MAX)
+                    .to_controlflow()?
+                    .unwrap()
+                    .to_controlflow()?;
+                item.write(flash, next_page_write_address)
+                    .to_controlflow()?;
+                next_page_write_address =
+                    item.header.next_item_address::<S>(next_page_write_address);
+            }
+
+            ControlFlow::<MapError<_, S::Error>, ()>::Continue(())
+        },
+    )? {
+        return Err(e);
+    }
+
+    flash
+        .erase(
+            calculate_page_address::<S>(flash_range.clone(), source_page),
+            calculate_page_end_address::<S>(flash_range.clone(), source_page),
+        )
+        .map_err(|e| MapError::Storage {
+            value: e,
+            #[cfg(feature = "_test")]
+            backtrace: std::backtrace::Backtrace::capture(),
+        })?;
+
+    Ok(())
+}
+
+/// Try to repair the state of the flash to hopefull get back everything in working order.
+/// Care is taken that no data is lost, but this depends on correctly repairing the state and
+/// so is only best effort.
+///
+/// This function might be called after a different function returned the [Error::Corrupted] error.
+/// There's no guarantee it will work.
+///
+/// If this function or the function call after this crate returns [Error::Corrupted], then it's unlikely
+/// that the state can be recovered. To at least make everything function again at the cost of losing the data,
+/// erase the flash range.
+pub fn try_repair<I: StorageItem, S: NorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+    data_buffer: &mut [u8],
+) -> Result<(), MapError<I::Error, S::Error>> {
+    crate::try_general_repair(flash, flash_range.clone())?;
+
+    // Let's check if we corrupted in the middle of a migration
+    if let Some(partial_open_page) =
+        find_first_page(flash, flash_range.clone(), 0, PageState::PartialOpen)?
+    {
+        let buffer_page = next_page::<S>(flash_range.clone(), partial_open_page);
+        if !get_page_state(flash, flash_range.clone(), buffer_page)?.is_open() {
+            // Yes, the migration got interrupted. Let's redo it.
+            // To do that, we erase the partial open page first because it contains incomplete data.
+            flash
+                .erase(
+                    calculate_page_address::<S>(flash_range.clone(), partial_open_page),
+                    calculate_page_end_address::<S>(flash_range.clone(), partial_open_page),
+                )
+                .map_err(|e| MapError::Storage {
+                    value: e,
+                    #[cfg(feature = "_test")]
+                    backtrace: std::backtrace::Backtrace::capture(),
+                })?;
+
+            // Then partially close it again
+            partial_close_page(flash, flash_range.clone(), partial_open_page)?;
+
+            migrate_items::<I, _>(
+                flash,
+                flash_range.clone(),
+                data_buffer,
+                buffer_page,
+                partial_open_page,
+            )?;
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

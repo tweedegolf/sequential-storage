@@ -159,7 +159,12 @@ fn fuzz(ops: Input) {
                                 "### Encountered curruption while storing! Repairing now. Originated from:\n{_backtrace:#}"
                             );
 
-                            sequential_storage::try_repair(&mut flash, FLASH_RANGE).unwrap();
+                            sequential_storage::map::try_repair::<TestItem, _>(
+                                &mut flash,
+                                FLASH_RANGE,
+                                &mut buf,
+                            )
+                            .unwrap();
                             corruption_repaired = true;
                             retry = true;
                         }
@@ -200,7 +205,12 @@ fn fuzz(ops: Input) {
                                 "### Encountered curruption while fetching! Repairing now. Originated from:\n{_backtrace:#}"
                             );
 
-                            sequential_storage::try_repair(&mut flash, FLASH_RANGE).unwrap();
+                            sequential_storage::map::try_repair::<TestItem, _>(
+                                &mut flash,
+                                FLASH_RANGE,
+                                &mut buf,
+                            )
+                            .unwrap();
                             corruption_repaired = true;
                             retry = true;
                         }

@@ -27,17 +27,7 @@ pub mod mock_flash;
 /// Many flashes have 4-byte or 1-byte words.
 const MAX_WORD_SIZE: usize = 32;
 
-/// Try to repair the state of the flash to hopefull get back everything in working order.
-/// Care is taken that no data is lost, but this depends on correctly repairing the state and
-/// so is only best effort.
-///
-/// This function might be called after a different function returned the [Error::Corrupted] error.
-/// There's no guarantee it will work.
-///
-/// If this function or the function call after this crate returns [Error::Corrupted], then it's unlikely
-/// that the state can be recovered. To at least make everything function again at the cost of losing the data,
-/// erase the flash range.
-pub fn try_repair<S: NorFlash>(
+fn try_general_repair<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
 ) -> Result<(), Error<S::Error>> {

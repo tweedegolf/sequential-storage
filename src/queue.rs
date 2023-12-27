@@ -500,6 +500,25 @@ fn find_oldest_page<S: NorFlash>(
     Ok(oldest_closed_page.unwrap_or(youngest_page))
 }
 
+/// Try to repair the state of the flash to hopefull get back everything in working order.
+/// Care is taken that no data is lost, but this depends on correctly repairing the state and
+/// so is only best effort.
+///
+/// This function might be called after a different function returned the [Error::Corrupted] error.
+/// There's no guarantee it will work.
+///
+/// If this function or the function call after this crate returns [Error::Corrupted], then it's unlikely
+/// that the state can be recovered. To at least make everything function again at the cost of losing the data,
+/// erase the flash range.
+pub fn try_repair<S: NorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+) -> Result<(), Error<S::Error>> {
+    crate::try_general_repair(flash, flash_range.clone())?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
