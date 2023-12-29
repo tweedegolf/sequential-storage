@@ -4,7 +4,7 @@ use libfuzzer_sys::arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use rand::{Rng, SeedableRng};
 use sequential_storage::{
-    mock_flash::{MockFlashBase, MockFlashError},
+    mock_flash::{MockFlashBase, MockFlashError, WriteCountCheck},
     Error,
 };
 use std::{collections::VecDeque, ops::Range};
@@ -38,9 +38,8 @@ fn fuzz(ops: Input) {
     const WORD_SIZE: usize = 4;
     const WORDS_PER_PAGE: usize = 256;
 
-    // TODO: Turn on strict write count again
     let mut flash =
-        MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::new(false, Some(ops.fuel as u32));
+        MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::new(WriteCountCheck::Disabled, Some(ops.fuel as u32));
     const FLASH_RANGE: Range<u32> = 0x000..0x1000;
 
     let mut order = VecDeque::new();

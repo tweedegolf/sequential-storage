@@ -2,7 +2,7 @@
 
 use libfuzzer_sys::arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
-use sequential_storage::mock_flash::{MockFlashBase, MockFlashError};
+use sequential_storage::mock_flash::{MockFlashBase, MockFlashError, WriteCountCheck};
 use std::collections::VecDeque;
 const MAX_VALUE_SIZE: usize = u8::MAX as usize;
 
@@ -32,7 +32,8 @@ fn fuzz(ops: Input) {
     const WORD_SIZE: usize = 4;
     const WORDS_PER_PAGE: usize = 256;
 
-    let mut flash = MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::default();
+    let mut flash =
+        MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::new(WriteCountCheck::Twice, None);
     let flash_range = 0x000..0x1000;
 
     let mut order = VecDeque::new();

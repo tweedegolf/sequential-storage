@@ -5,7 +5,7 @@ use embedded_storage::nor_flash::{
 
 /// State of a word in the flash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Writable {
+enum Writable {
     /// Twice
     T,
     /// Once (can only convert 1 bits to 0
@@ -28,7 +28,7 @@ pub struct MockFlashBase<const PAGES: usize, const BYTES_PER_WORD: usize, const 
     /// Number of writes done.
     pub writes: u32,
     /// Check that all write locations are writeable.
-    pub use_strict_write_count: bool,
+    pub write_count_check: WriteCountCheck,
     /// A countdown to shutoff. When some and 0, an early shutoff will happen.
     pub bytes_until_shutoff: Option<u32>,
 }
@@ -37,7 +37,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> D
     for MockFlashBase<PAGES, BYTES_PER_WORD, PAGE_WORDS>
 {
     fn default() -> Self {
-        Self::new(true, None)
+        Self::new(WriteCountCheck::OnceOnly, None)
     }
 }
 
@@ -53,14 +53,14 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
     pub const FULL_FLASH_RANGE: Range<u32> = 0..(PAGES * PAGE_WORDS * BYTES_PER_WORD) as u32;
 
     /// Create a new flash instance.
-    pub fn new(use_strict_write_count: bool, bytes_until_shutoff: Option<u32>) -> Self {
+    pub fn new(write_count_check: WriteCountCheck, bytes_until_shutoff: Option<u32>) -> Self {
         Self {
             writable: vec![T; Self::CAPACITY_WORDS],
             data: vec![u8::MAX; Self::CAPACITY_BYTES],
             erases: 0,
             reads: 0,
             writes: 0,
-            use_strict_write_count,
+            write_count_check,
             bytes_until_shutoff,
         }
     }
@@ -292,23 +292,32 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
             panic!("any write must be a multiple of Self::WRITE_SIZE bytes");
         }
 
-        for (index, source) in range.zip(bytes.iter()) {
-            let source = *source;
+        for (source_word, address) in bytes
+            .chunks_exact(BYTES_PER_WORD)
+            .zip(range.step_by(BYTES_PER_WORD))
+        {
+            let word_writable = &mut self.writable[address / BYTES_PER_WORD];
+            *word_writable = match (*word_writable, self.write_count_check) {
+                (v, WriteCountCheck::Disabled) => v,
+                (Writable::T, _) => Writable::O,
+                (Writable::O, WriteCountCheck::Twice) => Writable::N,
+                (Writable::O, WriteCountCheck::TwiceDifferent)
+                    if source_word == &self.data[address..][..BYTES_PER_WORD] =>
+                {
+                    Writable::O
+                }
+                (Writable::O, WriteCountCheck::TwiceDifferent) => Writable::N,
+                (Writable::O, WriteCountCheck::TwiceWithZero)
+                    if source_word.iter().all(|b| *b == 0) =>
+                {
+                    Writable::N
+                }
+                _ => return Err(MockFlashError::NotWritable(address as u32)),
+            };
 
-            self.check_shutoff(index as u32, "write")?;
-
-            self.as_bytes_mut()[index] &= source;
-
-            if index % BYTES_PER_WORD == 0 {
-                let word_writable = &mut self.writable[index / BYTES_PER_WORD];
-                *word_writable = match *word_writable {
-                    Writable::T => Writable::O,
-                    Writable::O => Writable::N,
-                    Writable::N if self.use_strict_write_count => {
-                        return Err(MockFlashError::NotWritable(index as u32))
-                    }
-                    Writable::N => Writable::N,
-                };
+            for (byte_index, byte) in source_word.iter().enumerate() {
+                self.check_shutoff((address + byte_index) as u32, "write")?;
+                self.as_bytes_mut()[address + byte_index] &= byte;
             }
         }
 
@@ -338,4 +347,19 @@ impl NorFlashError for MockFlashError {
             MockFlashError::EarlyShutoff(_) => NorFlashErrorKind::Other,
         }
     }
+}
+
+/// The mode the write counter works in
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteCountCheck {
+    /// A word may only be written once
+    OnceOnly,
+    /// A word may be written twice, but it only counts when it actually changes
+    TwiceDifferent,
+    /// A word may be written twice
+    Twice,
+    /// A work may be written twice, but the second time has to be all zeroes. (STM32 does this)
+    TwiceWithZero,
+    /// No check at all
+    Disabled,
 }

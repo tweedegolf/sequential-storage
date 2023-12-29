@@ -5,7 +5,7 @@ use libfuzzer_sys::fuzz_target;
 use rand::SeedableRng;
 use sequential_storage::{
     map::{MapError, StorageItem},
-    mock_flash::{MockFlashBase, MockFlashError},
+    mock_flash::{MockFlashBase, MockFlashError, WriteCountCheck},
 };
 use std::{collections::HashMap, ops::Range};
 
@@ -91,7 +91,7 @@ fn fuzz(ops: Input) {
     const WORDS_PER_PAGE: usize = 256;
 
     let mut flash =
-        MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::new(true, Some(ops.fuel as u32));
+        MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::new(WriteCountCheck::Twice, Some(ops.fuel as u32));
     const FLASH_RANGE: Range<u32> = 0x000..0x1000;
 
     let mut map = HashMap::new();

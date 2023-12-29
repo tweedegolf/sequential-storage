@@ -9,8 +9,13 @@
 //! # mod mock_flash {
 //! #   include!("mock_flash.rs");
 //! # }
+//! #
+//! # fn init_flash() -> Flash {
+//! #     Flash::new(mock_flash::WriteCountCheck::Twice, None)
+//! # }
+//! #
 //! // Initialize the flash. This can be internal or external
-//! let mut flash = Flash::default();
+//! let mut flash = init_flash();
 //! // These are the flash addresses in which the crate will operate.
 //! // The crate will not read, write or erase outside of this range.
 //! let flash_range = 0x1000..0x3000;
@@ -534,6 +539,8 @@ pub fn try_repair<S: NorFlash>(
 
 #[cfg(test)]
 mod tests {
+    use crate::mock_flash::WriteCountCheck;
+
     use super::*;
 
     type MockFlashBig = mock_flash::MockFlashBase<4, 4, 256>;
@@ -541,7 +548,7 @@ mod tests {
 
     #[test]
     fn peek_and_overwrite_old_data() {
-        let mut flash = MockFlashTiny::default();
+        let mut flash = MockFlashTiny::new(WriteCountCheck::Twice, None);
         let flash_range = 0x00..0x40;
         let mut data_buffer = [0; 1024];
         const DATA_SIZE: usize = 22;
@@ -609,7 +616,7 @@ mod tests {
 
     #[test]
     fn push_pop() {
-        let mut flash = MockFlashBig::default();
+        let mut flash = MockFlashBig::new(WriteCountCheck::Twice, None);
         let flash_range = 0x000..0x1000;
         let mut data_buffer = [0; 1024];
 
@@ -642,7 +649,7 @@ mod tests {
 
     #[test]
     fn push_pop_tiny() {
-        let mut flash = MockFlashTiny::default();
+        let mut flash = MockFlashTiny::new(WriteCountCheck::Twice, None);
         let flash_range = 0x00..0x40;
         let mut data_buffer = [0; 1024];
 
@@ -676,7 +683,7 @@ mod tests {
     #[test]
     /// Same as [push_lots_then_pop_lots], except with added peeking and using the iterator style
     fn push_peek_pop_many() {
-        let mut flash = MockFlashBig::default();
+        let mut flash = MockFlashBig::new(WriteCountCheck::Twice, None);
         let flash_range = 0x000..0x1000;
         let mut data_buffer = [0; 1024];
 
@@ -756,7 +763,7 @@ mod tests {
 
     #[test]
     fn push_lots_then_pop_lots() {
-        let mut flash = MockFlashBig::default();
+        let mut flash = MockFlashBig::new(WriteCountCheck::Twice, None);
         let flash_range = 0x000..0x1000;
         let mut data_buffer = [0; 1024];
 
@@ -845,7 +852,7 @@ mod tests {
 
     #[test]
     fn pop_with_empty_section() {
-        let mut flash = MockFlashTiny::default();
+        let mut flash = MockFlashTiny::new(WriteCountCheck::Twice, None);
         let flash_range = 0x00..0x40;
         let mut data_buffer = [0; 1024];
 
@@ -870,7 +877,7 @@ mod tests {
 
     #[test]
     fn search_pages() {
-        let mut flash = MockFlashBig::default();
+        let mut flash = MockFlashBig::new(WriteCountCheck::Twice, None);
 
         const FLASH_RANGE: Range<u32> = 0x000..0x1000;
 
