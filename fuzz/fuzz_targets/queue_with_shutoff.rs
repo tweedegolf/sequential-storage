@@ -65,8 +65,26 @@ fn fuzz(ops: Input) {
                 Op::Push(op) => {
                     let val: Vec<u8> = (0..op.value_len as usize % 16).map(|_| rng.gen()).collect();
 
-                    let max_fit =
-                        sequential_storage::queue::find_max_fit(&mut flash, FLASH_RANGE).unwrap();
+                    let max_fit = match sequential_storage::queue::find_max_fit(
+                        &mut flash,
+                        FLASH_RANGE,
+                    ) {
+                        Ok(val) => val,
+                        Err(Error::Corrupted {
+                            backtrace: _backtrace,
+                        }) if !corruption_repaired => {
+                            #[cfg(fuzzing_repro)]
+                            eprintln!(
+                                    "### Encountered curruption while finding max fit! Repairing now. Originated from:\n{_backtrace:#}"
+                                );
+
+                            sequential_storage::queue::try_repair(&mut flash, FLASH_RANGE).unwrap();
+                            corruption_repaired = true;
+                            retry = true;
+                            continue;
+                        }
+                        Err(e) => panic!("Error while finding max fit: {e:?}"),
+                    };
 
                     match sequential_storage::queue::push(&mut flash, FLASH_RANGE, &val, false) {
                         Ok(_) => {
@@ -157,8 +175,26 @@ fn fuzz(ops: Input) {
                     }
                 }
                 Op::PopMany(n) => {
-                    let mut popper =
-                        sequential_storage::queue::pop_many(&mut flash, FLASH_RANGE).unwrap();
+                    let mut popper = match sequential_storage::queue::pop_many(
+                        &mut flash,
+                        FLASH_RANGE,
+                    ) {
+                        Ok(val) => val,
+                        Err(Error::Corrupted {
+                            backtrace: _backtrace,
+                        }) if !corruption_repaired => {
+                            #[cfg(fuzzing_repro)]
+                            eprintln!(
+                                        "### Encountered curruption while creating popper! Repairing now. Originated from:\n{_backtrace:#}"
+                                    );
+
+                            sequential_storage::queue::try_repair(&mut flash, FLASH_RANGE).unwrap();
+                            corruption_repaired = true;
+                            retry = true;
+                            continue;
+                        }
+                        Err(e) => panic!("Error while creating popper: {e:?}"),
+                    };
 
                     for i in 0..*n {
                         match popper.next(&mut buf) {
@@ -208,7 +244,6 @@ fn fuzz(ops: Input) {
                         }
                     }
                 }
-
                 Op::Peek => {
                     match sequential_storage::queue::peek(&mut flash, FLASH_RANGE, &mut buf) {
                         Ok(value) => {
@@ -233,8 +268,26 @@ fn fuzz(ops: Input) {
                     }
                 }
                 Op::PeekMany(n) => {
-                    let mut peeker =
-                        sequential_storage::queue::peek_many(&mut flash, FLASH_RANGE).unwrap();
+                    let mut peeker = match sequential_storage::queue::peek_many(
+                        &mut flash,
+                        FLASH_RANGE,
+                    ) {
+                        Ok(val) => val,
+                        Err(Error::Corrupted {
+                            backtrace: _backtrace,
+                        }) if !corruption_repaired => {
+                            #[cfg(fuzzing_repro)]
+                            eprintln!(
+                                        "### Encountered curruption while creating peeker! Repairing now. Originated from:\n{_backtrace:#}"
+                                    );
+
+                            sequential_storage::queue::try_repair(&mut flash, FLASH_RANGE).unwrap();
+                            corruption_repaired = true;
+                            retry = true;
+                            continue;
+                        }
+                        Err(e) => panic!("Error while creating peeker: {e:?}"),
+                    };
 
                     for i in 0..*n {
                         match peeker.next(&mut buf) {
