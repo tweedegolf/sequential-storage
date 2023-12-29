@@ -126,7 +126,7 @@ fn fuzz(ops: Input) {
                         }
                         Err(MapError::FullStorage) => {}
                         Err(MapError::Storage {
-                            value: MockFlashError::EarlyShutoff,
+                            value: MockFlashError::EarlyShutoff(_),
                             backtrace: _backtrace,
                         }) => {
                             match sequential_storage::map::fetch_item::<TestItem, _>(
@@ -189,7 +189,7 @@ fn fuzz(ops: Input) {
                             assert_eq!(None, map.get(&key));
                         }
                         Err(MapError::Storage {
-                            value: MockFlashError::EarlyShutoff,
+                            value: MockFlashError::EarlyShutoff(_),
                             backtrace: _backtrace,
                         }) => {
                             #[cfg(fuzzing_repro)]

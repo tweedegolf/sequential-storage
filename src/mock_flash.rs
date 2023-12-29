@@ -86,16 +86,16 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
         }
     }
 
-    fn check_shutoff(&mut self, _address: u32, _operation: &str) -> Result<(), MockFlashError> {
+    fn check_shutoff(&mut self, address: u32, _operation: &str) -> Result<(), MockFlashError> {
         if let Some(bytes_until_shutoff) = self.bytes_until_shutoff.as_mut() {
             if let Some(next) = bytes_until_shutoff.checked_sub(1) {
                 *bytes_until_shutoff = next;
                 Ok(())
             } else {
                 #[cfg(fuzzing_repro)]
-                eprintln!("!!! Shutoff at {_address} while doing '{_operation}' !!!");
+                eprintln!("!!! Shutoff at {address} while doing '{_operation}' !!!");
                 self.bytes_until_shutoff = None;
-                Err(MockFlashError::EarlyShutoff)
+                Err(MockFlashError::EarlyShutoff(address))
             }
         } else {
             Ok(())
@@ -153,6 +153,62 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
         }
 
         s
+    }
+
+    #[cfg(feature = "_test")]
+    /// Get the presence of the item at the given address.
+    ///
+    /// - If some, the item is there.
+    /// - If true, the item is present and fine.
+    /// - If false, the item is corrupt or erased.
+    pub fn get_item_presence(&mut self, target_item_address: u32) -> Option<bool> {
+        use crate::NorFlashExt;
+
+        if !Self::FULL_FLASH_RANGE.contains(&target_item_address) {
+            return None;
+        }
+
+        let mut buf = [0; 1024 * 16];
+
+        let page_index =
+            crate::calculate_page_index::<Self>(Self::FULL_FLASH_RANGE, target_item_address);
+
+        let page_data_start =
+            crate::calculate_page_address::<Self>(Self::FULL_FLASH_RANGE, page_index)
+                + Self::WORD_SIZE as u32;
+        let page_data_end =
+            crate::calculate_page_end_address::<Self>(Self::FULL_FLASH_RANGE, page_index)
+                - Self::WORD_SIZE as u32;
+
+        let found_item = crate::item::read_item_headers(
+            self,
+            page_data_start,
+            page_data_end,
+            |flash, header, item_address| {
+                let next_item_address = header.next_item_address::<Self>(item_address);
+
+                if (item_address..next_item_address).contains(&target_item_address) {
+                    let maybe_item = header
+                        .read_item(flash, &mut buf, item_address, page_data_end)
+                        .unwrap();
+
+                    match maybe_item {
+                        crate::item::MaybeItem::Corrupted(_, _)
+                        | crate::item::MaybeItem::Erased(_) => {
+                            core::ops::ControlFlow::Break(Some(false))
+                        }
+                        crate::item::MaybeItem::Present(_) => {
+                            core::ops::ControlFlow::Break(Some(true))
+                        }
+                    }
+                } else {
+                    core::ops::ControlFlow::Continue(())
+                }
+            },
+        )
+        .unwrap();
+
+        found_item.flatten()
     }
 }
 
@@ -269,7 +325,7 @@ pub enum MockFlashError {
     /// Location not writeable.
     NotWritable(u32),
     /// We got a shutoff
-    EarlyShutoff,
+    EarlyShutoff(u32),
 }
 
 impl NorFlashError for MockFlashError {
@@ -278,7 +334,7 @@ impl NorFlashError for MockFlashError {
             MockFlashError::OutOfBounds => NorFlashErrorKind::OutOfBounds,
             MockFlashError::NotAligned => NorFlashErrorKind::NotAligned,
             MockFlashError::NotWritable(_) => NorFlashErrorKind::Other,
-            MockFlashError::EarlyShutoff => NorFlashErrorKind::Other,
+            MockFlashError::EarlyShutoff(_) => NorFlashErrorKind::Other,
         }
     }
 }

@@ -60,7 +60,7 @@ fn fuzz(ops: Input) {
             eprintln!("{}", flash.print_items());
             #[cfg(fuzzing_repro)]
             eprintln!("=== OP: {op:?} ===");
-    
+
             match &mut op {
                 Op::Push(op) => {
                     let val: Vec<u8> = (0..op.value_len as usize % 16).map(|_| rng.gen()).collect();
@@ -88,30 +88,17 @@ fn fuzz(ops: Input) {
                             }
                         }
                         Err(Error::Storage {
-                            value: MockFlashError::EarlyShutoff,
+                            value: MockFlashError::EarlyShutoff(address),
                             backtrace: _backtrace,
                         }) => {
-                            let mut peeker =
-                                sequential_storage::queue::peek_many(&mut flash, FLASH_RANGE)
-                                    .unwrap();
-
-                            let mut last_item = None;
-                            let mut count = 0;
-
-                            while let Ok(Some(data)) = peeker.next(&mut buf) {
-                                last_item = Some(data.to_vec());
-                                count += 1;
-                            }
-
-                            if let Some(last_item) = last_item {
-                                if order.get(count).is_none() && last_item == val {
-                                    #[cfg(fuzzing_repro)]
-                                    eprintln!("Early shutoff when pushing {val:?}! (but it still stored fully). Originated from:\n{_backtrace:#}");
-                                    order.push_back(val);
-                                } else {
-                                    #[cfg(fuzzing_repro)]
-                                    eprintln!("Early shutoff when pushing {val:?}! Originated from:\n{_backtrace:#}");
-                                }
+                            // We need to check if it managed to write
+                            if let Some(true) = flash.get_item_presence(address) {
+                                #[cfg(fuzzing_repro)]
+                                eprintln!("Early shutoff when pushing {val:?}! (but it still stored fully). Originated from:\n{_backtrace:#}");
+                                order.push_back(val);
+                            } else {
+                                #[cfg(fuzzing_repro)]
+                                eprintln!("Early shutoff when pushing {val:?}! Originated from:\n{_backtrace:#}");
                             }
                         }
                         Err(Error::Corrupted {
@@ -141,7 +128,7 @@ fn fuzz(ops: Input) {
                             );
                         }
                         Err(Error::Storage {
-                            value: MockFlashError::EarlyShutoff,
+                            value: MockFlashError::EarlyShutoff(address),
                             backtrace: _backtrace,
                         }) => {
                             #[cfg(fuzzing_repro)]
@@ -149,7 +136,10 @@ fn fuzz(ops: Input) {
                                 "Early shutoff when popping (single)! Originated from:\n{_backtrace:#}"
                             );
 
-                            retry = true;
+                            if !matches!(flash.get_item_presence(address), Some(true)) {
+                                // The item is no longer readable here
+                                order.pop_front();
+                            }
                         }
                         Err(Error::Corrupted {
                             backtrace: _backtrace,
@@ -182,13 +172,22 @@ fn fuzz(ops: Input) {
                                 );
                             }
                             Err(Error::Storage {
-                                value: MockFlashError::EarlyShutoff,
+                                value: MockFlashError::EarlyShutoff(address),
                                 backtrace: _backtrace,
                             }) => {
                                 #[cfg(fuzzing_repro)]
                                 eprintln!(
                                     "Early shutoff when popping (many)! Originated from:\n{_backtrace:#}"
                                 );
+
+                                if !matches!(flash.get_item_presence(address), Some(true)) {
+                                    // The item is no longer readable here
+                                    order.pop_front();
+                                }
+
+                                retry = true;
+                                *n -= i;
+                                break;
                             }
                             Err(Error::Corrupted {
                                 backtrace: _backtrace,
