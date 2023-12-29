@@ -358,7 +358,7 @@ impl<'d, S: NorFlash> QueueIterator<'d, S> {
                     - S::WORD_SIZE as u32;
 
             // Search for the first item with data
-            if let Some((found_item_header, found_item_address)) = read_item_headers(
+            if let (Some((found_item_header, found_item_address)), _) = read_item_headers(
                 self.flash,
                 current_address,
                 page_data_end_address,
@@ -426,7 +426,7 @@ struct QueueIteratorResetPoint(CurrentAddress);
 pub fn find_max_fit<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-) -> Result<Option<usize>, Error<S::Error>> {
+) -> Result<Option<u32>, Error<S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
 
@@ -440,11 +440,11 @@ pub fn find_max_fit<S: NorFlash>(
     match get_page_state(flash, flash_range.clone(), next_page)? {
         state @ PageState::Closed => {
             if is_page_empty(flash, flash_range.clone(), next_page, Some(state))? {
-                return Ok(Some(S::ERASE_SIZE - (2 * S::WORD_SIZE)));
+                return Ok(Some((S::ERASE_SIZE - (2 * S::WORD_SIZE)) as u32));
             }
         }
         PageState::Open => {
-            return Ok(Some(S::ERASE_SIZE - (2 * S::WORD_SIZE)));
+            return Ok(Some((S::ERASE_SIZE - (2 * S::WORD_SIZE)) as u32));
         }
         PageState::PartialOpen => {
             // This should never happen
@@ -455,36 +455,23 @@ pub fn find_max_fit<S: NorFlash>(
         }
     };
 
-    // See how much space we can ind in the current page.
-    let mut max_free: Option<usize> = None;
+    // See how much space we can find in the current page.
     let page_data_start_address =
         calculate_page_address::<S>(flash_range.clone(), current_page) + S::WORD_SIZE as u32;
     let page_data_end_address =
         calculate_page_end_address::<S>(flash_range.clone(), current_page) - S::WORD_SIZE as u32;
 
-    let mut current_address = page_data_start_address;
-    let end_address = page_data_end_address;
+    let next_item_address = read_item_headers(
+        flash,
+        page_data_start_address,
+        page_data_end_address,
+        |_, _, _| ControlFlow::<(), ()>::Continue(()),
+    )?
+    .1;
 
-    while current_address < end_address {
-        let result = ItemHeader::read_new(flash, current_address, end_address)?;
-        match result {
-            Some(header) => current_address = header.next_item_address::<S>(current_address),
-            None => {
-                let data_address =
-                    round_up_to_alignment_usize::<S>(current_address as usize + ItemHeader::LENGTH);
-                if data_address <= end_address as usize {
-                    let free = round_down_to_alignment_usize::<S>(
-                        end_address as usize - data_address as usize,
-                    );
-                    max_free = max_free.map(|current| current.max(free)).or(Some(free));
-                }
-
-                break;
-            }
-        }
-    }
-
-    Ok(max_free)
+    Ok(ItemHeader::available_data_bytes::<S>(
+        page_data_end_address - next_item_address,
+    ))
 }
 
 fn find_youngest_page<S: NorFlash>(

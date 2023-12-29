@@ -267,17 +267,23 @@ impl<'d> core::fmt::Debug for Item<'d> {
     }
 }
 
+/// Reads all item headers between the start and end address.
+///
+/// The callback is called with the flash, the found header and the address at which the item starts.
+/// The callback can return break with a value to stop the iteration. That value is then returned by this function.
+///
+/// The return value also includes the next item address.
 pub fn read_item_headers<S: NorFlash, R>(
     flash: &mut S,
     start_address: u32,
     end_address: u32,
     mut callback: impl FnMut(&mut S, ItemHeader, u32) -> ControlFlow<R, ()>,
-) -> Result<Option<R>, Error<S::Error>> {
+) -> Result<(Option<R>, u32), Error<S::Error>> {
     let mut current_address = start_address;
 
     loop {
         if current_address >= end_address {
-            return Ok(None);
+            return Ok((None, current_address));
         }
 
         match ItemHeader::read_new(flash, current_address, end_address) {
@@ -286,12 +292,12 @@ pub fn read_item_headers<S: NorFlash, R>(
 
                 match callback(flash, header, current_address) {
                     ControlFlow::Continue(_) => {}
-                    ControlFlow::Break(r) => return Ok(Some(r)),
+                    ControlFlow::Break(r) => return Ok((Some(r), next_address)),
                 }
 
                 current_address = next_address;
             }
-            Ok(None) => return Ok(None),
+            Ok(None) => return Ok((None, current_address)),
             Err(Error::Corrupted { .. }) => {
                 #[cfg(feature = "defmt")]
                 defmt::error!(
@@ -333,6 +339,7 @@ pub fn read_items<S: NorFlash, R>(
             Err(e) => ControlFlow::Break(Err(e)),
         },
     )?
+    .0
     .transpose()
 }
 
@@ -509,6 +516,7 @@ pub fn is_page_empty<S: NorFlash>(
                     None => ControlFlow::Continue(()),
                 },
             )?
+            .0
             .is_none())
         }
         PageState::PartialOpen => Ok(false),

@@ -89,7 +89,7 @@ fn fuzz(ops: Input) {
                     match sequential_storage::queue::push(&mut flash, FLASH_RANGE, &val, false) {
                         Ok(_) => {
                             if let Some(max_fit) = max_fit {
-                                if val.len() > max_fit {
+                                if val.len() > max_fit as usize {
                                     panic!("Pushing succeeded while value was bigger than max fit");
                                 }
                             } else {
@@ -100,7 +100,7 @@ fn fuzz(ops: Input) {
                         }
                         Err(Error::FullStorage) => {
                             if let Some(max_fit) = max_fit {
-                                if val.len() <= max_fit {
+                                if val.len() <= max_fit as usize {
                                     panic!("Got a wrong full storage");
                                 }
                             }

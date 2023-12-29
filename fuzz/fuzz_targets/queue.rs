@@ -57,7 +57,7 @@ fn fuzz(ops: Input) {
                     sequential_storage::queue::push(&mut flash, flash_range.clone(), &val, false);
 
                 if let Some(max_fit) = max_fit {
-                    if val.len() <= max_fit {
+                    if val.len() <= max_fit as usize {
                         result.unwrap();
                         order.push_back(val.to_vec());
                     } else {

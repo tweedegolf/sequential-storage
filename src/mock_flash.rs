@@ -206,7 +206,8 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
                 }
             },
         )
-        .unwrap();
+        .unwrap()
+        .0;
 
         found_item.flatten()
     }
