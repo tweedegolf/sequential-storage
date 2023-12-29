@@ -91,7 +91,7 @@ fn fuzz(ops: Input) {
     const WORDS_PER_PAGE: usize = 256;
 
     let mut flash =
-        MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::new(0.0, true, Some(ops.fuel as u32));
+        MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::new(true, Some(ops.fuel as u32));
     const FLASH_RANGE: Range<u32> = 0x000..0x1000;
 
     let mut map = HashMap::new();

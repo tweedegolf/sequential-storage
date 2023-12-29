@@ -217,6 +217,7 @@ pub fn pop<'d, S: MultiwriteNorFlash>(
 }
 
 /// Iterator for pop'ing elements in the queue.
+#[derive(Debug)]
 pub struct PopIterator<'d, S: MultiwriteNorFlash> {
     iter: QueueIterator<'d, S>,
 }
@@ -234,13 +235,19 @@ impl<'d, S: MultiwriteNorFlash> PopIterator<'d, S> {
         &mut self,
         data_buffer: &'m mut [u8],
     ) -> Result<Option<&'m mut [u8]>, Error<S::Error>> {
+        let reset_point = self.iter.create_reset_point();
+
         if let Some((item, item_address)) = self.iter.next(data_buffer)? {
             let (header, data_buffer) = item.destruct();
             let ret = &mut data_buffer[..header.length as usize];
 
-            header.erase_data(self.iter.flash, item_address)?;
-
-            Ok(Some(ret))
+            match header.erase_data(self.iter.flash, item_address) {
+                Ok(_) => Ok(Some(ret)),
+                Err(e) => {
+                    self.iter.recover_from_reset_point(reset_point);
+                    Err(e)
+                }
+            }
         } else {
             Ok(None)
         }
@@ -248,6 +255,7 @@ impl<'d, S: MultiwriteNorFlash> PopIterator<'d, S> {
 }
 
 /// Iterator for peek'ing elements in the queue.
+#[derive(Debug)]
 pub struct PeekIterator<'d, S: NorFlash> {
     iter: QueueIterator<'d, S>,
 }
@@ -279,7 +287,15 @@ struct QueueIterator<'d, S: NorFlash> {
     current_address: CurrentAddress,
 }
 
-#[derive(Debug)]
+impl<'d, S: NorFlash> Debug for QueueIterator<'d, S> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("QueueIterator")
+            .field("current_address", &self.current_address)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone)]
 enum CurrentAddress {
     Address(u32),
     PageAfter(usize),
@@ -362,8 +378,8 @@ impl<'d, S: NorFlash> QueueIterator<'d, S> {
                 )?;
 
                 match maybe_item {
-                    item::MaybeItem::Corrupted(_, db) => {
-                        let next_address = found_item_address + S::WORD_SIZE as u32;
+                    item::MaybeItem::Corrupted(header, db) => {
+                        let next_address = header.next_item_address::<S>(found_item_address);
                         self.current_address = if next_address >= page_data_end_address {
                             CurrentAddress::PageAfter(current_page)
                         } else {
@@ -389,7 +405,17 @@ impl<'d, S: NorFlash> QueueIterator<'d, S> {
             }
         }
     }
+
+    fn create_reset_point(&self) -> QueueIteratorResetPoint {
+        QueueIteratorResetPoint(self.current_address.clone())
+    }
+
+    fn recover_from_reset_point(&mut self, reset_point: QueueIteratorResetPoint) {
+        self.current_address = reset_point.0;
+    }
 }
+
+struct QueueIteratorResetPoint(CurrentAddress);
 
 /// Find the largest size of data that can be stored.
 ///

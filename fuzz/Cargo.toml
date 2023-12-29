@@ -34,6 +34,12 @@ test = false
 doc = false
 
 [[bin]]
+name = "queue-with-shutoff"
+path = "fuzz_targets/queue_with_shutoff.rs"
+test = false
+doc = false
+
+[[bin]]
 name = "map-with-shutoff"
 path = "fuzz_targets/map_with_shutoff.rs"
 test = false

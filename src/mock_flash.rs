@@ -27,8 +27,6 @@ pub struct MockFlashBase<const PAGES: usize, const BYTES_PER_WORD: usize, const 
     pub reads: u32,
     /// Number of writes done.
     pub writes: u32,
-    /// The chance for a bit flip to happen.
-    pub write_bit_flip_chance: f32,
     /// Check that all write locations are writeable.
     pub use_strict_write_count: bool,
     /// A countdown to shutoff. When some and 0, an early shutoff will happen.
@@ -39,7 +37,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> D
     for MockFlashBase<PAGES, BYTES_PER_WORD, PAGE_WORDS>
 {
     fn default() -> Self {
-        Self::new(0.0, true, None)
+        Self::new(true, None)
     }
 }
 
@@ -55,18 +53,13 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
     pub const FULL_FLASH_RANGE: Range<u32> = 0..(PAGES * PAGE_WORDS * BYTES_PER_WORD) as u32;
 
     /// Create a new flash instance.
-    pub fn new(
-        write_bit_flip_chance: f32,
-        use_strict_write_count: bool,
-        bytes_until_shutoff: Option<u32>,
-    ) -> Self {
+    pub fn new(use_strict_write_count: bool, bytes_until_shutoff: Option<u32>) -> Self {
         Self {
             writable: vec![T; Self::CAPACITY_WORDS],
             data: vec![u8::MAX; Self::CAPACITY_BYTES],
             erases: 0,
             reads: 0,
             writes: 0,
-            write_bit_flip_chance,
             use_strict_write_count,
             bytes_until_shutoff,
         }
@@ -82,7 +75,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
         &mut self.data
     }
 
-    fn validate_read_operation(offset: u32, length: usize) -> Result<Range<usize>, MockFlashError> {
+    fn validate_operation(offset: u32, length: usize) -> Result<Range<usize>, MockFlashError> {
         let offset = offset as usize;
         if (offset % Self::READ_SIZE) != 0 {
             Err(MockFlashError::NotAligned)
@@ -91,24 +84,6 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
         } else {
             Ok(offset..(offset + length))
         }
-    }
-
-    fn validate_write_operation(
-        &self,
-        offset: u32,
-        length: usize,
-    ) -> Result<Range<usize>, MockFlashError> {
-        let range = Self::validate_read_operation(offset, length)?;
-
-        if self.use_strict_write_count {
-            for address in range.start..range.end {
-                if self.writable[address / BYTES_PER_WORD] == Writable::N {
-                    return Err(MockFlashError::NotWritable(address as u32));
-                }
-            }
-        }
-
-        Ok(range)
     }
 
     fn check_shutoff(&mut self, _address: u32, _operation: &str) -> Result<(), MockFlashError> {
@@ -199,7 +174,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> R
             panic!("any read must be a multiple of Self::READ_SIZE bytes");
         }
 
-        let range = Self::validate_read_operation(offset, bytes.len())?;
+        let range = Self::validate_operation(offset, bytes.len())?;
 
         bytes.copy_from_slice(&self.as_bytes()[range]);
 
@@ -254,26 +229,16 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
     fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
         self.writes += 1;
 
-        let range = self.validate_write_operation(offset, bytes.len())?;
+        let range = Self::validate_operation(offset, bytes.len())?;
 
         if bytes.len() % Self::WRITE_SIZE != 0 {
             panic!("any write must be a multiple of Self::WRITE_SIZE bytes");
         }
 
-        // let write_bit_flip_chance = self.write_bit_flip_chance;
-
         for (index, source) in range.zip(bytes.iter()) {
             let source = *source;
 
             self.check_shutoff(index as u32, "write")?;
-
-            // if write_bit_flip_chance > 0.0 {
-            //     for bit in 0..8 {
-            //         if rand::random::<f32>() < write_bit_flip_chance {
-            //             source ^= 1 << bit;
-            //         }
-            //     }
-            // }
 
             self.as_bytes_mut()[index] &= source;
 
@@ -282,6 +247,9 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
                 *word_writable = match *word_writable {
                     Writable::T => Writable::O,
                     Writable::O => Writable::N,
+                    Writable::N if self.use_strict_write_count => {
+                        return Err(MockFlashError::NotWritable(index as u32))
+                    }
                     Writable::N => Writable::N,
                 };
             }
