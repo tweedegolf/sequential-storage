@@ -89,6 +89,7 @@ When using peek_many, you can look at all data from oldest to newest.
 - Closed pages that were partially erased now can be detected and repaired. This comes at the cost of always
   reading both page markers to determine the page state.
 - Item migration that happens in `map` that is interrupted by a shutoff can now be repaired.
+- Made changes to queue to better survive shutoffs
 
 ### 0.6.2 - 22-12-23
 
