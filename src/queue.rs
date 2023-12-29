@@ -102,6 +102,7 @@ pub fn push<S: NorFlash>(
         let next_page = next_page::<S>(flash_range.clone(), current_page);
         match get_page_state(flash, flash_range.clone(), next_page)? {
             PageState::Open => {
+                close_page(flash, flash_range.clone(), current_page)?;
                 partial_close_page(flash, flash_range.clone(), next_page)?;
                 next_address = Some(
                     calculate_page_address::<S>(flash_range.clone(), next_page)
@@ -130,6 +131,7 @@ pub fn push<S: NorFlash>(
                         backtrace: std::backtrace::Backtrace::capture(),
                     })?;
 
+                close_page(flash, flash_range.clone(), current_page)?;
                 partial_close_page(flash, flash_range.clone(), next_page)?;
                 next_address = Some(next_page_data_start_address);
             }
@@ -143,8 +145,6 @@ pub fn push<S: NorFlash>(
                 });
             }
         }
-
-        close_page(flash, flash_range.clone(), current_page)?;
     }
 
     Item::write_new(flash, next_address.unwrap(), data)?;
