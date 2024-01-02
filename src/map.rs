@@ -10,6 +10,7 @@
 //! ```rust
 //! # use sequential_storage::map::{store_item, fetch_item, StorageItem};
 //! # use mock_flash::MockFlashBase;
+//! # use futures::executor::block_on;
 //! # type Flash = MockFlashBase<10, 1, 4096>;
 //! # mod mock_flash {
 //! #   include!("mock_flash.rs");
@@ -73,40 +74,38 @@
 //! // Nothing is stored in it yet, so it will return None.
 //!
 //! assert_eq!(
-//!     fetch_item::<MyCustomType, _>(
+//!     block_on(fetch_item::<MyCustomType, _>(
 //!         &mut flash,
 //!         flash_range.clone(),
 //!         &mut data_buffer,
 //!         42,
-//!     ).unwrap(),
+//!     )).unwrap(),
 //!     None
 //! );
 //!
 //! // Now we store an item the flash with key 42
 //!
-//! store_item::<MyCustomType, _>(
+//! block_on(store_item::<MyCustomType, _>(
 //!     &mut flash,
 //!     flash_range.clone(),
 //!     &mut data_buffer,
 //!     MyCustomType { key: 42, data: 104729 },
-//! ).unwrap();
+//! )).unwrap();
 //!
 //! // When we ask for key 42, we not get back a Some with the correct value
 //!
 //! assert_eq!(
-//!     fetch_item::<MyCustomType, _>(
+//!     block_on(fetch_item::<MyCustomType, _>(
 //!         &mut flash,
 //!         flash_range.clone(),
 //!         &mut data_buffer,
 //!         42,
-//!     ).unwrap(),
+//!     )).unwrap(),
 //!     Some(MyCustomType { key: 42, data: 104729 })
 //! );
 //! ```
 
-use core::ops::ControlFlow;
-
-use crate::item::{find_next_free_item_spot, read_items, Item, ItemHeader};
+use crate::item::{find_next_free_item_spot, Item, ItemHeader, ItemIter};
 
 use super::*;
 
@@ -120,21 +119,22 @@ use super::*;
 ///
 /// *Note: On a given flash range, make sure to use only the same type as [StorageItem] every time
 /// or types that serialize and deserialize the key in the same way.*
-pub fn fetch_item<I: StorageItem, S: NorFlash>(
+pub async fn fetch_item<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     data_buffer: &mut [u8],
     search_key: I::Key,
 ) -> Result<Option<I>, MapError<I::Error, S::Error>> {
     Ok(
-        fetch_item_with_location(flash, flash_range, data_buffer, search_key)?
+        fetch_item_with_location(flash, flash_range, data_buffer, search_key)
+            .await?
             .map(|(item, _, _)| item),
     )
 }
 
 /// Fetch the item, but with the address and header
 #[allow(clippy::type_complexity)]
-fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
+async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     data_buffer: &mut [u8],
@@ -149,7 +149,7 @@ fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
 
     // We need to find the page we were last using. This should be the only partial open page.
     let mut last_used_page =
-        find_first_page(flash, flash_range.clone(), 0, PageState::PartialOpen)?;
+        find_first_page(flash, flash_range.clone(), 0, PageState::PartialOpen).await?;
 
     #[cfg(feature = "defmt")]
     defmt::trace!("Fetch item, last used page: {}", last_used_page);
@@ -158,10 +158,13 @@ fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
         // In the event that all pages are still open or the last used page was just closed, we search for the first open page.
         // If the page one before that is closed, then that's the last used page.
         if let Some(first_open_page) =
-            find_first_page(flash, flash_range.clone(), 0, PageState::Open)?
+            find_first_page(flash, flash_range.clone(), 0, PageState::Open).await?
         {
             let previous_page = previous_page::<S>(flash_range.clone(), first_open_page);
-            if get_page_state(flash, flash_range.clone(), previous_page)?.is_closed() {
+            if get_page_state(flash, flash_range.clone(), previous_page)
+                .await?
+                .is_closed()
+            {
                 last_used_page = Some(previous_page);
             } else {
                 // The page before the open page is not closed, so it must be open.
@@ -193,30 +196,15 @@ fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
             calculate_page_end_address::<S>(flash_range.clone(), current_page_to_check)
                 - S::WORD_SIZE as u32;
 
-        if let Some(e) = read_items(
-            flash,
-            page_data_start_address,
-            page_data_end_address,
-            data_buffer,
-            |_, item, address| {
-                if I::deserialize_key_only(item.data())
-                    .map_err(MapError::Item)
-                    .to_controlflow()?
-                    == search_key
-                {
-                    newest_found_item = Some((
-                        I::deserialize_from(item.data())
-                            .map_err(MapError::Item)
-                            .to_controlflow()?,
-                        address,
-                        item.header,
-                    ));
-                }
-
-                ControlFlow::<MapError<_, S::Error>, ()>::Continue(())
-            },
-        )? {
-            return Err(e);
+        let mut it = ItemIter::new(page_data_start_address, page_data_end_address);
+        while let Some((item, address)) = it.next(flash, data_buffer).await? {
+            if I::deserialize_key_only(item.data()).map_err(MapError::Item)? == search_key {
+                newest_found_item = Some((
+                    I::deserialize_from(item.data()).map_err(MapError::Item)?,
+                    address,
+                    item.header,
+                ));
+            }
         }
 
         // We've found the item! We can stop searching
@@ -227,7 +215,7 @@ fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
         // We have not found the item. We've got to look in the previous page, but only if that page is closed and contains data.
         let previous_page = previous_page::<S>(flash_range.clone(), current_page_to_check);
 
-        if get_page_state(flash, flash_range.clone(), previous_page)? != PageState::Closed {
+        if get_page_state(flash, flash_range.clone(), previous_page).await? != PageState::Closed {
             // We've looked through all the pages with data and couldn't find the item
             return Ok(None);
         }
@@ -246,7 +234,7 @@ fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
 ///
 /// *Note: On a given flash range, make sure to use only the same type as [StorageItem] every time
 /// or types that serialize and deserialize the key in the same way.*
-pub fn store_item<I: StorageItem, S: NorFlash>(
+pub async fn store_item<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     data_buffer: &mut [u8],
@@ -260,15 +248,8 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
     assert!(S::ERASE_SIZE >= S::WORD_SIZE * 3);
     assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
 
-    return store_item_inner::<I, S>(flash, flash_range, data_buffer, item, 0);
-
-    fn store_item_inner<I: StorageItem, S: NorFlash>(
-        flash: &mut S,
-        flash_range: Range<u32>,
-        data_buffer: &mut [u8],
-        item: I,
-        recursion_level: usize,
-    ) -> Result<(), MapError<I::Error, S::Error>> {
+    let mut recursion_level = 0;
+    loop {
         #[cfg(feature = "defmt")]
         defmt::trace!("Store item inner. Recursion: {}", recursion_level);
 
@@ -279,7 +260,7 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
 
         // If there is a partial open page, we try to write in that first if there is enough space
         let next_page_to_use = if let Some(partial_open_page) =
-            find_first_page(flash, flash_range.clone(), 0, PageState::PartialOpen)?
+            find_first_page(flash, flash_range.clone(), 0, PageState::PartialOpen).await?
         {
             #[cfg(feature = "defmt")]
             defmt::trace!("Partial open page found: {}", partial_open_page);
@@ -289,7 +270,8 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
                 flash,
                 flash_range.clone(),
                 next_page::<S>(flash_range.clone(), partial_open_page),
-            )?
+            )
+            .await?
             .is_open()
             {
                 // Oh oh, the next page which serves as the buffer page is not open. We're corrupt.
@@ -318,11 +300,13 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
                 page_data_start_address,
                 page_data_end_address,
                 item_data_length as u32,
-            )?;
+            )
+            .await?;
 
             match free_spot_address {
                 Some(free_spot_address) => {
-                    Item::write_new(flash, free_spot_address, &data_buffer[..item_data_length])?;
+                    Item::write_new(flash, free_spot_address, &data_buffer[..item_data_length])
+                        .await?;
 
                     #[cfg(feature = "defmt")]
                     defmt::trace!("Item has been written ok");
@@ -337,7 +321,7 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
                     );
 
                     // The item doesn't fit here, so we need to close this page and move to the next
-                    close_page(flash, flash_range.clone(), partial_open_page)?;
+                    close_page(flash, flash_range.clone(), partial_open_page).await?;
                     Some(next_page::<S>(flash_range.clone(), partial_open_page))
                 }
             }
@@ -355,7 +339,8 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
 
         match next_page_to_use {
             Some(next_page_to_use) => {
-                let next_page_state = get_page_state(flash, flash_range.clone(), next_page_to_use)?;
+                let next_page_state =
+                    get_page_state(flash, flash_range.clone(), next_page_to_use).await?;
 
                 if !next_page_state.is_open() {
                     // What was the previous buffer page was not open...
@@ -368,11 +353,11 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
                 // Since we're gonna write data here, let's already partially close the page
                 // This could be done after moving the data, but this is more robust in the
                 // face of shutdowns and cancellations
-                partial_close_page(flash, flash_range.clone(), next_page_to_use)?;
+                partial_close_page(flash, flash_range.clone(), next_page_to_use).await?;
 
                 let next_buffer_page = next_page::<S>(flash_range.clone(), next_page_to_use);
                 let next_buffer_page_state =
-                    get_page_state(flash, flash_range.clone(), next_buffer_page)?;
+                    get_page_state(flash, flash_range.clone(), next_buffer_page).await?;
 
                 if !next_buffer_page_state.is_open() {
                     migrate_items::<I, _>(
@@ -381,13 +366,14 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
                         data_buffer,
                         next_buffer_page,
                         next_page_to_use,
-                    )?;
+                    )
+                    .await?;
                 }
             }
             None => {
                 // There's no partial open page, so we just gotta turn the first open page into a partial open one
                 let first_open_page =
-                    match find_first_page(flash, flash_range.clone(), 0, PageState::Open)? {
+                    match find_first_page(flash, flash_range.clone(), 0, PageState::Open).await? {
                         Some(first_open_page) => first_open_page,
                         None => {
                             #[cfg(feature = "defmt")]
@@ -405,12 +391,12 @@ pub fn store_item<I: StorageItem, S: NorFlash>(
                         }
                     };
 
-                partial_close_page(flash, flash_range.clone(), first_open_page)?;
+                partial_close_page(flash, flash_range.clone(), first_open_page).await?;
             }
         }
 
         // If we get here, we just freshly partially closed a new page, so this should succeed
-        store_item_inner::<I, S>(flash, flash_range, data_buffer, item, recursion_level + 1)
+        recursion_level += 1;
     }
 }
 
@@ -519,7 +505,7 @@ impl<S: PartialEq, I: PartialEq> PartialEq for MapError<I, S> {
     }
 }
 
-fn migrate_items<I: StorageItem, S: NorFlash>(
+async fn migrate_items<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     data_buffer: &mut [u8],
@@ -532,47 +518,35 @@ fn migrate_items<I: StorageItem, S: NorFlash>(
     let mut next_page_write_address =
         calculate_page_address::<S>(flash_range.clone(), target_page) + S::WORD_SIZE as u32;
 
-    if let Some(e) = read_items(
-        flash,
+    let mut it = ItemIter::new(
         calculate_page_address::<S>(flash_range.clone(), source_page) + S::WORD_SIZE as u32,
         calculate_page_end_address::<S>(flash_range.clone(), source_page) - S::WORD_SIZE as u32,
-        data_buffer,
-        |flash, item, item_address| {
-            let key = I::deserialize_key_only(item.data())
-                .map_err(MapError::Item)
-                .to_controlflow()?;
-            let (item_header, data_buffer) = item.destruct();
+    );
+    while let Some((item, item_address)) = it.next(flash, data_buffer).await? {
+        let key = I::deserialize_key_only(item.data()).map_err(MapError::Item)?;
+        let (item_header, data_buffer) = item.destruct();
 
-            // Search for the newest item with the key we found
-            let Some((_, found_address, _)) =
-                fetch_item_with_location::<I, S>(flash, flash_range.clone(), data_buffer, key)
-                    .to_controlflow()?
-            else {
-                // We couldn't even find our own item?
-                return ControlFlow::Break(MapError::Corrupted {
-                    #[cfg(feature = "_test")]
-                    backtrace: std::backtrace::Backtrace::capture(),
-                });
-            };
+        // Search for the newest item with the key we found
+        let Some((_, found_address, _)) =
+            fetch_item_with_location::<I, S>(flash, flash_range.clone(), data_buffer, key).await?
+        else {
+            // We couldn't even find our own item?
+            return Err(MapError::Corrupted {
+                #[cfg(feature = "_test")]
+                backtrace: std::backtrace::Backtrace::capture(),
+            });
+        };
 
-            if found_address == item_address {
-                // The newest item with this key is the item we're about to erase
-                // This means we need to copy it over to the next_page_to_use
-                let item = item_header
-                    .read_item(flash, data_buffer, item_address, u32::MAX)
-                    .to_controlflow()?
-                    .unwrap()
-                    .to_controlflow()?;
-                item.write(flash, next_page_write_address)
-                    .to_controlflow()?;
-                next_page_write_address =
-                    item.header.next_item_address::<S>(next_page_write_address);
-            }
-
-            ControlFlow::<MapError<_, S::Error>, ()>::Continue(())
-        },
-    )? {
-        return Err(e);
+        if found_address == item_address {
+            // The newest item with this key is the item we're about to erase
+            // This means we need to copy it over to the next_page_to_use
+            let item = item_header
+                .read_item(flash, data_buffer, item_address, u32::MAX)
+                .await?
+                .unwrap()?;
+            item.write(flash, next_page_write_address).await?;
+            next_page_write_address = item.header.next_item_address::<S>(next_page_write_address);
+        }
     }
 
     flash
@@ -580,6 +554,7 @@ fn migrate_items<I: StorageItem, S: NorFlash>(
             calculate_page_address::<S>(flash_range.clone(), source_page),
             calculate_page_end_address::<S>(flash_range.clone(), source_page),
         )
+        .await
         .map_err(|e| MapError::Storage {
             value: e,
             #[cfg(feature = "_test")]
@@ -599,19 +574,22 @@ fn migrate_items<I: StorageItem, S: NorFlash>(
 /// If this function or the function call after this crate returns [Error::Corrupted], then it's unlikely
 /// that the state can be recovered. To at least make everything function again at the cost of losing the data,
 /// erase the flash range.
-pub fn try_repair<I: StorageItem, S: NorFlash>(
+pub async fn try_repair<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     data_buffer: &mut [u8],
 ) -> Result<(), MapError<I::Error, S::Error>> {
-    crate::try_general_repair(flash, flash_range.clone())?;
+    crate::try_general_repair(flash, flash_range.clone()).await?;
 
     // Let's check if we corrupted in the middle of a migration
     if let Some(partial_open_page) =
-        find_first_page(flash, flash_range.clone(), 0, PageState::PartialOpen)?
+        find_first_page(flash, flash_range.clone(), 0, PageState::PartialOpen).await?
     {
         let buffer_page = next_page::<S>(flash_range.clone(), partial_open_page);
-        if !get_page_state(flash, flash_range.clone(), buffer_page)?.is_open() {
+        if !get_page_state(flash, flash_range.clone(), buffer_page)
+            .await?
+            .is_open()
+        {
             // Yes, the migration got interrupted. Let's redo it.
             // To do that, we erase the partial open page first because it contains incomplete data.
             flash
@@ -619,6 +597,7 @@ pub fn try_repair<I: StorageItem, S: NorFlash>(
                     calculate_page_address::<S>(flash_range.clone(), partial_open_page),
                     calculate_page_end_address::<S>(flash_range.clone(), partial_open_page),
                 )
+                .await
                 .map_err(|e| MapError::Storage {
                     value: e,
                     #[cfg(feature = "_test")]
@@ -626,7 +605,7 @@ pub fn try_repair<I: StorageItem, S: NorFlash>(
                 })?;
 
             // Then partially close it again
-            partial_close_page(flash, flash_range.clone(), partial_open_page)?;
+            partial_close_page(flash, flash_range.clone(), partial_open_page).await?;
 
             migrate_items::<I, _>(
                 flash,
@@ -634,7 +613,8 @@ pub fn try_repair<I: StorageItem, S: NorFlash>(
                 data_buffer,
                 buffer_page,
                 partial_open_page,
-            )?;
+            )
+            .await?;
         }
     }
 
@@ -644,6 +624,7 @@ pub fn try_repair<I: StorageItem, S: NorFlash>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::executor::block_on;
 
     type MockFlashBig = mock_flash::MockFlashBase<4, 4, 256>;
     type MockFlashTiny = mock_flash::MockFlashBase<2, 1, 32>;
@@ -723,26 +704,34 @@ mod tests {
 
         let mut data_buffer = [0; 128];
 
-        let item =
-            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), &mut data_buffer, 0)
-                .unwrap();
+        let item = block_on(fetch_item::<MockStorageItem, _>(
+            &mut flash,
+            flash_range.clone(),
+            &mut data_buffer,
+            0,
+        ))
+        .unwrap();
         assert_eq!(item, None);
 
-        let item =
-            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), &mut data_buffer, 60)
-                .unwrap();
+        let item = block_on(fetch_item::<MockStorageItem, _>(
+            &mut flash,
+            flash_range.clone(),
+            &mut data_buffer,
+            60,
+        ))
+        .unwrap();
         assert_eq!(item, None);
 
-        let item = fetch_item::<MockStorageItem, _>(
+        let item = block_on(fetch_item::<MockStorageItem, _>(
             &mut flash,
             flash_range.clone(),
             &mut data_buffer,
             0xFF,
-        )
+        ))
         .unwrap();
         assert_eq!(item, None);
 
-        store_item::<_, _>(
+        block_on(store_item::<_, _>(
             &mut flash,
             flash_range.clone(),
             &mut data_buffer,
@@ -750,9 +739,9 @@ mod tests {
                 key: 0,
                 value: vec![5],
             },
-        )
+        ))
         .unwrap();
-        store_item::<_, _>(
+        block_on(store_item::<_, _>(
             &mut flash,
             flash_range.clone(),
             &mut data_buffer,
@@ -760,17 +749,21 @@ mod tests {
                 key: 0,
                 value: vec![5, 6],
             },
-        )
+        ))
         .unwrap();
 
-        let item =
-            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), &mut data_buffer, 0)
-                .unwrap()
-                .unwrap();
+        let item = block_on(fetch_item::<MockStorageItem, _>(
+            &mut flash,
+            flash_range.clone(),
+            &mut data_buffer,
+            0,
+        ))
+        .unwrap()
+        .unwrap();
         assert_eq!(item.key, 0);
         assert_eq!(item.value, vec![5, 6]);
 
-        store_item::<_, _>(
+        block_on(store_item::<_, _>(
             &mut flash,
             flash_range.clone(),
             &mut data_buffer,
@@ -778,25 +771,33 @@ mod tests {
                 key: 1,
                 value: vec![2, 2, 2, 2, 2, 2],
             },
-        )
+        ))
         .unwrap();
 
-        let item =
-            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), &mut data_buffer, 0)
-                .unwrap()
-                .unwrap();
+        let item = block_on(fetch_item::<MockStorageItem, _>(
+            &mut flash,
+            flash_range.clone(),
+            &mut data_buffer,
+            0,
+        ))
+        .unwrap()
+        .unwrap();
         assert_eq!(item.key, 0);
         assert_eq!(item.value, vec![5, 6]);
 
-        let item =
-            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), &mut data_buffer, 1)
-                .unwrap()
-                .unwrap();
+        let item = block_on(fetch_item::<MockStorageItem, _>(
+            &mut flash,
+            flash_range.clone(),
+            &mut data_buffer,
+            1,
+        ))
+        .unwrap()
+        .unwrap();
         assert_eq!(item.key, 1);
         assert_eq!(item.value, vec![2, 2, 2, 2, 2, 2]);
 
         for index in 0..4000 {
-            store_item::<_, _>(
+            block_on(store_item::<_, _>(
                 &mut flash,
                 flash_range.clone(),
                 &mut data_buffer,
@@ -804,17 +805,17 @@ mod tests {
                     key: (index % 10) as u8,
                     value: vec![(index % 10) as u8 * 2; index % 10],
                 },
-            )
+            ))
             .unwrap();
         }
 
         for i in 0..10 {
-            let item = fetch_item::<MockStorageItem, _>(
+            let item = block_on(fetch_item::<MockStorageItem, _>(
                 &mut flash,
                 flash_range.clone(),
                 &mut data_buffer,
                 i,
-            )
+            ))
             .unwrap()
             .unwrap();
             assert_eq!(item.key, i);
@@ -822,7 +823,7 @@ mod tests {
         }
 
         for _ in 0..4000 {
-            store_item::<_, _>(
+            block_on(store_item::<_, _>(
                 &mut flash,
                 flash_range.clone(),
                 &mut data_buffer,
@@ -830,17 +831,17 @@ mod tests {
                     key: 11,
                     value: vec![0; 10],
                 },
-            )
+            ))
             .unwrap();
         }
 
         for i in 0..10 {
-            let item = fetch_item::<MockStorageItem, _>(
+            let item = block_on(fetch_item::<MockStorageItem, _>(
                 &mut flash,
                 flash_range.clone(),
                 &mut data_buffer,
                 i,
-            )
+            ))
             .unwrap()
             .unwrap();
             assert_eq!(item.key, i);
@@ -867,11 +868,17 @@ mod tests {
             };
             println!("Storing {item:?}");
 
-            store_item::<_, _>(&mut tiny_flash, 0x00..0x40, &mut data_buffer, item).unwrap();
+            block_on(store_item::<_, _>(
+                &mut tiny_flash,
+                0x00..0x40,
+                &mut data_buffer,
+                item,
+            ))
+            .unwrap();
         }
 
         assert_eq!(
-            store_item::<_, _>(
+            block_on(store_item::<_, _>(
                 &mut tiny_flash,
                 0x00..0x40,
                 &mut data_buffer,
@@ -879,17 +886,17 @@ mod tests {
                     key: UPPER_BOUND,
                     value: vec![0; UPPER_BOUND as usize],
                 },
-            ),
+            )),
             Err(MapError::FullStorage)
         );
 
         for i in 0..UPPER_BOUND {
-            let item = fetch_item::<MockStorageItem, _>(
+            let item = block_on(fetch_item::<MockStorageItem, _>(
                 &mut tiny_flash,
                 0x00..0x40,
                 &mut data_buffer,
                 i as u8,
-            )
+            ))
             .unwrap()
             .unwrap();
 
@@ -913,11 +920,17 @@ mod tests {
             };
             println!("Storing {item:?}");
 
-            store_item::<_, _>(&mut big_flash, 0x0000..0x1000, &mut data_buffer, item).unwrap();
+            block_on(store_item::<_, _>(
+                &mut big_flash,
+                0x0000..0x1000,
+                &mut data_buffer,
+                item,
+            ))
+            .unwrap();
         }
 
         assert_eq!(
-            store_item::<_, _>(
+            block_on(store_item::<_, _>(
                 &mut big_flash,
                 0x0000..0x1000,
                 &mut data_buffer,
@@ -925,17 +938,17 @@ mod tests {
                     key: UPPER_BOUND,
                     value: vec![0; UPPER_BOUND as usize],
                 },
-            ),
+            )),
             Err(MapError::FullStorage)
         );
 
         for i in 0..UPPER_BOUND {
-            let item = fetch_item::<MockStorageItem, _>(
+            let item = block_on(fetch_item::<MockStorageItem, _>(
                 &mut big_flash,
                 0x0000..0x1000,
                 &mut data_buffer,
                 i as u8,
-            )
+            ))
             .unwrap()
             .unwrap();
 
@@ -961,17 +974,23 @@ mod tests {
                     value: vec![i as u8; LENGHT_PER_KEY[i]],
                 };
 
-                store_item::<_, _>(&mut flash, 0x0000..0x4000, &mut data_buffer, item).unwrap();
+                block_on(store_item::<_, _>(
+                    &mut flash,
+                    0x0000..0x4000,
+                    &mut data_buffer,
+                    item,
+                ))
+                .unwrap();
             }
         }
 
         for i in 0..24 {
-            let item = fetch_item::<MockStorageItem, _>(
+            let item = block_on(fetch_item::<MockStorageItem, _>(
                 &mut flash,
                 0x0000..0x4000,
                 &mut data_buffer,
                 i as u8,
-            )
+            ))
             .unwrap()
             .unwrap();
 

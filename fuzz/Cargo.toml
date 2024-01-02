@@ -13,6 +13,7 @@ sequential-storage = { path = "..", features = ["_test"] }
 arbitrary = { version = "1.2.2", features = ["derive"] }
 rand = "0.8.5"
 rand_pcg = "0.3.1"
+futures = { version = "0.3.30", features = ["executor"] }
 
 # Prevent this from interfering with workspaces
 [workspace]

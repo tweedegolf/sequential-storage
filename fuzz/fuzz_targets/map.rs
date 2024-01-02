@@ -1,5 +1,6 @@
 #![no_main]
 
+use futures::executor::block_on;
 use libfuzzer_sys::arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use rand::SeedableRng;
@@ -117,12 +118,12 @@ fn fuzz(ops: Input) {
             match op.clone() {
                 Op::Store(op) => {
                     let item = op.into_test_item(&mut rng);
-                    match sequential_storage::map::store_item(
+                    match block_on(sequential_storage::map::store_item(
                         &mut flash,
                         FLASH_RANGE,
                         &mut buf,
                         item.clone(),
-                    ) {
+                    )) {
                         Ok(_) => {
                             map.insert(item.key, item.value);
                         }
@@ -131,12 +132,12 @@ fn fuzz(ops: Input) {
                             value: MockFlashError::EarlyShutoff(_),
                             backtrace: _backtrace,
                         }) => {
-                            match sequential_storage::map::fetch_item::<TestItem, _>(
+                            match block_on(sequential_storage::map::fetch_item::<TestItem, _>(
                                 &mut flash,
                                 FLASH_RANGE,
                                 &mut buf,
                                 item.key,
-                            ) {
+                            )) {
                                 Ok(Some(check_item))
                                     if check_item.key == item.key
                                         && check_item.value == item.value =>
@@ -161,11 +162,11 @@ fn fuzz(ops: Input) {
                                 "### Encountered curruption while storing! Repairing now. Originated from:\n{_backtrace:#}"
                             );
 
-                            sequential_storage::map::try_repair::<TestItem, _>(
+                            block_on(sequential_storage::map::try_repair::<TestItem, _>(
                                 &mut flash,
                                 FLASH_RANGE,
                                 &mut buf,
-                            )
+                            ))
                             .unwrap();
                             corruption_repaired = true;
                             retry = true;
@@ -174,12 +175,12 @@ fn fuzz(ops: Input) {
                     }
                 }
                 Op::Fetch(key) => {
-                    match sequential_storage::map::fetch_item::<TestItem, _>(
+                    match block_on(sequential_storage::map::fetch_item::<TestItem, _>(
                         &mut flash,
                         FLASH_RANGE,
                         &mut buf,
                         key,
-                    ) {
+                    )) {
                         Ok(Some(fetch_result)) => {
                             let map_value = map
                                 .get(&key)
@@ -207,11 +208,11 @@ fn fuzz(ops: Input) {
                                 "### Encountered curruption while fetching! Repairing now. Originated from:\n{_backtrace:#}"
                             );
 
-                            sequential_storage::map::try_repair::<TestItem, _>(
+                            block_on(sequential_storage::map::try_repair::<TestItem, _>(
                                 &mut flash,
                                 FLASH_RANGE,
                                 &mut buf,
-                            )
+                            ))
                             .unwrap();
                             corruption_repaired = true;
                             retry = true;

@@ -1,5 +1,5 @@
 use core::ops::Range;
-use embedded_storage::nor_flash::{
+use embedded_storage_async::nor_flash::{
     ErrorType, MultiwriteNorFlash, NorFlash, NorFlashError, NorFlashErrorKind, ReadNorFlash,
 };
 
@@ -102,10 +102,24 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
         }
     }
 
+    pub(crate) async fn write_aligned<const SIZE: usize>(
+        &mut self,
+        offset: u32,
+        bytes: &[u8],
+    ) -> Result<(), MockFlashError> {
+        #[repr(align(4))]
+        struct AlignedBuf<const SIZE: usize>([u8; SIZE]);
+
+        let mut buf = AlignedBuf([0; SIZE]);
+        buf.0[..bytes.len()].copy_from_slice(bytes);
+        self.write(offset, &buf.0[..bytes.len()]).await
+    }
+
     #[cfg(feature = "_test")]
     /// Print all items in flash to the returned string
     pub fn print_items(&mut self) -> String {
         use crate::NorFlashExt;
+        use futures::executor::block_on;
         use std::fmt::Write;
 
         let mut buf = [0; 1024 * 16];
@@ -119,7 +133,11 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
             writeln!(
                 s,
                 "  Page {page_index} ({}):",
-                match crate::get_page_state(self, Self::FULL_FLASH_RANGE, page_index) {
+                match block_on(crate::get_page_state(
+                    self,
+                    Self::FULL_FLASH_RANGE,
+                    page_index
+                )) {
                     Ok(value) => format!("{value:?}"),
                     Err(e) => format!("Error ({e:?})"),
                 }
@@ -132,24 +150,20 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
                 crate::calculate_page_end_address::<Self>(Self::FULL_FLASH_RANGE, page_index)
                     - Self::WORD_SIZE as u32;
 
-            crate::item::read_item_headers(
-                self,
-                page_data_start,
-                page_data_end,
-                |flash, header, item_address| {
-                    let next_item_address = header.next_item_address::<Self>(item_address);
-                    let maybe_item = header
-                        .read_item(flash, &mut buf, item_address, page_data_end)
+            let mut it = crate::item::HeaderIter::new(page_data_start, page_data_end);
+            while let (Some(header), item_address) =
+                block_on(it.traverse(self, |_, _| core::ops::ControlFlow::Break(()))).unwrap()
+            {
+                let next_item_address = header.next_item_address::<Self>(item_address);
+                let maybe_item =
+                    block_on(header.read_item(self, &mut buf, item_address, page_data_end))
                         .unwrap();
-                    writeln!(
-                        s,
-                        "   Item {maybe_item:?} at {item_address}..{next_item_address}"
-                    )
-                    .unwrap();
-                    core::ops::ControlFlow::<(), ()>::Continue(())
-                },
-            )
-            .unwrap();
+                writeln!(
+                    s,
+                    "   Item {maybe_item:?} at {item_address}..{next_item_address}"
+                )
+                .unwrap();
+            }
         }
 
         s
@@ -162,7 +176,10 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
     /// - If true, the item is present and fine.
     /// - If false, the item is corrupt or erased.
     pub fn get_item_presence(&mut self, target_item_address: u32) -> Option<bool> {
+        use core::ops::ControlFlow;
+
         use crate::NorFlashExt;
+        use futures::executor::block_on;
 
         if !Self::FULL_FLASH_RANGE.contains(&target_item_address) {
             return None;
@@ -180,36 +197,32 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
             crate::calculate_page_end_address::<Self>(Self::FULL_FLASH_RANGE, page_index)
                 - Self::WORD_SIZE as u32;
 
-        let found_item = crate::item::read_item_headers(
-            self,
-            page_data_start,
-            page_data_end,
-            |flash, header, item_address| {
-                let next_item_address = header.next_item_address::<Self>(item_address);
+        let mut found_item = None;
+        let mut it = crate::item::HeaderIter::new(page_data_start, page_data_end);
+        while let (Some(header), item_address) =
+            block_on(it.traverse(self, |_, _| ControlFlow::Break(()))).unwrap()
+        {
+            let next_item_address = header.next_item_address::<Self>(item_address);
 
-                if (item_address..next_item_address).contains(&target_item_address) {
-                    let maybe_item = header
-                        .read_item(flash, &mut buf, item_address, page_data_end)
+            if (item_address..next_item_address).contains(&target_item_address) {
+                let maybe_item =
+                    block_on(header.read_item(self, &mut buf, item_address, page_data_end))
                         .unwrap();
 
-                    match maybe_item {
-                        crate::item::MaybeItem::Corrupted(_, _)
-                        | crate::item::MaybeItem::Erased(_) => {
-                            core::ops::ControlFlow::Break(Some(false))
-                        }
-                        crate::item::MaybeItem::Present(_) => {
-                            core::ops::ControlFlow::Break(Some(true))
-                        }
+                match maybe_item {
+                    crate::item::MaybeItem::Corrupted(_, _) | crate::item::MaybeItem::Erased(_) => {
+                        found_item.replace(false);
+                        break;
                     }
-                } else {
-                    core::ops::ControlFlow::Continue(())
+                    crate::item::MaybeItem::Present(_) => {
+                        found_item.replace(true);
+                        break;
+                    }
                 }
-            },
-        )
-        .unwrap()
-        .0;
+            }
+        }
 
-        found_item.flatten()
+        found_item
     }
 }
 
@@ -224,7 +237,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> R
 {
     const READ_SIZE: usize = BYTES_PER_WORD;
 
-    fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
+    async fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
         self.reads += 1;
 
         if bytes.len() % Self::READ_SIZE != 0 {
@@ -255,7 +268,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
 
     const ERASE_SIZE: usize = Self::PAGE_BYTES;
 
-    fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
+    async fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
         self.erases += 1;
 
         let from = from as usize;
@@ -283,10 +296,14 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
         Ok(())
     }
 
-    fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
+    async fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
         self.writes += 1;
 
         let range = Self::validate_operation(offset, bytes.len())?;
+
+        if bytes.as_ptr() as usize % Self::WRITE_SIZE != 0 {
+            panic!("write buffer must be aligned to Self::WRITE_SIZE bytes");
+        }
 
         if bytes.len() % Self::WRITE_SIZE != 0 {
             panic!("any write must be a multiple of Self::WRITE_SIZE bytes");

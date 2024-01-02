@@ -25,12 +25,12 @@ use core::num::NonZeroU32;
 use core::ops::ControlFlow;
 use core::ops::Range;
 
-use embedded_storage::nor_flash::{MultiwriteNorFlash, NorFlash};
+use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
 
 use crate::{
     calculate_page_address, calculate_page_end_address, get_page_state, round_down_to_alignment,
-    round_down_to_alignment_usize, round_up_to_alignment, round_up_to_alignment_usize, Error,
-    NorFlashExt, PageState, MAX_WORD_SIZE,
+    round_down_to_alignment_usize, round_up_to_alignment, round_up_to_alignment_usize, AlignedBuf,
+    Error, NorFlashExt, PageState, MAX_WORD_SIZE,
 };
 
 #[derive(Debug)]
@@ -47,7 +47,7 @@ impl ItemHeader {
     const LENGTH_FIELD: Range<usize> = 4..6;
     const LENGTH_CRC_FIELD: Range<usize> = 6..8;
 
-    pub fn read_new<S: NorFlash>(
+    pub async fn read_new<S: NorFlash>(
         flash: &mut S,
         address: u32,
         end_address: u32,
@@ -61,6 +61,7 @@ impl ItemHeader {
 
         flash
             .read(address, header_slice)
+            .await
             .map_err(|e| Error::Storage {
                 value: e,
                 #[cfg(feature = "_test")]
@@ -94,7 +95,7 @@ impl ItemHeader {
         }))
     }
 
-    pub fn read_item<'d, S: NorFlash>(
+    pub async fn read_item<'d, S: NorFlash>(
         self,
         flash: &mut S,
         data_buffer: &'d mut [u8],
@@ -115,6 +116,7 @@ impl ItemHeader {
 
                 flash
                     .read(data_address, &mut data_buffer[..read_len])
+                    .await
                     .map_err(|e| Error::Storage {
                         value: e,
                         #[cfg(feature = "_test")]
@@ -136,20 +138,21 @@ impl ItemHeader {
         }
     }
 
-    fn write<S: NorFlash>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
-        let mut buffer = [0xFF; MAX_WORD_SIZE];
+    async fn write<S: NorFlash>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
+        let mut buffer = AlignedBuf([0xFF; MAX_WORD_SIZE]);
 
-        buffer[Self::DATA_CRC_FIELD]
+        buffer.0[Self::DATA_CRC_FIELD]
             .copy_from_slice(&self.crc.map(|crc| crc.get()).unwrap_or(0).to_le_bytes());
-        buffer[Self::LENGTH_FIELD].copy_from_slice(&self.length.to_le_bytes());
-        buffer[Self::LENGTH_CRC_FIELD]
+        buffer.0[Self::LENGTH_FIELD].copy_from_slice(&self.length.to_le_bytes());
+        buffer.0[Self::LENGTH_CRC_FIELD]
             .copy_from_slice(&crc16(&self.length.to_le_bytes()).to_le_bytes());
 
         flash
             .write(
                 address,
-                &buffer[..round_up_to_alignment_usize::<S>(Self::LENGTH)],
+                &buffer.0[..round_up_to_alignment_usize::<S>(Self::LENGTH)],
             )
+            .await
             .map_err(|e| Error::Storage {
                 value: e,
                 #[cfg(feature = "_test")]
@@ -157,13 +160,13 @@ impl ItemHeader {
             })
     }
 
-    pub fn erase_data<S: MultiwriteNorFlash>(
+    pub async fn erase_data<S: MultiwriteNorFlash>(
         mut self,
         flash: &mut S,
         address: u32,
     ) -> Result<Self, Error<S::Error>> {
         self.crc = None;
-        self.write(flash, address)?;
+        self.write(flash, address).await?;
         Ok(self)
     }
 
@@ -201,7 +204,7 @@ impl<'d> Item<'d> {
         (self.header, self.data_buffer)
     }
 
-    pub fn write_new<S: NorFlash>(
+    pub async fn write_new<S: NorFlash>(
         flash: &mut S,
         address: u32,
         data: &'d [u8],
@@ -211,24 +214,25 @@ impl<'d> Item<'d> {
             crc: Some(adapted_crc32(data)),
         };
 
-        Self::write_raw(&header, data, flash, address)?;
+        Self::write_raw(&header, data, flash, address).await?;
 
         Ok(header)
     }
 
-    fn write_raw<S: NorFlash>(
+    async fn write_raw<S: NorFlash>(
         header: &ItemHeader,
         data: &[u8],
         flash: &mut S,
         address: u32,
     ) -> Result<(), Error<S::Error>> {
-        header.write(flash, address)?;
+        header.write(flash, address).await?;
 
         let (data_block, data_left) = data.split_at(round_down_to_alignment_usize::<S>(data.len()));
 
         let data_address = ItemHeader::data_address::<S>(address);
         flash
             .write(data_address, data_block)
+            .await
             .map_err(|e| Error::Storage {
                 value: e,
                 #[cfg(feature = "_test")]
@@ -236,13 +240,14 @@ impl<'d> Item<'d> {
             })?;
 
         if !data_left.is_empty() {
-            let mut buffer = [0; MAX_WORD_SIZE];
-            buffer[..data_left.len()].copy_from_slice(data_left);
+            let mut buffer = AlignedBuf([0; MAX_WORD_SIZE]);
+            buffer.0[..data_left.len()].copy_from_slice(data_left);
             flash
                 .write(
                     data_address + data_block.len() as u32,
-                    &buffer[..round_up_to_alignment_usize::<S>(data_left.len())],
+                    &buffer.0[..round_up_to_alignment_usize::<S>(data_left.len())],
                 )
+                .await
                 .map_err(|e| Error::Storage {
                     value: e,
                     #[cfg(feature = "_test")]
@@ -253,8 +258,12 @@ impl<'d> Item<'d> {
         Ok(())
     }
 
-    pub fn write<S: NorFlash>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
-        Self::write_raw(&self.header, self.data(), flash, address)
+    pub async fn write<S: NorFlash>(
+        &self,
+        flash: &mut S,
+        address: u32,
+    ) -> Result<(), Error<S::Error>> {
+        Self::write_raw(&self.header, self.data(), flash, address).await
     }
 }
 
@@ -270,88 +279,17 @@ impl<'d> core::fmt::Debug for Item<'d> {
     }
 }
 
-/// Reads all item headers between the start and end address.
-///
-/// The callback is called with the flash, the found header and the address at which the item starts.
-/// The callback can return break with a value to stop the iteration. That value is then returned by this function.
-///
-/// The return value also includes the next item address.
-pub fn read_item_headers<S: NorFlash, R>(
-    flash: &mut S,
-    start_address: u32,
-    end_address: u32,
-    mut callback: impl FnMut(&mut S, ItemHeader, u32) -> ControlFlow<R, ()>,
-) -> Result<(Option<R>, u32), Error<S::Error>> {
-    let mut current_address = start_address;
-
-    loop {
-        if current_address >= end_address {
-            return Ok((None, current_address));
-        }
-
-        match ItemHeader::read_new(flash, current_address, end_address) {
-            Ok(Some(header)) => {
-                let next_address = header.next_item_address::<S>(current_address);
-
-                match callback(flash, header, current_address) {
-                    ControlFlow::Continue(_) => {}
-                    ControlFlow::Break(r) => return Ok((Some(r), next_address)),
-                }
-
-                current_address = next_address;
-            }
-            Ok(None) => return Ok((None, current_address)),
-            Err(Error::Corrupted { .. }) => {
-                current_address = ItemHeader::data_address::<S>(current_address);
-            }
-            Err(e) => return Err(e),
-        };
-    }
-}
-
-pub fn read_items<S: NorFlash, R>(
-    flash: &mut S,
-    start_address: u32,
-    end_address: u32,
-    data_buffer: &mut [u8],
-    mut callback: impl FnMut(&mut S, Item<'_>, u32) -> ControlFlow<R, ()>,
-) -> Result<Option<R>, Error<S::Error>> {
-    read_item_headers(
-        flash,
-        start_address,
-        end_address,
-        |flash, header, address| match header.read_item(flash, data_buffer, address, end_address) {
-            Ok(MaybeItem::Corrupted(_, _)) => {
-                #[cfg(feature = "defmt")]
-                defmt::error!("Found a corrupted item at {:X}. Skipping...", address);
-                ControlFlow::Continue(())
-            }
-            Ok(MaybeItem::Erased(_)) => ControlFlow::Continue(()),
-            Ok(MaybeItem::Present(item)) => match callback(flash, item, address) {
-                ControlFlow::Continue(_) => ControlFlow::Continue(()),
-                ControlFlow::Break(r) => ControlFlow::Break(Ok(r)),
-            },
-            Err(e) => ControlFlow::Break(Err(e)),
-        },
-    )?
-    .0
-    .transpose()
-}
-
 /// Scans through the items to find the first spot that is free to store a new item.
 ///
 /// - `end_address` is exclusive.
-pub fn find_next_free_item_spot<S: NorFlash>(
+pub async fn find_next_free_item_spot<S: NorFlash>(
     flash: &mut S,
     start_address: u32,
     end_address: u32,
     data_length: u32,
 ) -> Result<Option<u32>, Error<S::Error>> {
-    let (_, free_item_address) =
-        read_item_headers(flash, start_address, end_address, |_, _, _| {
-            ControlFlow::<(), ()>::Continue(())
-        })?;
-
+    let mut it = HeaderIter::new(start_address, end_address);
+    let (_, free_item_address) = it.traverse(flash, |_, _| ControlFlow::Continue(())).await?;
     if let Some(available) = ItemHeader::available_data_bytes::<S>(end_address - free_item_address)
     {
         if available >= data_length {
@@ -463,7 +401,7 @@ fn crc32_with_initial(data: &[u8], initial: u32) -> u32 {
 ///
 /// The page state can optionally be given if it's already known.
 /// In that case the state will not be checked again.
-pub fn is_page_empty<S: NorFlash>(
+pub async fn is_page_empty<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     page_index: usize,
@@ -471,7 +409,7 @@ pub fn is_page_empty<S: NorFlash>(
 ) -> Result<bool, Error<S::Error>> {
     let page_state = match page_state {
         Some(page_state) => page_state,
-        None => get_page_state::<S>(flash, flash_range.clone(), page_index)?,
+        None => get_page_state::<S>(flash, flash_range.clone(), page_index).await?,
     };
 
     match page_state {
@@ -482,20 +420,127 @@ pub fn is_page_empty<S: NorFlash>(
                 calculate_page_end_address::<S>(flash_range.clone(), page_index)
                     - S::WORD_SIZE as u32;
 
-            Ok(read_item_headers(
-                flash,
-                page_data_start_address,
-                page_data_end_address,
-                |_, header, _| match header.crc {
+            let mut it = HeaderIter::new(page_data_start_address, page_data_end_address);
+            Ok(it
+                .traverse(flash, |header, _| match header.crc {
                     Some(_) => ControlFlow::Break(()),
                     None => ControlFlow::Continue(()),
-                },
-            )?
-            .0
-            .is_none())
+                })
+                .await?
+                .0
+                .is_none())
         }
         PageState::PartialOpen => Ok(false),
         PageState::Open => Ok(true),
+    }
+}
+
+pub struct ItemIter {
+    header: HeaderIter,
+}
+
+impl ItemIter {
+    pub fn new(start_address: u32, end_address: u32) -> Self {
+        Self {
+            header: HeaderIter::new(start_address, end_address),
+        }
+    }
+
+    pub async fn next<'m, S: NorFlash>(
+        &mut self,
+        flash: &mut S,
+        data_buffer: &'m mut [u8],
+    ) -> Result<Option<(Item<'m>, u32)>, Error<S::Error>> {
+        while let (Some(header), address) = self.header.next(flash).await? {
+            let data_buffer = unsafe {
+                core::slice::from_raw_parts_mut(data_buffer.as_mut_ptr(), data_buffer.len())
+            };
+
+            match header
+                .read_item(flash, data_buffer, address, self.header.end_address)
+                .await?
+            {
+                MaybeItem::Corrupted { .. } => {
+                    #[cfg(feature = "defmt")]
+                    defmt::error!(
+                        "Found a corrupted item at {:X}. Skipping...",
+                        self.header.current_address
+                    );
+                    continue;
+                }
+                MaybeItem::Erased(_) => {}
+                MaybeItem::Present(item) => {
+                    return Ok(Some((item, address)));
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
+pub struct HeaderIter {
+    current_address: u32,
+    end_address: u32,
+}
+
+impl HeaderIter {
+    pub fn new(start_address: u32, end_address: u32) -> Self {
+        Self {
+            current_address: start_address,
+            end_address,
+        }
+    }
+
+    /// Fetch next item
+    pub async fn next<S: NorFlash>(
+        &mut self,
+        flash: &mut S,
+    ) -> Result<(Option<ItemHeader>, u32), Error<S::Error>> {
+        self.traverse(flash, |_, _| ControlFlow::Break(())).await
+    }
+
+    /// Traverse all headers until the callback determines the next element.
+    ///
+    /// If the end of the headers is reached, a `None` item header is returned.
+    pub async fn traverse<S: NorFlash>(
+        &mut self,
+        flash: &mut S,
+        callback: impl Fn(&ItemHeader, u32) -> ControlFlow<(), ()>,
+    ) -> Result<(Option<ItemHeader>, u32), Error<S::Error>> {
+        if self.current_address >= self.end_address {
+            return Ok((None, self.current_address));
+        }
+
+        loop {
+            match ItemHeader::read_new(flash, self.current_address, self.end_address).await {
+                Ok(Some(header)) => {
+                    let next_address = header.next_item_address::<S>(self.current_address);
+                    match callback(&header, self.current_address) {
+                        ControlFlow::Continue(_) => {
+                            self.current_address = next_address;
+                            continue;
+                        }
+                        ControlFlow::Break(_) => {
+                            let current_address = self.current_address;
+                            self.current_address = next_address;
+                            return Ok((Some(header), current_address));
+                        }
+                    }
+                }
+                Ok(None) => {
+                    return Ok((None, self.current_address));
+                }
+                Err(Error::Corrupted { .. }) => {
+                    #[cfg(feature = "defmt")]
+                    defmt::error!(
+                        "Found a corrupted item header at {:X}. Skipping...",
+                        self.current_address
+                    );
+                    self.current_address += S::WORD_SIZE as u32;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 }
 
