@@ -82,6 +82,14 @@ When using peek_many, you can look at all data from oldest to newest.
 
 (DD-MM-YY)
 
+### Unreleased
+
+- *Breaking* Data CRC has been upgraded to 32-bit from 16-bit. Turns out 16-bit has too many collisions.
+  This increases the item header size from 6 to 8. The CRC was also moved to the front of the header to
+  aid with shutdown/cancellation issues.
+- When the state is corrupted, many issues can now be repaired with the repair functions in the map and queue modules
+- Made changes to the entire to better survive shutoffs
+
 ### 0.6.2 - 22-12-23
 
 - Small bug fixes and refactorings including an off-by-one error. Found with added fuzzing from ([#13](https://github.com/tweedegolf/sequential-storage/pull/13))

@@ -27,6 +27,33 @@ pub mod mock_flash;
 /// Many flashes have 4-byte or 1-byte words.
 const MAX_WORD_SIZE: usize = 32;
 
+fn try_general_repair<S: NorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+) -> Result<(), Error<S::Error>> {
+    // Loop through the pages and get their state. If one returns the corrupted error,
+    // the page is likely half-erased. Fix for that is to re-erase again to hopefully finish the job.
+    for page_index in get_pages::<S>(flash_range.clone(), 0) {
+        if matches!(
+            get_page_state(flash, flash_range.clone(), page_index),
+            Err(Error::Corrupted { .. })
+        ) {
+            flash
+                .erase(
+                    calculate_page_address::<S>(flash_range.clone(), page_index),
+                    calculate_page_end_address::<S>(flash_range.clone(), page_index),
+                )
+                .map_err(|e| Error::Storage {
+                    value: e,
+                    #[cfg(feature = "_test")]
+                    backtrace: std::backtrace::Backtrace::capture(),
+                })?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Find the first page that is in the given page state.
 ///
 /// The search starts at starting_page_index (and wraps around back to 0 if required)
@@ -100,51 +127,51 @@ fn get_page_state<S: NorFlash>(
     page_index: usize,
 ) -> Result<PageState, Error<S::Error>> {
     let page_address = calculate_page_address::<S>(flash_range, page_index);
-    let half_marker_bits = (S::READ_SIZE * 8 / 2) as u32;
+    /// We only care about the data in the first byte to aid shutdown/cancellation.
+    /// But we also don't want it to be too too definitive because we want to survive the occasional bitflip.
+    /// So only half of the byte needs to be zero.
+    const HALF_MARKER_BITS: u32 = 4;
 
     let mut buffer = [0; MAX_WORD_SIZE];
     flash
         .read(page_address, &mut buffer[..S::READ_SIZE])
-        .map_err(Error::Storage)?;
-    let start_marker_zero_bits = buffer[..S::READ_SIZE]
+        .map_err(|e| Error::Storage {
+            value: e,
+            #[cfg(feature = "_test")]
+            backtrace: std::backtrace::Backtrace::capture(),
+        })?;
+    let start_marked = buffer[..S::READ_SIZE]
         .iter()
         .map(|marker_byte| marker_byte.count_zeros())
-        .sum::<u32>();
-
-    if start_marker_zero_bits < half_marker_bits {
-        // More bits are erased than written to 0
-        #[cfg(feature = "defmt")]
-        defmt::trace!("Page {} is open", page_index);
-
-        // The page start is not marked, so it is unused
-        return Ok(PageState::Open);
-    }
-
-    // The page start is marked, so it can be full or partially full
-    // We need to look at the end marker to know
+        .sum::<u32>()
+        >= HALF_MARKER_BITS;
 
     flash
         .read(
             page_address + (S::ERASE_SIZE - S::READ_SIZE) as u32,
             &mut buffer[..S::READ_SIZE],
         )
-        .map_err(Error::Storage)?;
-    let end_marker_zero_bits = buffer[..S::READ_SIZE]
+        .map_err(|e| Error::Storage {
+            value: e,
+            #[cfg(feature = "_test")]
+            backtrace: std::backtrace::Backtrace::capture(),
+        })?;
+    let end_marked = buffer[..S::READ_SIZE]
         .iter()
         .map(|marker_byte| marker_byte.count_zeros())
-        .sum::<u32>();
+        .sum::<u32>()
+        >= HALF_MARKER_BITS;
 
-    if end_marker_zero_bits < half_marker_bits {
-        #[cfg(feature = "defmt")]
-        defmt::trace!("Page {} is partial open", page_index);
-        // The page end is not marked, so it is only partially filled and thus open
-        return Ok(PageState::PartialOpen);
+    match (start_marked, end_marked) {
+        (true, true) => Ok(PageState::Closed),
+        (true, false) => Ok(PageState::PartialOpen),
+        // Probably an interrupted erase
+        (false, true) => Err(Error::Corrupted {
+            #[cfg(feature = "_test")]
+            backtrace: std::backtrace::Backtrace::capture(),
+        }),
+        (false, false) => Ok(PageState::Open),
     }
-
-    #[cfg(feature = "defmt")]
-    defmt::trace!("Page {} is closed", page_index);
-    // Both start and end are marked, so this page is closed
-    Ok(PageState::Closed)
 }
 
 /// Fully closes a page by writing both the start and end marker
@@ -166,7 +193,11 @@ fn close_page<S: NorFlash>(
             calculate_page_end_address::<S>(flash_range, page_index) - S::WORD_SIZE as u32,
             &buffer[..S::WORD_SIZE],
         )
-        .map_err(Error::Storage)?;
+        .map_err(|e| Error::Storage {
+            value: e,
+            #[cfg(feature = "_test")]
+            backtrace: std::backtrace::Backtrace::capture(),
+        })?;
 
     Ok(())
 }
@@ -190,7 +221,11 @@ fn partial_close_page<S: NorFlash>(
             calculate_page_address::<S>(flash_range, page_index),
             &buffer[..S::WORD_SIZE],
         )
-        .map_err(Error::Storage)?;
+        .map_err(|e| Error::Storage {
+            value: e,
+            #[cfg(feature = "_test")]
+            backtrace: std::backtrace::Backtrace::capture(),
+        })?;
 
     Ok(match current_state {
         PageState::Closed => PageState::Closed,
@@ -239,21 +274,43 @@ impl PageState {
 
 /// The main error type
 #[non_exhaustive]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error<S> {
     /// An error in the storage (flash)
-    Storage(S),
+    Storage {
+        /// The error value
+        value: S,
+        #[cfg(feature = "_test")]
+        /// Backtrace made at the construction of the error
+        backtrace: std::backtrace::Backtrace,
+    },
     /// The item cannot be stored anymore because the storage is full.
     /// If you get this error some data may be lost.
     FullStorage,
     /// It's been detected that the memory is likely corrupted.
     /// You may want to erase the memory to recover.
-    Corrupted,
+    Corrupted {
+        #[cfg(feature = "_test")]
+        /// Backtrace made at the construction of the error
+        backtrace: std::backtrace::Backtrace,
+    },
     /// A provided buffer was to big to be used
     BufferTooBig,
     /// A provided buffer was to small to be used (usize is size needed)
     BufferTooSmall(usize),
+}
+
+impl<S: PartialEq> PartialEq for Error<S> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Storage { value: l_value, .. }, Self::Storage { value: r_value, .. }) => {
+                l_value == r_value
+            }
+            (Self::BufferTooSmall(l0), Self::BufferTooSmall(r0)) => l0 == r0,
+            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
+        }
+    }
 }
 
 /// Round up the the given number to align with the wordsize of the flash.
