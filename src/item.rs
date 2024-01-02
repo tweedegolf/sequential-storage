@@ -302,12 +302,7 @@ pub fn read_item_headers<S: NorFlash, R>(
             }
             Ok(None) => return Ok((None, current_address)),
             Err(Error::Corrupted { .. }) => {
-                #[cfg(feature = "defmt")]
-                defmt::error!(
-                    "Found a corrupted item header at {:X}. Skipping...",
-                    current_address
-                );
-                current_address += S::WORD_SIZE as u32;
+                current_address = ItemHeader::data_address::<S>(current_address);
             }
             Err(e) => return Err(e),
         };
@@ -355,56 +350,21 @@ pub fn find_next_free_item_spot<S: NorFlash>(
     end_address: u32,
     data_length: u32,
 ) -> Result<Option<u32>, Error<S::Error>> {
-    let mut current_address = start_address;
-    let mut corruption_detected = false;
+    let (_, free_item_address) =
+        read_item_headers(flash, start_address, end_address, |_, _, _| {
+            ControlFlow::<(), ()>::Continue(())
+        })?;
 
-    while current_address + data_length < end_address {
-        match ItemHeader::read_new(flash, current_address, end_address) {
-            Ok(Some(header)) => current_address = header.next_item_address::<S>(current_address),
-            Ok(None) => {
-                if ItemHeader::data_address::<S>(current_address)
-                    + round_up_to_alignment::<S>(data_length)
-                    > end_address
-                {
-                    // Item does not fit anymore between the current address and the end address
-                    return Ok(None);
-                } else {
-                    if corruption_detected {
-                        // We need to read ahead to see if the data portion is clear
-                        let data_start = ItemHeader::data_address::<S>(current_address);
-                        let data_end = data_start + round_up_to_alignment::<S>(data_length);
-                        let mut buffer = [0; MAX_WORD_SIZE];
-
-                        for address in (data_start..data_end).step_by(MAX_WORD_SIZE) {
-                            let buffer_slice =
-                                &mut buffer[..((data_end - address) as usize).min(MAX_WORD_SIZE)];
-                            flash
-                                .read(address, buffer_slice)
-                                .map_err(|e| Error::Storage {
-                                    value: e,
-                                    #[cfg(feature = "_test")]
-                                    backtrace: std::backtrace::Backtrace::capture(),
-                                })?;
-
-                            if buffer_slice.iter().any(|byte| *byte != 0xFF) {
-                                current_address = address + MAX_WORD_SIZE as u32;
-                                continue;
-                            }
-                        }
-                    }
-
-                    return Ok(Some(current_address));
-                }
-            }
-            Err(Error::Corrupted { .. }) => {
-                current_address += S::WORD_SIZE as u32;
-                corruption_detected = true;
-            }
-            Err(e) => return Err(e),
+    if let Some(available) = ItemHeader::available_data_bytes::<S>(end_address - free_item_address)
+    {
+        if available >= data_length {
+            Ok(Some(free_item_address))
+        } else {
+            Ok(None)
         }
+    } else {
+        Ok(None)
     }
-
-    Ok(None)
 }
 
 pub enum MaybeItem<'d> {
