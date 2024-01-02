@@ -127,7 +127,10 @@ fn get_page_state<S: NorFlash>(
     page_index: usize,
 ) -> Result<PageState, Error<S::Error>> {
     let page_address = calculate_page_address::<S>(flash_range, page_index);
-    let half_marker_bits = (S::READ_SIZE * 8 / 2) as u32;
+    /// We only care about the data in the first byte to aid shutdown/cancellation.
+    /// But we also don't want it to be too too definitive because we want to survive the occasional bitflip.
+    /// So only half of the byte needs to be zero.
+    const HALF_MARKER_BITS: u32 = 4;
 
     let mut buffer = [0; MAX_WORD_SIZE];
     flash
@@ -141,7 +144,7 @@ fn get_page_state<S: NorFlash>(
         .iter()
         .map(|marker_byte| marker_byte.count_zeros())
         .sum::<u32>()
-        >= half_marker_bits;
+        >= HALF_MARKER_BITS;
 
     flash
         .read(
@@ -157,7 +160,7 @@ fn get_page_state<S: NorFlash>(
         .iter()
         .map(|marker_byte| marker_byte.count_zeros())
         .sum::<u32>()
-        >= half_marker_bits;
+        >= HALF_MARKER_BITS;
 
     match (start_marked, end_marked) {
         (true, true) => Ok(PageState::Closed),

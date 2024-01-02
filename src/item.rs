@@ -1,12 +1,13 @@
 //! Module that implements storing raw items in flash.
-//! This module is page-unaware.
+//! This module is page-unaware. This means that start and end addresses should be the actual
+//! start and end addresses that don't include the page markers.
 //!
 //! Memory layout of item:
 //! ```text
 //! ┌──────┬──────┬──────┬──────┬──────┬──────┬──────┬──────┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
-//! │      :      │      :      │      :      :      :      │  :  :  :  :  :  │  :  :  :  :  :  :  :  :  :  │  :  :  :  :  :  │
-//! │   Length    │   Length'   │            CRC            │Pad to word align│            Data             │Pad to word align│
-//! │      :      │      :      │      :      :      :      │  :  :  :  :  :  │  :  :  :  :  :   :  :  :  : │  :  :  :  :  :  │
+//! │      :      :      :      │      :      │      :      │  :  :  :  :  :  │  :  :  :  :  :  :  :  :  :  │  :  :  :  :  :  │
+//! │            CRC            │   Length    │   Length'   │Pad to word align│            Data             │Pad to word align│
+//! │      :      :      :      │      :      │      :      │  :  :  :  :  :  │  :  :  :  :  :   :  :  :  : │  :  :  :  :  :  │
 //! └──────┴──────┴──────┴──────┴──────┴──────┴──────┴──────┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴───┴──┴──┴──┴─┴──┴──┴──┴──┴──┴──┘
 //! 0      1      2      3      4      5      6      7      8                 8+padding                     8+padding+length  8+padding+length+endpadding
 //! ```
@@ -16,7 +17,8 @@
 //! and a crc field that encodes the checksum of the data.
 //!
 //! If the crc is 0, then the item is counted as being erased.
-//! The crc is calculated by [crc32] which never produces a 0 value on its own.
+//! The crc is calculated by [adapted_crc32] which never produces a 0 value on its own
+//! and has some other modifications to make corruption less likely to happen.
 //!
 
 use core::num::NonZeroU32;
@@ -39,7 +41,11 @@ pub struct ItemHeader {
 }
 
 impl ItemHeader {
-    pub(crate) const LENGTH: usize = 8;
+    const LENGTH: usize = 8;
+
+    const DATA_CRC_FIELD: Range<usize> = 0..4;
+    const LENGTH_FIELD: Range<usize> = 4..6;
+    const LENGTH_CRC_FIELD: Range<usize> = 6..8;
 
     pub fn read_new<S: NorFlash>(
         flash: &mut S,
@@ -66,8 +72,9 @@ impl ItemHeader {
             return Ok(None);
         }
 
-        let length_crc = u16::from_le_bytes(header_slice[2..4].try_into().unwrap());
-        let calculated_length_crc = crc16(&header_slice[0..2]);
+        let length_crc =
+            u16::from_le_bytes(header_slice[Self::LENGTH_CRC_FIELD].try_into().unwrap());
+        let calculated_length_crc = crc16(&header_slice[Self::LENGTH_FIELD]);
 
         if calculated_length_crc != length_crc {
             return Err(Error::Corrupted {
@@ -77,9 +84,9 @@ impl ItemHeader {
         }
 
         Ok(Some(Self {
-            length: u16::from_le_bytes(header_slice[0..2].try_into().unwrap()),
+            length: u16::from_le_bytes(header_slice[Self::LENGTH_FIELD].try_into().unwrap()),
             crc: {
-                match u32::from_le_bytes(header_slice[4..8].try_into().unwrap()) {
+                match u32::from_le_bytes(header_slice[Self::DATA_CRC_FIELD].try_into().unwrap()) {
                     0 => None,
                     value => Some(NonZeroU32::new(value).unwrap()),
                 }
@@ -115,10 +122,7 @@ impl ItemHeader {
                     })?;
 
                 let data = &data_buffer[..self.length as usize];
-                let data_crc = match crc32(data) {
-                    0 => NonZeroU32::new(1).unwrap(),
-                    other => NonZeroU32::new(other).unwrap(),
-                };
+                let data_crc = adapted_crc32(data);
 
                 if data_crc == header_crc {
                     Ok(MaybeItem::Present(Item {
@@ -135,9 +139,11 @@ impl ItemHeader {
     fn write<S: NorFlash>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
         let mut buffer = [0xFF; MAX_WORD_SIZE];
 
-        buffer[0..2].copy_from_slice(&self.length.to_le_bytes());
-        buffer[2..4].copy_from_slice(&crc16(&self.length.to_le_bytes()).to_le_bytes());
-        buffer[4..8].copy_from_slice(&self.crc.map(|crc| crc.get()).unwrap_or(0).to_le_bytes());
+        buffer[Self::DATA_CRC_FIELD]
+            .copy_from_slice(&self.crc.map(|crc| crc.get()).unwrap_or(0).to_le_bytes());
+        buffer[Self::LENGTH_FIELD].copy_from_slice(&self.length.to_le_bytes());
+        buffer[Self::LENGTH_CRC_FIELD]
+            .copy_from_slice(&crc16(&self.length.to_le_bytes()).to_le_bytes());
 
         flash
             .write(
@@ -202,10 +208,7 @@ impl<'d> Item<'d> {
     ) -> Result<ItemHeader, Error<S::Error>> {
         let header = ItemHeader {
             length: data.len() as u16,
-            crc: Some(match crc32(data) {
-                0 => NonZeroU32::new(1).unwrap(),
-                other => NonZeroU32::new(other).unwrap(),
-            }),
+            crc: Some(adapted_crc32(data)),
         };
 
         Self::write_raw(&header, data, flash, address)?;
@@ -454,6 +457,21 @@ fn crc16(data: &[u8]) -> u16 {
     match crc {
         0xFFFF => 0xFFFE,
         other => other,
+    }
+}
+
+/// Calculate the crc32 of the data as used by the crate.
+fn adapted_crc32(data: &[u8]) -> NonZeroU32 {
+    match crc32(data) {
+        // CRC may not be 0 as that already means 'erased'
+        0 => NonZeroU32::new(1).unwrap(),
+        // To aid in early shutoff/cancellation, we make sure that if the first byte of
+        // the crc is erased, it has to be wrong already.
+        // Also, if the first byte is written, it must not be all 0xFF.
+        value if value.to_le_bytes()[0] == 0 || value.to_le_bytes()[0] == 0xFF => {
+            NonZeroU32::new(value ^ 1).unwrap()
+        }
+        value => NonZeroU32::new(value).unwrap(),
     }
 }
 

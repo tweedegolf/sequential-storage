@@ -296,27 +296,30 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
             .chunks_exact(BYTES_PER_WORD)
             .zip(range.step_by(BYTES_PER_WORD))
         {
-            let word_writable = &mut self.writable[address / BYTES_PER_WORD];
-            *word_writable = match (*word_writable, self.write_count_check) {
-                (v, WriteCountCheck::Disabled) => v,
-                (Writable::T, _) => Writable::O,
-                (Writable::O, WriteCountCheck::Twice) => Writable::N,
-                (Writable::O, WriteCountCheck::TwiceDifferent)
-                    if source_word == &self.data[address..][..BYTES_PER_WORD] =>
-                {
-                    Writable::O
-                }
-                (Writable::O, WriteCountCheck::TwiceDifferent) => Writable::N,
-                (Writable::O, WriteCountCheck::TwiceWithZero)
-                    if source_word.iter().all(|b| *b == 0) =>
-                {
-                    Writable::N
-                }
-                _ => return Err(MockFlashError::NotWritable(address as u32)),
-            };
-
             for (byte_index, byte) in source_word.iter().enumerate() {
                 self.check_shutoff((address + byte_index) as u32, "write")?;
+
+                if byte_index == 0 {
+                    let word_writable = &mut self.writable[address / BYTES_PER_WORD];
+                    *word_writable = match (*word_writable, self.write_count_check) {
+                        (v, WriteCountCheck::Disabled) => v,
+                        (Writable::T, _) => Writable::O,
+                        (Writable::O, WriteCountCheck::Twice) => Writable::N,
+                        (Writable::O, WriteCountCheck::TwiceDifferent)
+                            if source_word == &self.data[address..][..BYTES_PER_WORD] =>
+                        {
+                            Writable::O
+                        }
+                        (Writable::O, WriteCountCheck::TwiceDifferent) => Writable::N,
+                        (Writable::O, WriteCountCheck::TwiceWithZero)
+                            if source_word.iter().all(|b| *b == 0) =>
+                        {
+                            Writable::N
+                        }
+                        _ => return Err(MockFlashError::NotWritable(address as u32)),
+                    };
+                }
+
                 self.as_bytes_mut()[address + byte_index] &= byte;
             }
         }
