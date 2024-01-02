@@ -106,8 +106,6 @@
 
 use core::ops::ControlFlow;
 
-use embedded_storage::nor_flash::MultiwriteNorFlash;
-
 use crate::item::{find_next_free_item_spot, read_items, Item, ItemHeader};
 
 use super::*;
@@ -601,7 +599,7 @@ fn migrate_items<I: StorageItem, S: NorFlash>(
 /// If this function or the function call after this crate returns [Error::Corrupted], then it's unlikely
 /// that the state can be recovered. To at least make everything function again at the cost of losing the data,
 /// erase the flash range.
-pub fn try_repair<I: StorageItem, S: MultiwriteNorFlash>(
+pub fn try_repair<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     data_buffer: &mut [u8],
