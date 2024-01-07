@@ -102,19 +102,6 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
         }
     }
 
-    pub(crate) async fn write_aligned<const SIZE: usize>(
-        &mut self,
-        offset: u32,
-        bytes: &[u8],
-    ) -> Result<(), MockFlashError> {
-        #[repr(align(4))]
-        struct AlignedBuf<const SIZE: usize>([u8; SIZE]);
-
-        let mut buf = AlignedBuf([0; SIZE]);
-        buf.0[..bytes.len()].copy_from_slice(bytes);
-        self.write(offset, &buf.0[..bytes.len()]).await
-    }
-
     #[cfg(feature = "_test")]
     /// Print all items in flash to the returned string
     pub fn print_items(&mut self) -> String {

@@ -27,6 +27,10 @@ pub mod mock_flash;
 /// Many flashes have 4-byte or 1-byte words.
 const MAX_WORD_SIZE: usize = 32;
 
+// Type representing buffer aligned to 4 byte boundary.
+#[repr(align(4))]
+pub(crate) struct AlignedBuf<const SIZE: usize>(pub(crate) [u8; SIZE]);
+
 async fn try_general_repair<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
@@ -54,10 +58,6 @@ async fn try_general_repair<S: NorFlash>(
 
     Ok(())
 }
-
-/// Align the given buffer to the word size of the flash.
-#[repr(align(4))]
-struct AlignedBuf([u8; MAX_WORD_SIZE]);
 
 /// Find the first page that is in the given page state.
 ///
@@ -390,6 +390,16 @@ mod tests {
 
     type MockFlash = mock_flash::MockFlashBase<4, 4, 64>;
 
+    fn write_aligned(
+        flash: &mut MockFlash,
+        offset: u32,
+        bytes: &[u8],
+    ) -> Result<(), mock_flash::MockFlashError> {
+        let mut buf = AlignedBuf([0; 256]);
+        buf.0[..bytes.len()].copy_from_slice(bytes);
+        block_on(flash.write(offset, &buf.0[..bytes.len()]))
+    }
+
     #[test]
     fn test_find_pages() {
         // Page setup:
@@ -400,13 +410,13 @@ mod tests {
 
         let mut flash = MockFlash::default();
         // Page 0 markers
-        block_on(flash.write_aligned::<256>(0x000, &[MARKER, 0, 0, 0])).unwrap();
-        block_on(flash.write_aligned::<256>(0x100 - 4, &[0, 0, 0, MARKER])).unwrap();
+        write_aligned(&mut flash, 0x000, &[MARKER, 0, 0, 0]).unwrap();
+        write_aligned(&mut flash, 0x100 - 4, &[0, 0, 0, MARKER]).unwrap();
         // Page 1 markers
-        block_on(flash.write_aligned::<256>(0x100, &[MARKER, 0, 0, 0])).unwrap();
-        block_on(flash.write_aligned::<256>(0x200 - 4, &[0, 0, 0, MARKER])).unwrap();
+        write_aligned(&mut flash, 0x100, &[MARKER, 0, 0, 0]).unwrap();
+        write_aligned(&mut flash, 0x200 - 4, &[0, 0, 0, MARKER]).unwrap();
         // Page 2 markers
-        block_on(flash.write_aligned::<256>(0x200, &[MARKER, 0, 0, 0])).unwrap();
+        write_aligned(&mut flash, 0x200, &[MARKER, 0, 0, 0]).unwrap();
 
         assert_eq!(
             block_on(find_first_page(
