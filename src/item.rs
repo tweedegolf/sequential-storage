@@ -288,8 +288,9 @@ pub async fn find_next_free_item_spot<S: NorFlash>(
     end_address: u32,
     data_length: u32,
 ) -> Result<Option<u32>, Error<S::Error>> {
-    let mut it = HeaderIter::new(start_address, end_address);
-    let (_, free_item_address) = it.traverse(flash, |_, _| ControlFlow::Continue(())).await?;
+    let (_, free_item_address) = HeaderIter::new(start_address, end_address)
+        .traverse(flash, |_, _| ControlFlow::Continue(()))
+        .await?;
     if let Some(available) = ItemHeader::available_data_bytes::<S>(end_address - free_item_address)
     {
         if available >= data_length {
