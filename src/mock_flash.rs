@@ -288,8 +288,10 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
 
         let range = Self::validate_operation(offset, bytes.len())?;
 
-        if bytes.as_ptr() as usize % Self::WRITE_SIZE != 0 {
-            panic!("write buffer must be aligned to Self::WRITE_SIZE bytes");
+        // Check alignment. Some flash types are strict about the alignment of the input buffer. This ensures
+        // that the mock flash is also strict to catch bugs and avoid regressions.
+        if bytes.as_ptr() as usize % 4 != 0 {
+            panic!("write buffer must be aligned to 4 bytes");
         }
 
         if bytes.len() % Self::WRITE_SIZE != 0 {
