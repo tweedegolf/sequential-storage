@@ -687,7 +687,7 @@ mod tests {
         let flash_range = 0x00..0x40;
         let mut data_buffer = [0; 1024];
 
-        for i in 0..1 {
+        for i in 0..2000 {
             println!("{i}");
             let data = vec![i as u8; i % 20 + 1];
 
