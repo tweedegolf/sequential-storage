@@ -141,16 +141,16 @@ impl ItemHeader {
     async fn write<S: NorFlash>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
         let mut buffer = AlignedBuf([0xFF; MAX_WORD_SIZE]);
 
-        buffer.0[Self::DATA_CRC_FIELD]
+        buffer[Self::DATA_CRC_FIELD]
             .copy_from_slice(&self.crc.map(|crc| crc.get()).unwrap_or(0).to_le_bytes());
-        buffer.0[Self::LENGTH_FIELD].copy_from_slice(&self.length.to_le_bytes());
-        buffer.0[Self::LENGTH_CRC_FIELD]
+        buffer[Self::LENGTH_FIELD].copy_from_slice(&self.length.to_le_bytes());
+        buffer[Self::LENGTH_CRC_FIELD]
             .copy_from_slice(&crc16(&self.length.to_le_bytes()).to_le_bytes());
 
         flash
             .write(
                 address,
-                &buffer.0[..round_up_to_alignment_usize::<S>(Self::LENGTH)],
+                &buffer[..round_up_to_alignment_usize::<S>(Self::LENGTH)],
             )
             .await
             .map_err(|e| Error::Storage {
@@ -241,11 +241,11 @@ impl<'d> Item<'d> {
 
         if !data_left.is_empty() {
             let mut buffer = AlignedBuf([0; MAX_WORD_SIZE]);
-            buffer.0[..data_left.len()].copy_from_slice(data_left);
+            buffer[..data_left.len()].copy_from_slice(data_left);
             flash
                 .write(
                     data_address + data_block.len() as u32,
-                    &buffer.0[..round_up_to_alignment_usize::<S>(data_left.len())],
+                    &buffer[..round_up_to_alignment_usize::<S>(data_left.len())],
                 )
                 .await
                 .map_err(|e| Error::Storage {

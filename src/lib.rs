@@ -9,7 +9,7 @@
 
 use core::{
     fmt::Debug,
-    ops::{ControlFlow, Range},
+    ops::{ControlFlow, Deref, DerefMut, Range},
 };
 use embedded_storage_async::nor_flash::NorFlash;
 
@@ -30,6 +30,18 @@ const MAX_WORD_SIZE: usize = 32;
 // Type representing buffer aligned to 4 byte boundary.
 #[repr(align(4))]
 pub(crate) struct AlignedBuf<const SIZE: usize>(pub(crate) [u8; SIZE]);
+impl<const SIZE: usize> Deref for AlignedBuf<SIZE> {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<const SIZE: usize> DerefMut for AlignedBuf<SIZE> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 async fn try_general_repair<S: NorFlash>(
     flash: &mut S,
@@ -198,7 +210,7 @@ async fn close_page<S: NorFlash>(
     flash
         .write(
             calculate_page_end_address::<S>(flash_range, page_index) - S::WORD_SIZE as u32,
-            &buffer.0[..S::WORD_SIZE],
+            &buffer[..S::WORD_SIZE],
         )
         .await
         .map_err(|e| Error::Storage {
@@ -227,7 +239,7 @@ async fn partial_close_page<S: NorFlash>(
     flash
         .write(
             calculate_page_address::<S>(flash_range, page_index),
-            &buffer.0[..S::WORD_SIZE],
+            &buffer[..S::WORD_SIZE],
         )
         .await
         .map_err(|e| Error::Storage {
@@ -396,8 +408,8 @@ mod tests {
         bytes: &[u8],
     ) -> Result<(), mock_flash::MockFlashError> {
         let mut buf = AlignedBuf([0; 256]);
-        buf.0[..bytes.len()].copy_from_slice(bytes);
-        block_on(flash.write(offset, &buf.0[..bytes.len()]))
+        buf[..bytes.len()].copy_from_slice(bytes);
+        block_on(flash.write(offset, &buf[..bytes.len()]))
     }
 
     #[test]
