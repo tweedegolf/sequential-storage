@@ -530,12 +530,7 @@ impl ItemHeaderIter {
                     return Ok((None, self.current_address));
                 }
                 Err(Error::Corrupted { .. }) => {
-                    #[cfg(feature = "defmt")]
-                    defmt::error!(
-                        "Found a corrupted item header at {:X}. Skipping...",
-                        self.current_address
-                    );
-                    self.current_address += S::WORD_SIZE as u32;
+                    self.current_address = ItemHeader::data_address::<S>(self.current_address);
                 }
                 Err(e) => return Err(e),
             }
