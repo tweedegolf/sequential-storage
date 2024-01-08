@@ -98,7 +98,9 @@ fn fuzz(ops: Input) {
     const FLASH_RANGE: Range<u32> = 0x000..0x1000;
 
     let mut map = HashMap::new();
-    let mut buf = [0; 260]; // Max length of test item serialized, rounded up to align to flash word.
+    #[repr(align(4))]
+    struct AlignedBuf([u8; 260]);
+    let mut buf = AlignedBuf([0; 260]); // Max length of test item serialized, rounded up to align to flash word.
 
     let mut rng = rand_pcg::Pcg32::seed_from_u64(ops.seed);
 
@@ -121,7 +123,7 @@ fn fuzz(ops: Input) {
                     match block_on(sequential_storage::map::store_item(
                         &mut flash,
                         FLASH_RANGE,
-                        &mut buf,
+                        &mut buf.0,
                         item.clone(),
                     )) {
                         Ok(_) => {
@@ -135,7 +137,7 @@ fn fuzz(ops: Input) {
                             match block_on(sequential_storage::map::fetch_item::<TestItem, _>(
                                 &mut flash,
                                 FLASH_RANGE,
-                                &mut buf,
+                                &mut buf.0,
                                 item.key,
                             )) {
                                 Ok(Some(check_item))
@@ -165,7 +167,7 @@ fn fuzz(ops: Input) {
                             block_on(sequential_storage::map::try_repair::<TestItem, _>(
                                 &mut flash,
                                 FLASH_RANGE,
-                                &mut buf,
+                                &mut buf.0,
                             ))
                             .unwrap();
                             corruption_repaired = true;
@@ -178,7 +180,7 @@ fn fuzz(ops: Input) {
                     match block_on(sequential_storage::map::fetch_item::<TestItem, _>(
                         &mut flash,
                         FLASH_RANGE,
-                        &mut buf,
+                        &mut buf.0,
                         key,
                     )) {
                         Ok(Some(fetch_result)) => {
@@ -211,7 +213,7 @@ fn fuzz(ops: Input) {
                             block_on(sequential_storage::map::try_repair::<TestItem, _>(
                                 &mut flash,
                                 FLASH_RANGE,
-                                &mut buf,
+                                &mut buf.0,
                             ))
                             .unwrap();
                             corruption_repaired = true;
