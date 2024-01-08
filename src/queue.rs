@@ -375,13 +375,7 @@ impl<'d, S: NorFlash> QueueIterator<'d, S> {
             // Search for the first item with data
             let mut it = ItemHeaderIter::new(current_address, page_data_end_address);
             if let (Some(found_item_header), found_item_address) = it
-                .traverse(self.flash, |header, _| {
-                    if header.crc.is_some() {
-                        ControlFlow::Break(())
-                    } else {
-                        ControlFlow::Continue(())
-                    }
-                })
+                .traverse(self.flash, |header, _| header.crc.is_none())
                 .await?
             {
                 let maybe_item = found_item_header
@@ -477,7 +471,7 @@ pub async fn find_max_fit<S: NorFlash>(
         calculate_page_end_address::<S>(flash_range.clone(), current_page) - S::WORD_SIZE as u32;
 
     let next_item_address = ItemHeaderIter::new(page_data_start_address, page_data_end_address)
-        .traverse(flash, |_, _| ControlFlow::Continue(()))
+        .traverse(flash, |_, _| true)
         .await?
         .1;
 

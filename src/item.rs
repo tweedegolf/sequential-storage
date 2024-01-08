@@ -22,7 +22,6 @@
 //!
 
 use core::num::NonZeroU32;
-use core::ops::ControlFlow;
 use core::ops::Range;
 
 use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
@@ -289,7 +288,7 @@ pub async fn find_next_free_item_spot<S: NorFlash>(
     data_length: u32,
 ) -> Result<Option<u32>, Error<S::Error>> {
     let (_, free_item_address) = ItemHeaderIter::new(start_address, end_address)
-        .traverse(flash, |_, _| ControlFlow::Continue(()))
+        .traverse(flash, |_, _| true)
         .await?;
     if let Some(available) = ItemHeader::available_data_bytes::<S>(end_address - free_item_address)
     {
@@ -423,10 +422,7 @@ pub async fn is_page_empty<S: NorFlash>(
 
             Ok(
                 ItemHeaderIter::new(page_data_start_address, page_data_end_address)
-                    .traverse(flash, |header, _| match header.crc {
-                        Some(_) => ControlFlow::Break(()),
-                        None => ControlFlow::Continue(()),
-                    })
+                    .traverse(flash, |header, _| header.crc.is_none())
                     .await?
                     .0
                     .is_none(),
@@ -498,32 +494,28 @@ impl ItemHeaderIter {
         &mut self,
         flash: &mut S,
     ) -> Result<(Option<ItemHeader>, u32), Error<S::Error>> {
-        self.traverse(flash, |_, _| ControlFlow::Break(())).await
+        self.traverse(flash, |_, _| false).await
     }
 
-    /// Traverse headers until the callback returns `Break`. If the callback returns `Continue`,
+    /// Traverse headers until the callback returns false. If the callback returns true,
     /// the element is skipped and traversal continues.
     ///
     /// If the end of the headers is reached, a `None` item header is returned.
     pub async fn traverse<S: NorFlash>(
         &mut self,
         flash: &mut S,
-        callback: impl Fn(&ItemHeader, u32) -> ControlFlow<(), ()>,
+        callback: impl Fn(&ItemHeader, u32) -> bool,
     ) -> Result<(Option<ItemHeader>, u32), Error<S::Error>> {
         loop {
             match ItemHeader::read_new(flash, self.current_address, self.end_address).await {
                 Ok(Some(header)) => {
                     let next_address = header.next_item_address::<S>(self.current_address);
-                    match callback(&header, self.current_address) {
-                        ControlFlow::Continue(_) => {
-                            self.current_address = next_address;
-                            continue;
-                        }
-                        ControlFlow::Break(_) => {
-                            let current_address = self.current_address;
-                            self.current_address = next_address;
-                            return Ok((Some(header), current_address));
-                        }
+                    if callback(&header, self.current_address) {
+                        self.current_address = next_address;
+                    } else {
+                        let current_address = self.current_address;
+                        self.current_address = next_address;
+                        return Ok((Some(header), current_address));
                     }
                 }
                 Ok(None) => {

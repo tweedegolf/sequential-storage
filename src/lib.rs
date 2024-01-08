@@ -9,7 +9,7 @@
 
 use core::{
     fmt::Debug,
-    ops::{ControlFlow, Deref, DerefMut, Range},
+    ops::{Deref, DerefMut, Range},
 };
 use embedded_storage_async::nor_flash::NorFlash;
 
@@ -375,24 +375,6 @@ impl<S: NorFlash> NorFlashExt for S {
     } else {
         Self::READ_SIZE
     };
-}
-
-/// Some plumbing for things not yet stable in std/core
-trait ResultToControlflow<B, C> {
-    fn to_controlflow(self) -> ControlFlow<B, C>;
-}
-
-impl<B, C, E> ResultToControlflow<B, C> for Result<C, E>
-where
-    // T: Into<C>,
-    E: Into<B>,
-{
-    fn to_controlflow(self) -> ControlFlow<B, C> {
-        match self {
-            Ok(c) => ControlFlow::Continue(c),
-            Err(b) => ControlFlow::Break(b.into()),
-        }
-    }
 }
 
 #[cfg(test)]

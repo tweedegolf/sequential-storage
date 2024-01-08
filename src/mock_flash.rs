@@ -139,7 +139,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
 
             let mut it = crate::item::ItemHeaderIter::new(page_data_start, page_data_end);
             while let (Some(header), item_address) =
-                block_on(it.traverse(self, |_, _| core::ops::ControlFlow::Break(()))).unwrap()
+                block_on(it.traverse(self, |_, _| false)).unwrap()
             {
                 let next_item_address = header.next_item_address::<Self>(item_address);
                 let maybe_item =
@@ -163,8 +163,6 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
     /// - If true, the item is present and fine.
     /// - If false, the item is corrupt or erased.
     pub fn get_item_presence(&mut self, target_item_address: u32) -> Option<bool> {
-        use core::ops::ControlFlow;
-
         use crate::NorFlashExt;
         use futures::executor::block_on;
 
@@ -186,8 +184,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
 
         let mut found_item = None;
         let mut it = crate::item::ItemHeaderIter::new(page_data_start, page_data_end);
-        while let (Some(header), item_address) =
-            block_on(it.traverse(self, |_, _| ControlFlow::Break(()))).unwrap()
+        while let (Some(header), item_address) = block_on(it.traverse(self, |_, _| false)).unwrap()
         {
             let next_item_address = header.next_item_address::<Self>(item_address);
 
