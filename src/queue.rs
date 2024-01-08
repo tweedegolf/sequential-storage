@@ -15,6 +15,10 @@
 //! #     Flash::new(mock_flash::WriteCountCheck::Twice, None)
 //! # }
 //! #
+//!
+//! // Use any async executor you want
+//! block_on(async {
+//!
 //! // Initialize the flash. This can be internal or external
 //! let mut flash = init_flash();
 //! // These are the flash addresses in which the crate will operate.
@@ -27,28 +31,29 @@
 //! let my_data = [10, 47, 29];
 //!
 //! // We can push some data to the queue
-//! block_on(push(&mut flash, flash_range.clone(), &my_data, false)).unwrap();
+//! push(&mut flash, flash_range.clone(), &my_data, false).await.unwrap();
 //!
 //! // We can peek at the oldest data
 //!
 //! assert_eq!(
-//!     &block_on(peek(&mut flash, flash_range.clone(), &mut data_buffer)).unwrap().unwrap()[..],
+//!     &peek(&mut flash, flash_range.clone(), &mut data_buffer).await.unwrap().unwrap()[..],
 //!     &my_data[..]
 //! );
 //!
 //! // With popping we get back the oldest data, but that data is now also removed
 //!
 //! assert_eq!(
-//!     &block_on(pop(&mut flash, flash_range.clone(), &mut data_buffer)).unwrap().unwrap()[..],
+//!     &pop(&mut flash, flash_range.clone(), &mut data_buffer).await.unwrap().unwrap()[..],
 //!     &my_data[..]
 //! );
 //!
 //! // If we pop again, we find there's no data anymore
 //!
 //! assert_eq!(
-//!     block_on(pop(&mut flash, flash_range.clone(), &mut data_buffer)),
+//!     pop(&mut flash, flash_range.clone(), &mut data_buffer).await,
 //!     Ok(None)
 //! );
+//! });
 //! ```
 
 use crate::item::{find_next_free_item_spot, is_page_empty, HeaderIter, Item, ItemHeader};
@@ -400,7 +405,7 @@ impl<'d, S: NorFlash> QueueIterator<'d, S> {
                             data_buffer.replace(db);
                             continue;
                         }
-                        item::MaybeItem::Erased(_) => unreachable!("Item is already erased"),
+                        item::MaybeItem::Erased(_, _) => unreachable!("Item is already erased"),
                         item::MaybeItem::Present(item) => {
                             let next_address =
                                 item.header.next_item_address::<S>(found_item_address);
@@ -542,7 +547,6 @@ pub async fn try_repair<S: NorFlash>(
     flash_range: Range<u32>,
 ) -> Result<(), Error<S::Error>> {
     crate::try_general_repair(flash, flash_range.clone()).await?;
-
     Ok(())
 }
 
@@ -551,130 +555,156 @@ mod tests {
     use crate::mock_flash::WriteCountCheck;
 
     use super::*;
-    use futures::executor::block_on;
+    use futures_test::test;
 
     type MockFlashBig = mock_flash::MockFlashBase<4, 4, 256>;
     type MockFlashTiny = mock_flash::MockFlashBase<2, 1, 32>;
 
     #[test]
-    fn peek_and_overwrite_old_data() {
+    async fn peek_and_overwrite_old_data() {
         let mut flash = MockFlashTiny::new(WriteCountCheck::Twice, None);
         let flash_range = 0x00..0x40;
-        let mut data_buffer = [0; 1024];
+        let mut data_buffer = AlignedBuf([0; 1024]);
         const DATA_SIZE: usize = 22;
 
         assert_eq!(
-            block_on(peek(&mut flash, flash_range.clone(), &mut data_buffer)).unwrap(),
+            peek(&mut flash, flash_range.clone(), &mut data_buffer)
+                .await
+                .unwrap(),
             None
         );
 
-        block_on(push(
+        data_buffer[..DATA_SIZE].copy_from_slice(&[0xAA; DATA_SIZE]);
+        push(
             &mut flash,
             flash_range.clone(),
-            &[0xAA; DATA_SIZE],
+            &data_buffer[..DATA_SIZE],
             false,
-        ))
+        )
+        .await
         .unwrap();
         assert_eq!(
-            &block_on(peek(&mut flash, flash_range.clone(), &mut data_buffer))
+            &peek(&mut flash, flash_range.clone(), &mut data_buffer)
+                .await
                 .unwrap()
                 .unwrap()[..],
             &[0xAA; DATA_SIZE]
         );
-        block_on(push(
+        data_buffer[..DATA_SIZE].copy_from_slice(&[0xBB; DATA_SIZE]);
+        push(
             &mut flash,
             flash_range.clone(),
-            &[0xBB; DATA_SIZE],
+            &data_buffer[..DATA_SIZE],
             false,
-        ))
+        )
+        .await
         .unwrap();
         assert_eq!(
-            &block_on(peek(&mut flash, flash_range.clone(), &mut data_buffer))
+            &peek(&mut flash, flash_range.clone(), &mut data_buffer)
+                .await
                 .unwrap()
                 .unwrap()[..],
             &[0xAA; DATA_SIZE]
         );
 
         // Flash is full, this should fail
-        block_on(push(
+        data_buffer[..DATA_SIZE].copy_from_slice(&[0xCC; DATA_SIZE]);
+        push(
             &mut flash,
             flash_range.clone(),
-            &[0xCC; DATA_SIZE],
+            &data_buffer[..DATA_SIZE],
             false,
-        ))
+        )
+        .await
         .unwrap_err();
         // Now we allow overwrite, so it should work
-        block_on(push(
+        data_buffer[..DATA_SIZE].copy_from_slice(&[0xDD; DATA_SIZE]);
+        push(
             &mut flash,
             flash_range.clone(),
-            &[0xDD; DATA_SIZE],
+            &data_buffer[..DATA_SIZE],
             true,
-        ))
+        )
+        .await
         .unwrap();
 
         assert_eq!(
-            &block_on(peek(&mut flash, flash_range.clone(), &mut data_buffer))
+            &peek(&mut flash, flash_range.clone(), &mut data_buffer)
+                .await
                 .unwrap()
                 .unwrap()[..],
             &[0xBB; DATA_SIZE]
         );
         assert_eq!(
-            &block_on(pop(&mut flash, flash_range.clone(), &mut data_buffer))
+            &pop(&mut flash, flash_range.clone(), &mut data_buffer)
+                .await
                 .unwrap()
                 .unwrap()[..],
             &[0xBB; DATA_SIZE]
         );
 
         assert_eq!(
-            &block_on(peek(&mut flash, flash_range.clone(), &mut data_buffer))
+            &peek(&mut flash, flash_range.clone(), &mut data_buffer)
+                .await
                 .unwrap()
                 .unwrap()[..],
             &[0xDD; DATA_SIZE]
         );
         assert_eq!(
-            &block_on(pop(&mut flash, flash_range.clone(), &mut data_buffer))
+            &pop(&mut flash, flash_range.clone(), &mut data_buffer)
+                .await
                 .unwrap()
                 .unwrap()[..],
             &[0xDD; DATA_SIZE]
         );
 
         assert_eq!(
-            block_on(peek(&mut flash, flash_range.clone(), &mut data_buffer)).unwrap(),
+            peek(&mut flash, flash_range.clone(), &mut data_buffer)
+                .await
+                .unwrap(),
             None
         );
         assert_eq!(
-            block_on(pop(&mut flash, flash_range.clone(), &mut data_buffer)).unwrap(),
+            pop(&mut flash, flash_range.clone(), &mut data_buffer)
+                .await
+                .unwrap(),
             None
         );
     }
 
     #[test]
-    fn push_pop() {
+    async fn push_pop() {
         let mut flash = MockFlashBig::new(WriteCountCheck::Twice, None);
         let flash_range = 0x000..0x1000;
-        let mut data_buffer = [0; 1024];
+        let mut data_buffer = AlignedBuf([0; 1024]);
 
         for i in 0..2000 {
             println!("{i}");
             let data = vec![i as u8; i % 512 + 1];
 
-            block_on(push(&mut flash, flash_range.clone(), &data, true)).unwrap();
+            push(&mut flash, flash_range.clone(), &data, true)
+                .await
+                .unwrap();
             assert_eq!(
-                &block_on(peek(&mut flash, flash_range.clone(), &mut data_buffer))
+                &peek(&mut flash, flash_range.clone(), &mut data_buffer)
+                    .await
                     .unwrap()
                     .unwrap()[..],
                 &data,
                 "At {i}"
             );
             assert_eq!(
-                &block_on(pop(&mut flash, flash_range.clone(), &mut data_buffer))
+                &pop(&mut flash, flash_range.clone(), &mut data_buffer)
+                    .await
                     .unwrap()
                     .unwrap()[..],
                 &data,
                 "At {i}"
             );
             assert_eq!(
-                block_on(peek(&mut flash, flash_range.clone(), &mut data_buffer)).unwrap(),
+                peek(&mut flash, flash_range.clone(), &mut data_buffer)
+                    .await
+                    .unwrap(),
                 None,
                 "At {i}"
             );
@@ -682,7 +712,7 @@ mod tests {
     }
 
     #[test]
-    fn push_pop_tiny() {
+    async fn push_pop_tiny() {
         let mut flash = MockFlashTiny::new(WriteCountCheck::Twice, None);
         let flash_range = 0x00..0x40;
         let mut data_buffer = [0; 1024];
@@ -692,9 +722,12 @@ mod tests {
             let data = vec![i as u8; i % 20 + 1];
 
             println!("PUSH");
-            block_on(push(&mut flash, flash_range.clone(), &data, true)).unwrap();
+            push(&mut flash, flash_range.clone(), &data, true)
+                .await
+                .unwrap();
             assert_eq!(
-                &block_on(peek(&mut flash, flash_range.clone(), &mut data_buffer))
+                &peek(&mut flash, flash_range.clone(), &mut data_buffer)
+                    .await
                     .unwrap()
                     .unwrap()[..],
                 &data,
@@ -702,7 +735,8 @@ mod tests {
             );
             println!("POP");
             assert_eq!(
-                &block_on(pop(&mut flash, flash_range.clone(), &mut data_buffer))
+                &pop(&mut flash, flash_range.clone(), &mut data_buffer)
+                    .await
                     .unwrap()
                     .unwrap()[..],
                 &data,
@@ -710,7 +744,9 @@ mod tests {
             );
             println!("PEEK");
             assert_eq!(
-                block_on(peek(&mut flash, flash_range.clone(), &mut data_buffer)).unwrap(),
+                peek(&mut flash, flash_range.clone(), &mut data_buffer)
+                    .await
+                    .unwrap(),
                 None,
                 "At {i}"
             );
@@ -720,7 +756,7 @@ mod tests {
 
     #[test]
     /// Same as [push_lots_then_pop_lots], except with added peeking and using the iterator style
-    fn push_peek_pop_many() {
+    async fn push_peek_pop_many() {
         let mut flash = MockFlashBig::new(WriteCountCheck::Twice, None);
         let flash_range = 0x000..0x1000;
         let mut data_buffer = [0; 1024];
@@ -734,26 +770,28 @@ mod tests {
 
             for i in 0..20 {
                 let data = vec![i as u8; 50];
-                block_on(push(&mut flash, flash_range.clone(), &data, false)).unwrap();
+                push(&mut flash, flash_range.clone(), &data, false)
+                    .await
+                    .unwrap();
                 add_ops(&mut flash, &mut push_ops);
             }
 
-            let mut peeker = block_on(peek_many(&mut flash, flash_range.clone())).unwrap();
+            let mut peeker = peek_many(&mut flash, flash_range.clone()).await.unwrap();
             for i in 0..5 {
                 let mut data = vec![i as u8; 50];
                 assert_eq!(
-                    block_on(peeker.next(&mut data_buffer)).unwrap(),
+                    peeker.next(&mut data_buffer).await.unwrap(),
                     Some(&mut data[..]),
                     "At {i}"
                 );
                 add_ops(peeker.iter.flash, &mut peek_ops);
             }
 
-            let mut popper = block_on(pop_many(&mut flash, flash_range.clone())).unwrap();
+            let mut popper = pop_many(&mut flash, flash_range.clone()).await.unwrap();
             for i in 0..5 {
                 let data = vec![i as u8; 50];
                 assert_eq!(
-                    &block_on(popper.next(&mut data_buffer)).unwrap().unwrap()[..],
+                    &popper.next(&mut data_buffer).await.unwrap().unwrap()[..],
                     &data,
                     "At {i}"
                 );
@@ -762,26 +800,28 @@ mod tests {
 
             for i in 20..25 {
                 let data = vec![i as u8; 50];
-                block_on(push(&mut flash, flash_range.clone(), &data, false)).unwrap();
+                push(&mut flash, flash_range.clone(), &data, false)
+                    .await
+                    .unwrap();
                 add_ops(&mut flash, &mut push_ops);
             }
 
-            let mut peeker = block_on(peek_many(&mut flash, flash_range.clone())).unwrap();
+            let mut peeker = peek_many(&mut flash, flash_range.clone()).await.unwrap();
             for i in 5..25 {
                 let data = vec![i as u8; 50];
                 assert_eq!(
-                    &block_on(peeker.next(&mut data_buffer)).unwrap().unwrap()[..],
+                    &peeker.next(&mut data_buffer).await.unwrap().unwrap()[..],
                     &data,
                     "At {i}"
                 );
                 add_ops(peeker.iter.flash, &mut peek_ops);
             }
 
-            let mut popper = block_on(pop_many(&mut flash, flash_range.clone())).unwrap();
+            let mut popper = pop_many(&mut flash, flash_range.clone()).await.unwrap();
             for i in 5..25 {
                 let data = vec![i as u8; 50];
                 assert_eq!(
-                    &block_on(popper.next(&mut data_buffer)).unwrap().unwrap()[..],
+                    &popper.next(&mut data_buffer).await.unwrap().unwrap()[..],
                     &data,
                     "At {i}"
                 );
@@ -800,7 +840,7 @@ mod tests {
     }
 
     #[test]
-    fn push_lots_then_pop_lots() {
+    async fn push_lots_then_pop_lots() {
         let mut flash = MockFlashBig::new(WriteCountCheck::Twice, None);
         let flash_range = 0x000..0x1000;
         let mut data_buffer = [0; 1024];
@@ -813,14 +853,17 @@ mod tests {
 
             for i in 0..20 {
                 let data = vec![i as u8; 50];
-                block_on(push(&mut flash, flash_range.clone(), &data, false)).unwrap();
+                push(&mut flash, flash_range.clone(), &data, false)
+                    .await
+                    .unwrap();
                 add_ops(&mut flash, &mut push_ops);
             }
 
             for i in 0..5 {
                 let data = vec![i as u8; 50];
                 assert_eq!(
-                    &block_on(pop(&mut flash, flash_range.clone(), &mut data_buffer))
+                    &pop(&mut flash, flash_range.clone(), &mut data_buffer)
+                        .await
                         .unwrap()
                         .unwrap()[..],
                     &data,
@@ -831,14 +874,17 @@ mod tests {
 
             for i in 20..25 {
                 let data = vec![i as u8; 50];
-                block_on(push(&mut flash, flash_range.clone(), &data, false)).unwrap();
+                push(&mut flash, flash_range.clone(), &data, false)
+                    .await
+                    .unwrap();
                 add_ops(&mut flash, &mut push_ops);
             }
 
             for i in 5..25 {
                 let data = vec![i as u8; 50];
                 assert_eq!(
-                    &block_on(pop(&mut flash, flash_range.clone(), &mut data_buffer))
+                    &pop(&mut flash, flash_range.clone(), &mut data_buffer)
+                        .await
                         .unwrap()
                         .unwrap()[..],
                     &data,
@@ -889,24 +935,33 @@ mod tests {
     }
 
     #[test]
-    fn pop_with_empty_section() {
+    async fn pop_with_empty_section() {
         let mut flash = MockFlashTiny::new(WriteCountCheck::Twice, None);
         let flash_range = 0x00..0x40;
-        let mut data_buffer = [0; 1024];
+        let mut data_buffer = AlignedBuf([0; 1024]);
 
-        block_on(push(&mut flash, flash_range.clone(), &[0xAA; 20], false)).unwrap();
-        block_on(push(&mut flash, flash_range.clone(), &[0xBB; 20], false)).unwrap();
+        data_buffer[..20].copy_from_slice(&[0xAA; 20]);
+        push(&mut flash, flash_range.clone(), &data_buffer[0..20], false)
+            .await
+            .unwrap();
+        data_buffer[..20].copy_from_slice(&[0xBB; 20]);
+        push(&mut flash, flash_range.clone(), &data_buffer[0..20], false)
+            .await
+            .unwrap();
 
         // There's now an unused gap at the end of the first page
 
         assert_eq!(
-            &block_on(pop(&mut flash, flash_range.clone(), &mut data_buffer))
+            &pop(&mut flash, flash_range.clone(), &mut data_buffer)
+                .await
                 .unwrap()
                 .unwrap()[..],
             &[0xAA; 20]
         );
+
         assert_eq!(
-            &block_on(pop(&mut flash, flash_range.clone(), &mut data_buffer))
+            &pop(&mut flash, flash_range.clone(), &mut data_buffer)
+                .await
                 .unwrap()
                 .unwrap()[..],
             &[0xBB; 20]
@@ -914,22 +969,21 @@ mod tests {
     }
 
     #[test]
-    fn search_pages() {
+    async fn search_pages() {
         let mut flash = MockFlashBig::new(WriteCountCheck::Twice, None);
 
         const FLASH_RANGE: Range<u32> = 0x000..0x1000;
 
-        block_on(close_page(&mut flash, FLASH_RANGE, 0)).unwrap();
-        block_on(close_page(&mut flash, FLASH_RANGE, 1)).unwrap();
-        block_on(partial_close_page(&mut flash, FLASH_RANGE, 2)).unwrap();
+        close_page(&mut flash, FLASH_RANGE, 0).await.unwrap();
+        close_page(&mut flash, FLASH_RANGE, 1).await.unwrap();
+        partial_close_page(&mut flash, FLASH_RANGE, 2)
+            .await
+            .unwrap();
 
         assert_eq!(
-            block_on(find_youngest_page(&mut flash, FLASH_RANGE)).unwrap(),
+            find_youngest_page(&mut flash, FLASH_RANGE).await.unwrap(),
             2
         );
-        assert_eq!(
-            block_on(find_oldest_page(&mut flash, FLASH_RANGE)).unwrap(),
-            0
-        );
+        assert_eq!(find_oldest_page(&mut flash, FLASH_RANGE).await.unwrap(), 0);
     }
 }

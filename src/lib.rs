@@ -398,22 +398,22 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::executor::block_on;
+    use futures_test::test;
 
     type MockFlash = mock_flash::MockFlashBase<4, 4, 64>;
 
-    fn write_aligned(
+    async fn write_aligned(
         flash: &mut MockFlash,
         offset: u32,
         bytes: &[u8],
     ) -> Result<(), mock_flash::MockFlashError> {
         let mut buf = AlignedBuf([0; 256]);
         buf[..bytes.len()].copy_from_slice(bytes);
-        block_on(flash.write(offset, &buf[..bytes.len()]))
+        flash.write(offset, &buf[..bytes.len()]).await
     }
 
     #[test]
-    fn test_find_pages() {
+    async fn test_find_pages() {
         // Page setup:
         // 0: closed
         // 1: closed
@@ -422,123 +422,89 @@ mod tests {
 
         let mut flash = MockFlash::default();
         // Page 0 markers
-        write_aligned(&mut flash, 0x000, &[MARKER, 0, 0, 0]).unwrap();
-        write_aligned(&mut flash, 0x100 - 4, &[0, 0, 0, MARKER]).unwrap();
+        write_aligned(&mut flash, 0x000, &[MARKER, 0, 0, 0])
+            .await
+            .unwrap();
+        write_aligned(&mut flash, 0x100 - 4, &[0, 0, 0, MARKER])
+            .await
+            .unwrap();
         // Page 1 markers
-        write_aligned(&mut flash, 0x100, &[MARKER, 0, 0, 0]).unwrap();
-        write_aligned(&mut flash, 0x200 - 4, &[0, 0, 0, MARKER]).unwrap();
+        write_aligned(&mut flash, 0x100, &[MARKER, 0, 0, 0])
+            .await
+            .unwrap();
+        write_aligned(&mut flash, 0x200 - 4, &[0, 0, 0, MARKER])
+            .await
+            .unwrap();
         // Page 2 markers
-        write_aligned(&mut flash, 0x200, &[MARKER, 0, 0, 0]).unwrap();
+        write_aligned(&mut flash, 0x200, &[MARKER, 0, 0, 0])
+            .await
+            .unwrap();
 
         assert_eq!(
-            block_on(find_first_page(
-                &mut flash,
-                0x000..0x400,
-                0,
-                PageState::Open
-            ))
-            .unwrap(),
+            find_first_page(&mut flash, 0x000..0x400, 0, PageState::Open)
+                .await
+                .unwrap(),
             Some(3)
         );
         assert_eq!(
-            block_on(find_first_page(
-                &mut flash,
-                0x000..0x400,
-                0,
-                PageState::PartialOpen
-            ))
-            .unwrap(),
+            find_first_page(&mut flash, 0x000..0x400, 0, PageState::PartialOpen)
+                .await
+                .unwrap(),
             Some(2)
         );
         assert_eq!(
-            block_on(find_first_page(
-                &mut flash,
-                0x000..0x400,
-                1,
-                PageState::PartialOpen
-            ))
-            .unwrap(),
+            find_first_page(&mut flash, 0x000..0x400, 1, PageState::PartialOpen)
+                .await
+                .unwrap(),
             Some(2)
         );
         assert_eq!(
-            block_on(find_first_page(
-                &mut flash,
-                0x000..0x400,
-                2,
-                PageState::PartialOpen
-            ))
-            .unwrap(),
+            find_first_page(&mut flash, 0x000..0x400, 2, PageState::PartialOpen)
+                .await
+                .unwrap(),
             Some(2)
         );
         assert_eq!(
-            block_on(find_first_page(
-                &mut flash,
-                0x000..0x400,
-                3,
-                PageState::Open
-            ))
-            .unwrap(),
+            find_first_page(&mut flash, 0x000..0x400, 3, PageState::Open)
+                .await
+                .unwrap(),
             Some(3)
         );
         assert_eq!(
-            block_on(find_first_page(
-                &mut flash,
-                0x000..0x200,
-                0,
-                PageState::PartialOpen
-            ))
-            .unwrap(),
+            find_first_page(&mut flash, 0x000..0x200, 0, PageState::PartialOpen)
+                .await
+                .unwrap(),
             None
         );
 
         assert_eq!(
-            block_on(find_first_page(
-                &mut flash,
-                0x000..0x400,
-                0,
-                PageState::Closed
-            ))
-            .unwrap(),
+            find_first_page(&mut flash, 0x000..0x400, 0, PageState::Closed)
+                .await
+                .unwrap(),
             Some(0)
         );
         assert_eq!(
-            block_on(find_first_page(
-                &mut flash,
-                0x000..0x400,
-                1,
-                PageState::Closed
-            ))
-            .unwrap(),
+            find_first_page(&mut flash, 0x000..0x400, 1, PageState::Closed)
+                .await
+                .unwrap(),
             Some(1)
         );
         assert_eq!(
-            block_on(find_first_page(
-                &mut flash,
-                0x000..0x400,
-                2,
-                PageState::Closed
-            ))
-            .unwrap(),
+            find_first_page(&mut flash, 0x000..0x400, 2, PageState::Closed)
+                .await
+                .unwrap(),
             Some(0)
         );
         assert_eq!(
-            block_on(find_first_page(
-                &mut flash,
-                0x000..0x400,
-                3,
-                PageState::Closed
-            ))
-            .unwrap(),
+            find_first_page(&mut flash, 0x000..0x400, 3, PageState::Closed)
+                .await
+                .unwrap(),
             Some(0)
         );
         assert_eq!(
-            block_on(find_first_page(
-                &mut flash,
-                0x200..0x400,
-                0,
-                PageState::Closed
-            ))
-            .unwrap(),
+            find_first_page(&mut flash, 0x200..0x400, 0, PageState::Closed)
+                .await
+                .unwrap(),
             None
         );
     }

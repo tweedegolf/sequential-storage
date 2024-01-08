@@ -19,6 +19,7 @@ futures = { version = "0.3.30", features = ["executor"], optional = true }
 [dev-dependencies]
 approx = "0.5.1"
 futures = { version = "0.3.30", features = ["executor"] }
+futures-test = "0.3.30"
 
 [features]
 defmt = ["dep:defmt"]

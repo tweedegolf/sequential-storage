@@ -103,7 +103,7 @@ impl ItemHeader {
         end_address: u32,
     ) -> Result<MaybeItem<'d>, Error<S::Error>> {
         match self.crc {
-            None => Ok(MaybeItem::Erased(self)),
+            None => Ok(MaybeItem::Erased(self, data_buffer)),
             Some(header_crc) => {
                 let data_address = ItemHeader::data_address::<S>(address);
                 let read_len = round_up_to_alignment_usize::<S>(self.length as usize);
@@ -305,7 +305,7 @@ pub async fn find_next_free_item_spot<S: NorFlash>(
 
 pub enum MaybeItem<'d> {
     Corrupted(ItemHeader, &'d mut [u8]),
-    Erased(ItemHeader),
+    Erased(ItemHeader, &'d mut [u8]),
     Present(Item<'d>),
 }
 
@@ -317,7 +317,7 @@ impl<'d> core::fmt::Debug for MaybeItem<'d> {
                 .field(arg0)
                 .field(&arg1.get(..arg0.length as usize))
                 .finish(),
-            Self::Erased(arg0) => f.debug_tuple("Erased").field(arg0).finish(),
+            Self::Erased(arg0, _) => f.debug_tuple("Erased").field(arg0).finish(),
             Self::Present(arg0) => f.debug_tuple("Present").field(arg0).finish(),
         }
     }
@@ -330,7 +330,7 @@ impl<'d> MaybeItem<'d> {
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
             }),
-            MaybeItem::Erased(_) => panic!("Cannot unwrap an erased item"),
+            MaybeItem::Erased(_, _) => panic!("Cannot unwrap an erased item"),
             MaybeItem::Present(item) => Ok(item),
         }
     }
@@ -452,24 +452,25 @@ impl ItemIter {
         flash: &mut S,
         data_buffer: &'m mut [u8],
     ) -> Result<Option<(Item<'m>, u32)>, Error<S::Error>> {
+        let mut data_buffer = Some(data_buffer);
         while let (Some(header), address) = self.header.next(flash).await? {
-            let data_buffer = unsafe {
-                core::slice::from_raw_parts_mut(data_buffer.as_mut_ptr(), data_buffer.len())
-            };
-
+            let buffer = data_buffer.take().unwrap();
             match header
-                .read_item(flash, data_buffer, address, self.header.end_address)
+                .read_item(flash, buffer, address, self.header.end_address)
                 .await?
             {
-                MaybeItem::Corrupted { .. } => {
+                MaybeItem::Corrupted(_, buffer) => {
                     #[cfg(feature = "defmt")]
                     defmt::error!(
                         "Found a corrupted item at {:X}. Skipping...",
                         self.header.current_address
                     );
+                    data_buffer.replace(buffer);
                     continue;
                 }
-                MaybeItem::Erased(_) => {}
+                MaybeItem::Erased(_, buffer) => {
+                    data_buffer.replace(buffer);
+                }
                 MaybeItem::Present(item) => {
                     return Ok(Some((item, address)));
                 }

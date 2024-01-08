@@ -60,6 +60,7 @@
 //!     BufferTooSmall
 //! }
 //!
+//! block_on(async {
 //! // Initialize the flash. This can be internal or external
 //! let mut flash = Flash::default();
 //! // These are the flash addresses in which the crate will operate.
@@ -74,35 +75,36 @@
 //! // Nothing is stored in it yet, so it will return None.
 //!
 //! assert_eq!(
-//!     block_on(fetch_item::<MyCustomType, _>(
+//!     fetch_item::<MyCustomType, _>(
 //!         &mut flash,
 //!         flash_range.clone(),
 //!         &mut data_buffer,
 //!         42,
-//!     )).unwrap(),
+//!     ).await.unwrap(),
 //!     None
 //! );
 //!
 //! // Now we store an item the flash with key 42
 //!
-//! block_on(store_item::<MyCustomType, _>(
+//! store_item::<MyCustomType, _>(
 //!     &mut flash,
 //!     flash_range.clone(),
 //!     &mut data_buffer,
 //!     MyCustomType { key: 42, data: 104729 },
-//! )).unwrap();
+//! ).await.unwrap();
 //!
 //! // When we ask for key 42, we not get back a Some with the correct value
 //!
 //! assert_eq!(
-//!     block_on(fetch_item::<MyCustomType, _>(
+//!     fetch_item::<MyCustomType, _>(
 //!         &mut flash,
 //!         flash_range.clone(),
 //!         &mut data_buffer,
 //!         42,
-//!     )).unwrap(),
+//!     ).await.unwrap(),
 //!     Some(MyCustomType { key: 42, data: 104729 })
 //! );
+//! });
 //! ```
 
 use crate::item::{find_next_free_item_spot, Item, ItemHeader, ItemIter};
@@ -624,7 +626,7 @@ pub async fn try_repair<I: StorageItem, S: NorFlash>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::executor::block_on;
+    use futures_test::test;
 
     type MockFlashBig = mock_flash::MockFlashBase<4, 4, 256>;
     type MockFlashTiny = mock_flash::MockFlashBase<2, 1, 32>;
@@ -698,40 +700,35 @@ mod tests {
     }
 
     #[test]
-    fn store_and_fetch() {
+    async fn store_and_fetch() {
         let mut flash = MockFlashBig::default();
         let flash_range = 0x000..0x1000;
 
         let mut data_buffer = [0; 128];
 
-        let item = block_on(fetch_item::<MockStorageItem, _>(
-            &mut flash,
-            flash_range.clone(),
-            &mut data_buffer,
-            0,
-        ))
-        .unwrap();
+        let item =
+            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), &mut data_buffer, 0)
+                .await
+                .unwrap();
         assert_eq!(item, None);
 
-        let item = block_on(fetch_item::<MockStorageItem, _>(
-            &mut flash,
-            flash_range.clone(),
-            &mut data_buffer,
-            60,
-        ))
-        .unwrap();
+        let item =
+            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), &mut data_buffer, 60)
+                .await
+                .unwrap();
         assert_eq!(item, None);
 
-        let item = block_on(fetch_item::<MockStorageItem, _>(
+        let item = fetch_item::<MockStorageItem, _>(
             &mut flash,
             flash_range.clone(),
             &mut data_buffer,
             0xFF,
-        ))
+        )
+        .await
         .unwrap();
         assert_eq!(item, None);
 
-        block_on(store_item::<_, _>(
+        store_item::<_, _>(
             &mut flash,
             flash_range.clone(),
             &mut data_buffer,
@@ -739,9 +736,10 @@ mod tests {
                 key: 0,
                 value: vec![5],
             },
-        ))
+        )
+        .await
         .unwrap();
-        block_on(store_item::<_, _>(
+        store_item::<_, _>(
             &mut flash,
             flash_range.clone(),
             &mut data_buffer,
@@ -749,21 +747,19 @@ mod tests {
                 key: 0,
                 value: vec![5, 6],
             },
-        ))
+        )
+        .await
         .unwrap();
 
-        let item = block_on(fetch_item::<MockStorageItem, _>(
-            &mut flash,
-            flash_range.clone(),
-            &mut data_buffer,
-            0,
-        ))
-        .unwrap()
-        .unwrap();
+        let item =
+            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), &mut data_buffer, 0)
+                .await
+                .unwrap()
+                .unwrap();
         assert_eq!(item.key, 0);
         assert_eq!(item.value, vec![5, 6]);
 
-        block_on(store_item::<_, _>(
+        store_item::<_, _>(
             &mut flash,
             flash_range.clone(),
             &mut data_buffer,
@@ -771,33 +767,28 @@ mod tests {
                 key: 1,
                 value: vec![2, 2, 2, 2, 2, 2],
             },
-        ))
+        )
+        .await
         .unwrap();
 
-        let item = block_on(fetch_item::<MockStorageItem, _>(
-            &mut flash,
-            flash_range.clone(),
-            &mut data_buffer,
-            0,
-        ))
-        .unwrap()
-        .unwrap();
+        let item =
+            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), &mut data_buffer, 0)
+                .await
+                .unwrap()
+                .unwrap();
         assert_eq!(item.key, 0);
         assert_eq!(item.value, vec![5, 6]);
 
-        let item = block_on(fetch_item::<MockStorageItem, _>(
-            &mut flash,
-            flash_range.clone(),
-            &mut data_buffer,
-            1,
-        ))
-        .unwrap()
-        .unwrap();
+        let item =
+            fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), &mut data_buffer, 1)
+                .await
+                .unwrap()
+                .unwrap();
         assert_eq!(item.key, 1);
         assert_eq!(item.value, vec![2, 2, 2, 2, 2, 2]);
 
         for index in 0..4000 {
-            block_on(store_item::<_, _>(
+            store_item::<_, _>(
                 &mut flash,
                 flash_range.clone(),
                 &mut data_buffer,
@@ -805,17 +796,19 @@ mod tests {
                     key: (index % 10) as u8,
                     value: vec![(index % 10) as u8 * 2; index % 10],
                 },
-            ))
+            )
+            .await
             .unwrap();
         }
 
         for i in 0..10 {
-            let item = block_on(fetch_item::<MockStorageItem, _>(
+            let item = fetch_item::<MockStorageItem, _>(
                 &mut flash,
                 flash_range.clone(),
                 &mut data_buffer,
                 i,
-            ))
+            )
+            .await
             .unwrap()
             .unwrap();
             assert_eq!(item.key, i);
@@ -823,7 +816,7 @@ mod tests {
         }
 
         for _ in 0..4000 {
-            block_on(store_item::<_, _>(
+            store_item::<_, _>(
                 &mut flash,
                 flash_range.clone(),
                 &mut data_buffer,
@@ -831,17 +824,19 @@ mod tests {
                     key: 11,
                     value: vec![0; 10],
                 },
-            ))
+            )
+            .await
             .unwrap();
         }
 
         for i in 0..10 {
-            let item = block_on(fetch_item::<MockStorageItem, _>(
+            let item = fetch_item::<MockStorageItem, _>(
                 &mut flash,
                 flash_range.clone(),
                 &mut data_buffer,
                 i,
-            ))
+            )
+            .await
             .unwrap()
             .unwrap();
             assert_eq!(item.key, i);
@@ -855,7 +850,7 @@ mod tests {
     }
 
     #[test]
-    fn store_too_many_items() {
+    async fn store_too_many_items() {
         const UPPER_BOUND: u8 = 2;
 
         let mut tiny_flash = MockFlashTiny::default();
@@ -868,17 +863,13 @@ mod tests {
             };
             println!("Storing {item:?}");
 
-            block_on(store_item::<_, _>(
-                &mut tiny_flash,
-                0x00..0x40,
-                &mut data_buffer,
-                item,
-            ))
-            .unwrap();
+            store_item::<_, _>(&mut tiny_flash, 0x00..0x40, &mut data_buffer, item)
+                .await
+                .unwrap();
         }
 
         assert_eq!(
-            block_on(store_item::<_, _>(
+            store_item::<_, _>(
                 &mut tiny_flash,
                 0x00..0x40,
                 &mut data_buffer,
@@ -886,17 +877,19 @@ mod tests {
                     key: UPPER_BOUND,
                     value: vec![0; UPPER_BOUND as usize],
                 },
-            )),
+            )
+            .await,
             Err(MapError::FullStorage)
         );
 
         for i in 0..UPPER_BOUND {
-            let item = block_on(fetch_item::<MockStorageItem, _>(
+            let item = fetch_item::<MockStorageItem, _>(
                 &mut tiny_flash,
                 0x00..0x40,
                 &mut data_buffer,
                 i as u8,
-            ))
+            )
+            .await
             .unwrap()
             .unwrap();
 
@@ -907,7 +900,7 @@ mod tests {
     }
 
     #[test]
-    fn store_too_many_items_big() {
+    async fn store_too_many_items_big() {
         const UPPER_BOUND: u8 = 67;
 
         let mut big_flash = MockFlashBig::default();
@@ -920,17 +913,13 @@ mod tests {
             };
             println!("Storing {item:?}");
 
-            block_on(store_item::<_, _>(
-                &mut big_flash,
-                0x0000..0x1000,
-                &mut data_buffer,
-                item,
-            ))
-            .unwrap();
+            store_item::<_, _>(&mut big_flash, 0x0000..0x1000, &mut data_buffer, item)
+                .await
+                .unwrap();
         }
 
         assert_eq!(
-            block_on(store_item::<_, _>(
+            store_item::<_, _>(
                 &mut big_flash,
                 0x0000..0x1000,
                 &mut data_buffer,
@@ -938,17 +927,19 @@ mod tests {
                     key: UPPER_BOUND,
                     value: vec![0; UPPER_BOUND as usize],
                 },
-            )),
+            )
+            .await,
             Err(MapError::FullStorage)
         );
 
         for i in 0..UPPER_BOUND {
-            let item = block_on(fetch_item::<MockStorageItem, _>(
+            let item = fetch_item::<MockStorageItem, _>(
                 &mut big_flash,
                 0x0000..0x1000,
                 &mut data_buffer,
                 i as u8,
-            ))
+            )
+            .await
             .unwrap()
             .unwrap();
 
@@ -959,7 +950,7 @@ mod tests {
     }
 
     #[test]
-    fn store_many_items_big() {
+    async fn store_many_items_big() {
         let mut flash = mock_flash::MockFlashBase::<4, 1, 4096>::default();
         let mut data_buffer = [0; 128];
 
@@ -974,23 +965,20 @@ mod tests {
                     value: vec![i as u8; LENGHT_PER_KEY[i]],
                 };
 
-                block_on(store_item::<_, _>(
-                    &mut flash,
-                    0x0000..0x4000,
-                    &mut data_buffer,
-                    item,
-                ))
-                .unwrap();
+                store_item::<_, _>(&mut flash, 0x0000..0x4000, &mut data_buffer, item)
+                    .await
+                    .unwrap();
             }
         }
 
         for i in 0..24 {
-            let item = block_on(fetch_item::<MockStorageItem, _>(
+            let item = fetch_item::<MockStorageItem, _>(
                 &mut flash,
                 0x0000..0x4000,
                 &mut data_buffer,
                 i as u8,
-            ))
+            )
+            .await
             .unwrap()
             .unwrap();
 
