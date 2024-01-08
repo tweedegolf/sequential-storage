@@ -68,7 +68,8 @@
 //! let flash_range = 0x1000..0x3000;
 //! // We need to give the crate a buffer to work with.
 //! // It must be big enough to serialize the biggest value of your storage type in,
-//! // rounded up to to word alignment of the flash.
+//! // rounded up to to word alignment of the flash. Some kinds of flash may require
+//! // this buffer to be aligned in RAM as well.
 //! let mut data_buffer = [0; 100];
 //!
 //! // We can fetch an item from the flash.
@@ -397,7 +398,7 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
             }
         }
 
-        // If we get here, we just freshly partially closed a new page, so this should succeed
+        // If we get here, we just freshly partially closed a new page, so the next loop iteration should succeed.
         recursion_level += 1;
     }
 }
@@ -704,7 +705,7 @@ mod tests {
         let mut flash = MockFlashBig::default();
         let flash_range = 0x000..0x1000;
 
-        let mut data_buffer = [0; 128];
+        let mut data_buffer = AlignedBuf([0; 128]);
 
         let item =
             fetch_item::<MockStorageItem, _>(&mut flash, flash_range.clone(), &mut data_buffer, 0)
@@ -854,7 +855,7 @@ mod tests {
         const UPPER_BOUND: u8 = 2;
 
         let mut tiny_flash = MockFlashTiny::default();
-        let mut data_buffer = [0; 128];
+        let mut data_buffer = AlignedBuf([0; 128]);
 
         for i in 0..UPPER_BOUND {
             let item = MockStorageItem {
@@ -904,7 +905,7 @@ mod tests {
         const UPPER_BOUND: u8 = 67;
 
         let mut big_flash = MockFlashBig::default();
-        let mut data_buffer = [0; 128];
+        let mut data_buffer = AlignedBuf([0; 128]);
 
         for i in 0..UPPER_BOUND {
             let item = MockStorageItem {
@@ -952,7 +953,7 @@ mod tests {
     #[test]
     async fn store_many_items_big() {
         let mut flash = mock_flash::MockFlashBase::<4, 1, 4096>::default();
-        let mut data_buffer = [0; 128];
+        let mut data_buffer = AlignedBuf([0; 128]);
 
         const LENGHT_PER_KEY: [usize; 24] = [
             11, 13, 6, 13, 13, 10, 2, 3, 5, 36, 1, 65, 4, 6, 1, 15, 10, 7, 3, 15, 9, 3, 4, 5,

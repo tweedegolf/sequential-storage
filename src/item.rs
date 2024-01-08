@@ -288,7 +288,7 @@ pub async fn find_next_free_item_spot<S: NorFlash>(
     end_address: u32,
     data_length: u32,
 ) -> Result<Option<u32>, Error<S::Error>> {
-    let (_, free_item_address) = HeaderIter::new(start_address, end_address)
+    let (_, free_item_address) = ItemHeaderIter::new(start_address, end_address)
         .traverse(flash, |_, _| ControlFlow::Continue(()))
         .await?;
     if let Some(available) = ItemHeader::available_data_bytes::<S>(end_address - free_item_address)
@@ -421,15 +421,16 @@ pub async fn is_page_empty<S: NorFlash>(
                 calculate_page_end_address::<S>(flash_range.clone(), page_index)
                     - S::WORD_SIZE as u32;
 
-            let mut it = HeaderIter::new(page_data_start_address, page_data_end_address);
-            Ok(it
-                .traverse(flash, |header, _| match header.crc {
-                    Some(_) => ControlFlow::Break(()),
-                    None => ControlFlow::Continue(()),
-                })
-                .await?
-                .0
-                .is_none())
+            Ok(
+                ItemHeaderIter::new(page_data_start_address, page_data_end_address)
+                    .traverse(flash, |header, _| match header.crc {
+                        Some(_) => ControlFlow::Break(()),
+                        None => ControlFlow::Continue(()),
+                    })
+                    .await?
+                    .0
+                    .is_none(),
+            )
         }
         PageState::PartialOpen => Ok(false),
         PageState::Open => Ok(true),
@@ -437,13 +438,13 @@ pub async fn is_page_empty<S: NorFlash>(
 }
 
 pub struct ItemIter {
-    header: HeaderIter,
+    header: ItemHeaderIter,
 }
 
 impl ItemIter {
     pub fn new(start_address: u32, end_address: u32) -> Self {
         Self {
-            header: HeaderIter::new(start_address, end_address),
+            header: ItemHeaderIter::new(start_address, end_address),
         }
     }
 
@@ -466,7 +467,6 @@ impl ItemIter {
                         self.header.current_address
                     );
                     data_buffer.replace(buffer);
-                    continue;
                 }
                 MaybeItem::Erased(_, buffer) => {
                     data_buffer.replace(buffer);
@@ -480,12 +480,12 @@ impl ItemIter {
     }
 }
 
-pub struct HeaderIter {
+pub struct ItemHeaderIter {
     current_address: u32,
     end_address: u32,
 }
 
-impl HeaderIter {
+impl ItemHeaderIter {
     pub fn new(start_address: u32, end_address: u32) -> Self {
         Self {
             current_address: start_address,
@@ -501,7 +501,8 @@ impl HeaderIter {
         self.traverse(flash, |_, _| ControlFlow::Break(())).await
     }
 
-    /// Traverse all headers until the callback determines the next element.
+    /// Traverse headers until the callback returns `Break`. If the callback returns `Continue`,
+    /// the element is skipped and traversal continues.
     ///
     /// If the end of the headers is reached, a `None` item header is returned.
     pub async fn traverse<S: NorFlash>(

@@ -56,7 +56,7 @@
 //! });
 //! ```
 
-use crate::item::{find_next_free_item_spot, is_page_empty, HeaderIter, Item, ItemHeader};
+use crate::item::{find_next_free_item_spot, is_page_empty, Item, ItemHeader, ItemHeaderIter};
 
 use super::*;
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
@@ -373,7 +373,7 @@ impl<'d, S: NorFlash> QueueIterator<'d, S> {
                     - S::WORD_SIZE as u32;
 
             // Search for the first item with data
-            let mut it = HeaderIter::new(current_address, page_data_end_address);
+            let mut it = ItemHeaderIter::new(current_address, page_data_end_address);
             loop {
                 if let (Some(found_item_header), found_item_address) = it
                     .traverse(self.flash, |header, _| {
@@ -481,7 +481,7 @@ pub async fn find_max_fit<S: NorFlash>(
     let page_data_end_address =
         calculate_page_end_address::<S>(flash_range.clone(), current_page) - S::WORD_SIZE as u32;
 
-    let next_item_address = HeaderIter::new(page_data_start_address, page_data_end_address)
+    let next_item_address = ItemHeaderIter::new(page_data_start_address, page_data_end_address)
         .traverse(flash, |_, _| ControlFlow::Continue(()))
         .await?
         .1;
