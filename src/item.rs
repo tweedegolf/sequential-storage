@@ -510,10 +510,6 @@ impl ItemHeaderIter {
         flash: &mut S,
         callback: impl Fn(&ItemHeader, u32) -> ControlFlow<(), ()>,
     ) -> Result<(Option<ItemHeader>, u32), Error<S::Error>> {
-        if self.current_address >= self.end_address {
-            return Ok((None, self.current_address));
-        }
-
         loop {
             match ItemHeader::read_new(flash, self.current_address, self.end_address).await {
                 Ok(Some(header)) => {

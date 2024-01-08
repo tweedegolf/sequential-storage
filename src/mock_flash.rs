@@ -137,7 +137,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
                 crate::calculate_page_end_address::<Self>(Self::FULL_FLASH_RANGE, page_index)
                     - Self::WORD_SIZE as u32;
 
-            let mut it = crate::item::HeaderIter::new(page_data_start, page_data_end);
+            let mut it = crate::item::ItemHeaderIter::new(page_data_start, page_data_end);
             while let (Some(header), item_address) =
                 block_on(it.traverse(self, |_, _| core::ops::ControlFlow::Break(()))).unwrap()
             {
@@ -185,7 +185,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
                 - Self::WORD_SIZE as u32;
 
         let mut found_item = None;
-        let mut it = crate::item::HeaderIter::new(page_data_start, page_data_end);
+        let mut it = crate::item::ItemHeaderIter::new(page_data_start, page_data_end);
         while let (Some(header), item_address) =
             block_on(it.traverse(self, |_, _| ControlFlow::Break(()))).unwrap()
         {
