@@ -374,54 +374,49 @@ impl<'d, S: NorFlash> QueueIterator<'d, S> {
 
             // Search for the first item with data
             let mut it = ItemHeaderIter::new(current_address, page_data_end_address);
-            loop {
-                if let (Some(found_item_header), found_item_address) = it
-                    .traverse(self.flash, |header, _| {
-                        if header.crc.is_some() {
-                            ControlFlow::Break(())
-                        } else {
-                            ControlFlow::Continue(())
-                        }
-                    })
-                    .await?
-                {
-                    let maybe_item = found_item_header
-                        .read_item(
-                            self.flash,
-                            data_buffer.take().unwrap(),
-                            found_item_address,
-                            page_data_end_address,
-                        )
-                        .await?;
-
-                    match maybe_item {
-                        item::MaybeItem::Corrupted(header, db) => {
-                            let next_address = header.next_item_address::<S>(found_item_address);
-                            self.current_address = if next_address >= page_data_end_address {
-                                CurrentAddress::PageAfter(current_page)
-                            } else {
-                                CurrentAddress::Address(next_address)
-                            };
-                            data_buffer.replace(db);
-                            continue;
-                        }
-                        item::MaybeItem::Erased(_, _) => unreachable!("Item is already erased"),
-                        item::MaybeItem::Present(item) => {
-                            let next_address =
-                                item.header.next_item_address::<S>(found_item_address);
-                            self.current_address = if next_address >= page_data_end_address {
-                                CurrentAddress::PageAfter(current_page)
-                            } else {
-                                CurrentAddress::Address(next_address)
-                            };
-                            // Return the item we found
-                            return Ok(Some((item, found_item_address)));
-                        }
+            if let (Some(found_item_header), found_item_address) = it
+                .traverse(self.flash, |header, _| {
+                    if header.crc.is_some() {
+                        ControlFlow::Break(())
+                    } else {
+                        ControlFlow::Continue(())
                     }
-                } else {
-                    self.current_address = CurrentAddress::PageAfter(current_page);
-                    break;
+                })
+                .await?
+            {
+                let maybe_item = found_item_header
+                    .read_item(
+                        self.flash,
+                        data_buffer.take().unwrap(),
+                        found_item_address,
+                        page_data_end_address,
+                    )
+                    .await?;
+
+                match maybe_item {
+                    item::MaybeItem::Corrupted(header, db) => {
+                        let next_address = header.next_item_address::<S>(found_item_address);
+                        self.current_address = if next_address >= page_data_end_address {
+                            CurrentAddress::PageAfter(current_page)
+                        } else {
+                            CurrentAddress::Address(next_address)
+                        };
+                        data_buffer.replace(db);
+                    }
+                    item::MaybeItem::Erased(_, _) => unreachable!("Item is already erased"),
+                    item::MaybeItem::Present(item) => {
+                        let next_address = item.header.next_item_address::<S>(found_item_address);
+                        self.current_address = if next_address >= page_data_end_address {
+                            CurrentAddress::PageAfter(current_page)
+                        } else {
+                            CurrentAddress::Address(next_address)
+                        };
+                        // Return the item we found
+                        return Ok(Some((item, found_item_address)));
+                    }
                 }
+            } else {
+                self.current_address = CurrentAddress::PageAfter(current_page);
             }
         }
     }
