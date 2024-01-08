@@ -197,7 +197,8 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
                         .unwrap();
 
                 match maybe_item {
-                    crate::item::MaybeItem::Corrupted(_, _) | crate::item::MaybeItem::Erased(_) => {
+                    crate::item::MaybeItem::Corrupted(_, _)
+                    | crate::item::MaybeItem::Erased(_, _) => {
                         found_item.replace(false);
                         break;
                     }
