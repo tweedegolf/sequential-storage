@@ -325,7 +325,7 @@ pub fn read_items<S: NorFlash, R>(
                 #[cfg(feature = "defmt")]
                 defmt::error!(
                     "Found a corrupted item at {:X}. Skipping...",
-                    current_address
+                    address
                 );
                 ControlFlow::Continue(())
             }
