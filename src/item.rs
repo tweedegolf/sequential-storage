@@ -323,10 +323,7 @@ pub fn read_items<S: NorFlash, R>(
         |flash, header, address| match header.read_item(flash, data_buffer, address, end_address) {
             Ok(MaybeItem::Corrupted(_, _)) => {
                 #[cfg(feature = "defmt")]
-                defmt::error!(
-                    "Found a corrupted item at {:X}. Skipping...",
-                    address
-                );
+                defmt::error!("Found a corrupted item at {:X}. Skipping...", address);
                 ControlFlow::Continue(())
             }
             Ok(MaybeItem::Erased(_)) => ControlFlow::Continue(()),
