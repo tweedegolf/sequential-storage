@@ -75,7 +75,7 @@ all items on the to-be-erased page are checked. If an item does not have a newer
 the page, it will be copied over from the to-be-erased page to the current partial-open page.
 This way no data is lost (as long as the flash is big enough to contain all data).
 
-## Inner workings for queue
+### Inner workings for queue
 
 When pushing, the youngest spot to place the item is searched for.
 If it doesn't fit, it will return an error or erase an old page if you specified it could.
