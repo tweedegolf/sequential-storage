@@ -1,5 +1,6 @@
 #![no_main]
 
+use futures::executor::block_on;
 use libfuzzer_sys::arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use rand::{Rng, SeedableRng};
@@ -33,6 +34,9 @@ struct PushOp {
     value_len: u8,
 }
 
+#[repr(align(4))]
+struct AlignedBuf([u8; MAX_VALUE_SIZE + 1]);
+
 fn fuzz(ops: Input) {
     const PAGES: usize = 4;
     const WORD_SIZE: usize = 4;
@@ -45,7 +49,7 @@ fn fuzz(ops: Input) {
     const FLASH_RANGE: Range<u32> = 0x000..0x1000;
 
     let mut order = VecDeque::new();
-    let mut buf = [0; MAX_VALUE_SIZE + 1];
+    let mut buf = AlignedBuf([0; MAX_VALUE_SIZE + 1]);
 
     let mut rng = rand_pcg::Pcg32::seed_from_u64(ops.seed);
 
@@ -66,10 +70,10 @@ fn fuzz(ops: Input) {
                 Op::Push(op) => {
                     let val: Vec<u8> = (0..op.value_len as usize % 16).map(|_| rng.gen()).collect();
 
-                    let max_fit = match sequential_storage::queue::find_max_fit(
+                    let max_fit = match block_on(sequential_storage::queue::find_max_fit(
                         &mut flash,
                         FLASH_RANGE,
-                    ) {
+                    )) {
                         Ok(val) => val,
                         Err(Error::Corrupted {
                             backtrace: _backtrace,
@@ -79,7 +83,11 @@ fn fuzz(ops: Input) {
                                     "### Encountered curruption while finding max fit! Repairing now. Originated from:\n{_backtrace:#}"
                                 );
 
-                            sequential_storage::queue::try_repair(&mut flash, FLASH_RANGE).unwrap();
+                            block_on(sequential_storage::queue::try_repair(
+                                &mut flash,
+                                FLASH_RANGE,
+                            ))
+                            .unwrap();
                             corruption_repaired = true;
                             retry = true;
                             continue;
@@ -87,7 +95,13 @@ fn fuzz(ops: Input) {
                         Err(e) => panic!("Error while finding max fit: {e:?}"),
                     };
 
-                    match sequential_storage::queue::push(&mut flash, FLASH_RANGE, &val, false) {
+                    buf.0[..val.len()].copy_from_slice(&val);
+                    match block_on(sequential_storage::queue::push(
+                        &mut flash,
+                        FLASH_RANGE,
+                        &buf.0[..val.len()],
+                        false,
+                    )) {
                         Ok(_) => {
                             if let Some(max_fit) = max_fit {
                                 if val.len() > max_fit as usize {
@@ -128,7 +142,11 @@ fn fuzz(ops: Input) {
                                 "### Encountered curruption while pushing! Repairing now. Originated from:\n{_backtrace:#}"
                             );
 
-                            sequential_storage::queue::try_repair(&mut flash, FLASH_RANGE).unwrap();
+                            block_on(sequential_storage::queue::try_repair(
+                                &mut flash,
+                                FLASH_RANGE,
+                            ))
+                            .unwrap();
                             corruption_repaired = true;
                             retry = true;
                         }
@@ -136,7 +154,11 @@ fn fuzz(ops: Input) {
                     }
                 }
                 Op::Pop => {
-                    match sequential_storage::queue::pop(&mut flash, FLASH_RANGE, &mut buf) {
+                    match block_on(sequential_storage::queue::pop(
+                        &mut flash,
+                        FLASH_RANGE,
+                        &mut buf.0,
+                    )) {
                         Ok(value) => {
                             assert_eq!(
                                 value,
@@ -168,7 +190,11 @@ fn fuzz(ops: Input) {
                                 "### Encountered curruption while popping (single)! Repairing now. Originated from:\n{_backtrace:#}"
                             );
 
-                            sequential_storage::queue::try_repair(&mut flash, FLASH_RANGE).unwrap();
+                            block_on(sequential_storage::queue::try_repair(
+                                &mut flash,
+                                FLASH_RANGE,
+                            ))
+                            .unwrap();
                             corruption_repaired = true;
                             retry = true;
                         }
@@ -176,10 +202,10 @@ fn fuzz(ops: Input) {
                     }
                 }
                 Op::PopMany(n) => {
-                    let mut popper = match sequential_storage::queue::pop_many(
+                    let mut popper = match block_on(sequential_storage::queue::pop_many(
                         &mut flash,
                         FLASH_RANGE,
-                    ) {
+                    )) {
                         Ok(val) => val,
                         Err(Error::Corrupted {
                             backtrace: _backtrace,
@@ -189,7 +215,11 @@ fn fuzz(ops: Input) {
                                         "### Encountered curruption while creating popper! Repairing now. Originated from:\n{_backtrace:#}"
                                     );
 
-                            sequential_storage::queue::try_repair(&mut flash, FLASH_RANGE).unwrap();
+                            block_on(sequential_storage::queue::try_repair(
+                                &mut flash,
+                                FLASH_RANGE,
+                            ))
+                            .unwrap();
                             corruption_repaired = true;
                             retry = true;
                             continue;
@@ -198,7 +228,7 @@ fn fuzz(ops: Input) {
                     };
 
                     for i in 0..*n {
-                        match popper.next(&mut buf) {
+                        match block_on(popper.next(&mut buf.0)) {
                             Ok(value) => {
                                 assert_eq!(
                                     value,
@@ -234,8 +264,11 @@ fn fuzz(ops: Input) {
                                 "### Encountered curruption while popping (many)! Repairing now. Originated from:\n{_backtrace:#}"
                             );
 
-                                sequential_storage::queue::try_repair(&mut flash, FLASH_RANGE)
-                                    .unwrap();
+                                block_on(sequential_storage::queue::try_repair(
+                                    &mut flash,
+                                    FLASH_RANGE,
+                                ))
+                                .unwrap();
                                 corruption_repaired = true;
                                 retry = true;
                                 *n -= i;
@@ -246,7 +279,11 @@ fn fuzz(ops: Input) {
                     }
                 }
                 Op::Peek => {
-                    match sequential_storage::queue::peek(&mut flash, FLASH_RANGE, &mut buf) {
+                    match block_on(sequential_storage::queue::peek(
+                        &mut flash,
+                        FLASH_RANGE,
+                        &mut buf.0,
+                    )) {
                         Ok(value) => {
                             assert_eq!(
                                 value.map(|b| &b[..]),
@@ -261,7 +298,11 @@ fn fuzz(ops: Input) {
                                 "### Encountered curruption while peeking (single)! Repairing now. Originated from:\n{_backtrace:#}"
                             );
 
-                            sequential_storage::queue::try_repair(&mut flash, FLASH_RANGE).unwrap();
+                            block_on(sequential_storage::queue::try_repair(
+                                &mut flash,
+                                FLASH_RANGE,
+                            ))
+                            .unwrap();
                             corruption_repaired = true;
                             retry = true;
                         }
@@ -269,10 +310,10 @@ fn fuzz(ops: Input) {
                     }
                 }
                 Op::PeekMany(n) => {
-                    let mut peeker = match sequential_storage::queue::peek_many(
+                    let mut peeker = match block_on(sequential_storage::queue::peek_many(
                         &mut flash,
                         FLASH_RANGE,
-                    ) {
+                    )) {
                         Ok(val) => val,
                         Err(Error::Corrupted {
                             backtrace: _backtrace,
@@ -282,7 +323,11 @@ fn fuzz(ops: Input) {
                                         "### Encountered curruption while creating peeker! Repairing now. Originated from:\n{_backtrace:#}"
                                     );
 
-                            sequential_storage::queue::try_repair(&mut flash, FLASH_RANGE).unwrap();
+                            block_on(sequential_storage::queue::try_repair(
+                                &mut flash,
+                                FLASH_RANGE,
+                            ))
+                            .unwrap();
                             corruption_repaired = true;
                             retry = true;
                             continue;
@@ -291,7 +336,7 @@ fn fuzz(ops: Input) {
                     };
 
                     for i in 0..*n {
-                        match peeker.next(&mut buf) {
+                        match block_on(peeker.next(&mut buf.0)) {
                             Ok(value) => {
                                 assert_eq!(
                                     value.map(|b| &b[..]),
@@ -309,8 +354,11 @@ fn fuzz(ops: Input) {
                                 "### Encountered curruption while peeking (many)! Repairing now. Originated from:\n{_backtrace:#}"
                             );
 
-                                sequential_storage::queue::try_repair(&mut flash, FLASH_RANGE)
-                                    .unwrap();
+                                block_on(sequential_storage::queue::try_repair(
+                                    &mut flash,
+                                    FLASH_RANGE,
+                                ))
+                                .unwrap();
                                 corruption_repaired = true;
                                 retry = true;
                                 *n -= i;

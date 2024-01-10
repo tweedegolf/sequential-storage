@@ -89,6 +89,11 @@ When using peek_many, you can look at all data from oldest to newest.
   aid with shutdown/cancellation issues.
 - When the state is corrupted, many issues can now be repaired with the repair functions in the map and queue modules
 - Made changes to the entire to better survive shutoffs
+- *Breaking* Convert API to async first supporting the traits from embedded-storage-async. Flash
+  drivers supporting `sequential-storage` can be wrapped using
+  [BlockingAsync](https://docs.embassy.dev/embassy-embedded-hal/git/default/adapter/struct.BlockingAsync.html), and a 
+  simple [blocking executor](https://docs.rs/futures/0.3.30/futures/executor/fn.block_on.html) can be used to call the 
+  API from a non-async function.
 
 ### 0.6.2 - 22-12-23
 
