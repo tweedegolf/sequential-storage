@@ -60,7 +60,7 @@
 //!     BufferTooSmall
 //! }
 //!
-//! block_on(async {
+//! # block_on(async {
 //! // Initialize the flash. This can be internal or external
 //! let mut flash = Flash::default();
 //! // These are the flash addresses in which the crate will operate.
@@ -105,7 +105,7 @@
 //!     ).await.unwrap(),
 //!     Some(MyCustomType { key: 42, data: 104729 })
 //! );
-//! });
+//! # });
 //! ```
 
 use crate::item::{find_next_free_item_spot, Item, ItemHeader, ItemIter};

@@ -15,9 +15,7 @@
 //! #     Flash::new(mock_flash::WriteCountCheck::Twice, None)
 //! # }
 //! #
-//!
-//! // Use any async executor you want
-//! block_on(async {
+//! # block_on(async {
 //!
 //! // Initialize the flash. This can be internal or external
 //! let mut flash = init_flash();
@@ -53,7 +51,7 @@
 //!     pop(&mut flash, flash_range.clone(), &mut data_buffer).await,
 //!     Ok(None)
 //! );
-//! });
+//! # });
 //! ```
 
 use crate::item::{find_next_free_item_spot, is_page_empty, Item, ItemHeader, ItemHeaderIter};

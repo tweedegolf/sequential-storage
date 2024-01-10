@@ -23,6 +23,14 @@ Corrupted data is ignored. This means you will lose the corrupted data, but not 
 
 If you're looking for an alternative with different tradeoffs, take a look at [ekv](https://github.com/embassy-rs/ekv).
 
+***Note:** The crate uses futures for its operations. These futures write to flash. If a future is cancelled, this can lead*
+*to a corrupted flash state, so cancelling is at your own risc. This state then might have to be repaired first before operation can be continued. In any case, the thing you tried to store or erase might or might not have fully happened.*
+
+## Corruption repair
+
+If for some reason an operation returns the corrupted error, then it might be repairable in many cases.
+See the repair functions in the map and queue modules for more info.
+
 ## Inner workings
 
 To save on erase cycles, this crate only really appends data to the pages. Exactly how this is done depends
@@ -83,6 +91,8 @@ When using peek_many, you can look at all data from oldest to newest.
 (DD-MM-YY)
 
 ### Unreleased
+
+### 0.7.0 10-01-24
 
 - *Breaking* Data CRC has been upgraded to 32-bit from 16-bit. Turns out 16-bit has too many collisions.
   This increases the item header size from 6 to 8. The CRC was also moved to the front of the header to
