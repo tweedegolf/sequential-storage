@@ -27,7 +27,7 @@ use core::ops::Range;
 use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
 
 use crate::{
-    calculate_page_address, calculate_page_end_address, get_page_state, round_down_to_alignment,
+    cache::StateQuery, calculate_page_address, calculate_page_end_address, round_down_to_alignment,
     round_down_to_alignment_usize, round_up_to_alignment, round_up_to_alignment_usize, AlignedBuf,
     Error, NorFlashExt, PageState, MAX_WORD_SIZE,
 };
@@ -404,12 +404,17 @@ fn crc32_with_initial(data: &[u8], initial: u32) -> u32 {
 pub async fn is_page_empty<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
+    query: &mut impl StateQuery,
     page_index: usize,
     page_state: Option<PageState>,
 ) -> Result<bool, Error<S::Error>> {
     let page_state = match page_state {
         Some(page_state) => page_state,
-        None => get_page_state::<S>(flash, flash_range.clone(), page_index).await?,
+        None => {
+            query
+                .get_page_state::<S>(flash, flash_range.clone(), page_index)
+                .await?
+        }
     };
 
     match page_state {

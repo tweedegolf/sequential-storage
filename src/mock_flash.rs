@@ -105,7 +105,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
     #[cfg(feature = "_test")]
     /// Print all items in flash to the returned string
     pub fn print_items(&mut self) -> String {
-        use crate::NorFlashExt;
+        use crate::{cache::StateQuery, NorFlashExt};
         use futures::executor::block_on;
         use std::fmt::Write;
 
@@ -120,7 +120,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
             writeln!(
                 s,
                 "  Page {page_index} ({}):",
-                match block_on(crate::get_page_state(
+                match block_on(crate::cache::NoCache.get_page_state(
                     self,
                     Self::FULL_FLASH_RANGE,
                     page_index

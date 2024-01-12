@@ -97,6 +97,8 @@ fn fuzz(ops: Input) {
     );
     const FLASH_RANGE: Range<u32> = 0x000..0x1000;
 
+    let mut cache = sequential_storage::cache::NoCache;
+
     let mut map = HashMap::new();
     #[repr(align(4))]
     struct AlignedBuf([u8; 260]);
@@ -123,6 +125,7 @@ fn fuzz(ops: Input) {
                     match block_on(sequential_storage::map::store_item(
                         &mut flash,
                         FLASH_RANGE,
+                        &mut cache,
                         &mut buf.0,
                         item.clone(),
                     )) {
@@ -137,6 +140,7 @@ fn fuzz(ops: Input) {
                             match block_on(sequential_storage::map::fetch_item::<TestItem, _>(
                                 &mut flash,
                                 FLASH_RANGE,
+                                &mut cache,
                                 &mut buf.0,
                                 item.key,
                             )) {
@@ -167,6 +171,7 @@ fn fuzz(ops: Input) {
                             block_on(sequential_storage::map::try_repair::<TestItem, _>(
                                 &mut flash,
                                 FLASH_RANGE,
+                                &mut cache,
                                 &mut buf.0,
                             ))
                             .unwrap();
@@ -180,6 +185,7 @@ fn fuzz(ops: Input) {
                     match block_on(sequential_storage::map::fetch_item::<TestItem, _>(
                         &mut flash,
                         FLASH_RANGE,
+                        &mut cache,
                         &mut buf.0,
                         key,
                     )) {
@@ -213,6 +219,7 @@ fn fuzz(ops: Input) {
                             block_on(sequential_storage::map::try_repair::<TestItem, _>(
                                 &mut flash,
                                 FLASH_RANGE,
+                                &mut cache,
                                 &mut buf.0,
                             ))
                             .unwrap();
