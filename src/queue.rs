@@ -140,18 +140,7 @@ pub async fn push<S: NorFlash>(
                     return Err(Error::FullStorage);
                 }
 
-                flash
-                    .erase(
-                        calculate_page_address::<S>(flash_range.clone(), next_page),
-                        calculate_page_end_address::<S>(flash_range.clone(), next_page),
-                    )
-                    .await
-                    .map_err(|e| Error::Storage {
-                        value: e,
-                        #[cfg(feature = "_test")]
-                        backtrace: std::backtrace::Backtrace::capture(),
-                    })?;
-
+                open_page(flash, flash_range.clone(), query, next_page).await?;
                 close_page(flash, flash_range.clone(), query, current_page).await?;
                 partial_close_page(flash, flash_range.clone(), query, next_page).await?;
                 next_address = Some(next_page_data_start_address);
@@ -568,8 +557,9 @@ async fn find_oldest_page<S: NorFlash>(
 pub async fn try_repair<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
+    query: &mut impl Cache,
 ) -> Result<(), Error<S::Error>> {
-    crate::try_general_repair(flash, flash_range.clone()).await?;
+    crate::try_general_repair(flash, flash_range.clone(), query).await?;
     Ok(())
 }
 

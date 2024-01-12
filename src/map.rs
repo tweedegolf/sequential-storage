@@ -577,17 +577,7 @@ async fn migrate_items<I: StorageItem, S: NorFlash>(
         }
     }
 
-    flash
-        .erase(
-            calculate_page_address::<S>(flash_range.clone(), source_page),
-            calculate_page_end_address::<S>(flash_range.clone(), source_page),
-        )
-        .await
-        .map_err(|e| MapError::Storage {
-            value: e,
-            #[cfg(feature = "_test")]
-            backtrace: std::backtrace::Backtrace::capture(),
-        })?;
+    open_page(flash, flash_range.clone(), query, source_page).await?;
 
     Ok(())
 }
@@ -610,7 +600,7 @@ pub async fn try_repair<I: StorageItem, S: NorFlash>(
 ) -> Result<(), MapError<I::Error, S::Error>> {
     query.invalidate_cache_state();
 
-    crate::try_general_repair(flash, flash_range.clone()).await?;
+    crate::try_general_repair(flash, flash_range.clone(), query).await?;
 
     // Let's check if we corrupted in the middle of a migration
     if let Some(partial_open_page) = find_first_page(
@@ -630,17 +620,7 @@ pub async fn try_repair<I: StorageItem, S: NorFlash>(
         {
             // Yes, the migration got interrupted. Let's redo it.
             // To do that, we erase the partial open page first because it contains incomplete data.
-            flash
-                .erase(
-                    calculate_page_address::<S>(flash_range.clone(), partial_open_page),
-                    calculate_page_end_address::<S>(flash_range.clone(), partial_open_page),
-                )
-                .await
-                .map_err(|e| MapError::Storage {
-                    value: e,
-                    #[cfg(feature = "_test")]
-                    backtrace: std::backtrace::Backtrace::capture(),
-                })?;
+            open_page(flash, flash_range.clone(), query, partial_open_page).await?;
 
             // Then partially close it again
             partial_close_page(flash, flash_range.clone(), &mut NoCache, partial_open_page).await?;

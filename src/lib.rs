@@ -49,6 +49,7 @@ impl<const SIZE: usize> DerefMut for AlignedBuf<SIZE> {
 async fn try_general_repair<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
+    query: &mut impl StateQuery,
 ) -> Result<(), Error<S::Error>> {
     // Loop through the pages and get their state. If one returns the corrupted error,
     // the page is likely half-erased. Fix for that is to re-erase again to hopefully finish the job.
@@ -59,17 +60,7 @@ async fn try_general_repair<S: NorFlash>(
                 .await,
             Err(Error::Corrupted { .. })
         ) {
-            flash
-                .erase(
-                    calculate_page_address::<S>(flash_range.clone(), page_index),
-                    calculate_page_end_address::<S>(flash_range.clone(), page_index),
-                )
-                .await
-                .map_err(|e| Error::Storage {
-                    value: e,
-                    #[cfg(feature = "_test")]
-                    backtrace: std::backtrace::Backtrace::capture(),
-                })?;
+            open_page(flash, flash_range.clone(), query, page_index).await?;
         }
     }
 
@@ -147,6 +138,30 @@ const fn calculate_page_index<S: NorFlash>(flash_range: Range<u32>, address: u32
 /// The marker being used for page states
 const MARKER: u8 = 0;
 
+/// Erase the page to open it again
+async fn open_page<S: NorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+    query: &mut impl StateQuery,
+    page_index: usize,
+) -> Result<(), Error<S::Error>> {
+    query.notice_page_state(page_index, PageState::Open);
+
+    flash
+        .erase(
+            calculate_page_address::<S>(flash_range.clone(), page_index),
+            calculate_page_end_address::<S>(flash_range.clone(), page_index),
+        )
+        .await
+        .map_err(|e| Error::Storage {
+            value: e,
+            #[cfg(feature = "_test")]
+            backtrace: std::backtrace::Backtrace::capture(),
+        })?;
+
+    Ok(())
+}
+
 /// Fully closes a page by writing both the start and end marker
 async fn close_page<S: NorFlash>(
     flash: &mut S,
@@ -160,6 +175,8 @@ async fn close_page<S: NorFlash>(
     if current_state != PageState::PartialOpen {
         return Ok(());
     }
+
+    query.notice_page_state(page_index, PageState::Closed);
 
     let buffer = AlignedBuf([MARKER; MAX_WORD_SIZE]);
     // Close the end marker
@@ -193,6 +210,14 @@ async fn partial_close_page<S: NorFlash>(
         return Ok(current_state);
     }
 
+    let new_state = match current_state {
+        PageState::Closed => PageState::Closed,
+        PageState::PartialOpen => PageState::PartialOpen,
+        PageState::Open => PageState::PartialOpen,
+    };
+
+    query.notice_page_state(page_index, new_state);
+
     let buffer = AlignedBuf([MARKER; MAX_WORD_SIZE]);
     // Close the start marker
     flash
@@ -207,11 +232,7 @@ async fn partial_close_page<S: NorFlash>(
             backtrace: std::backtrace::Backtrace::capture(),
         })?;
 
-    Ok(match current_state {
-        PageState::Closed => PageState::Closed,
-        PageState::PartialOpen => PageState::PartialOpen,
-        PageState::Open => PageState::PartialOpen,
-    })
+    Ok(new_state)
 }
 
 /// The state of a page

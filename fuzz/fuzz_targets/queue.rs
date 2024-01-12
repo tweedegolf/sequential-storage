@@ -89,6 +89,7 @@ fn fuzz(ops: Input) {
                             block_on(sequential_storage::queue::try_repair(
                                 &mut flash,
                                 FLASH_RANGE,
+                                &mut cache,
                             ))
                             .unwrap();
                             corruption_repaired = true;
@@ -149,6 +150,7 @@ fn fuzz(ops: Input) {
                             block_on(sequential_storage::queue::try_repair(
                                 &mut flash,
                                 FLASH_RANGE,
+                                &mut cache,
                             ))
                             .unwrap();
                             corruption_repaired = true;
@@ -198,6 +200,7 @@ fn fuzz(ops: Input) {
                             block_on(sequential_storage::queue::try_repair(
                                 &mut flash,
                                 FLASH_RANGE,
+                                &mut cache,
                             ))
                             .unwrap();
                             corruption_repaired = true;
@@ -224,6 +227,7 @@ fn fuzz(ops: Input) {
                             block_on(sequential_storage::queue::try_repair(
                                 &mut flash,
                                 FLASH_RANGE,
+                                &mut cache,
                             ))
                             .unwrap();
                             corruption_repaired = true;
@@ -273,6 +277,7 @@ fn fuzz(ops: Input) {
                                 block_on(sequential_storage::queue::try_repair(
                                     &mut flash,
                                     FLASH_RANGE,
+                                    &mut cache,
                                 ))
                                 .unwrap();
                                 corruption_repaired = true;
@@ -308,6 +313,7 @@ fn fuzz(ops: Input) {
                             block_on(sequential_storage::queue::try_repair(
                                 &mut flash,
                                 FLASH_RANGE,
+                                &mut cache,
                             ))
                             .unwrap();
                             corruption_repaired = true;
@@ -334,6 +340,7 @@ fn fuzz(ops: Input) {
                             block_on(sequential_storage::queue::try_repair(
                                 &mut flash,
                                 FLASH_RANGE,
+                                &mut cache,
                             ))
                             .unwrap();
                             corruption_repaired = true;
@@ -365,6 +372,7 @@ fn fuzz(ops: Input) {
                                 block_on(sequential_storage::queue::try_repair(
                                     &mut flash,
                                     FLASH_RANGE,
+                                    &mut cache,
                                 ))
                                 .unwrap();
                                 corruption_repaired = true;
