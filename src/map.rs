@@ -161,6 +161,10 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
     assert!(S::ERASE_SIZE >= S::WORD_SIZE * 3);
     assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
 
+    if query.is_dirty() {
+        query.invalidate_cache_state();
+    }
+
     // We need to find the page we were last using. This should be the only partial open page.
     let mut last_used_page =
         find_first_page(flash, flash_range.clone(), query, 0, PageState::PartialOpen).await?;
@@ -181,6 +185,7 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
             } else {
                 // The page before the open page is not closed, so it must be open.
                 // This means that all pages are open and that we don't have any items yet.
+                query.unmark_dirty();
                 return Ok(None);
             }
         } else {
@@ -233,12 +238,14 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
             != PageState::Closed
         {
             // We've looked through all the pages with data and couldn't find the item
+            query.unmark_dirty();
             return Ok(None);
         }
 
         current_page_to_check = previous_page;
     }
 
+    query.unmark_dirty();
     Ok(newest_found_item)
 }
 
@@ -259,16 +266,21 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
 ) -> Result<(), MapError<I::Error, S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
-
-    assert!(flash_range.len() / S::ERASE_SIZE >= 2);
+    
+    assert!(flash_range.end - flash_range.start >= S::ERASE_SIZE as u32 * 2);
 
     assert!(S::ERASE_SIZE >= S::WORD_SIZE * 3);
     assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
+
+    if query.is_dirty() {
+        query.invalidate_cache_state();
+    }
 
     let mut recursion_level = 0;
     loop {
         // Check if we're in an infinite recursion which happens when we don't have enough space to store the new data
         if recursion_level == get_pages::<S>(flash_range.clone(), 0).count() {
+            query.unmark_dirty();
             return Err(MapError::FullStorage);
         }
 
@@ -320,6 +332,7 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
                     Item::write_new(flash, free_spot_address, &data_buffer[..item_data_length])
                         .await?;
 
+                    query.unmark_dirty();
                     return Ok(());
                 }
                 None => {

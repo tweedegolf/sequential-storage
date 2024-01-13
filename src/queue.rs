@@ -86,11 +86,16 @@ pub async fn push<S: NorFlash>(
     assert!(S::ERASE_SIZE >= S::WORD_SIZE * 4);
     assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
 
+    if query.is_dirty() {
+        query.invalidate_cache_state();
+    }
+
     // Data must fit in a single page
     if data.len()
         > ItemHeader::available_data_bytes::<S>((S::ERASE_SIZE - S::WORD_SIZE * 2) as u32).unwrap()
             as usize
     {
+        query.unmark_dirty();
         return Err(Error::BufferTooBig);
     }
 
@@ -137,6 +142,7 @@ pub async fn push<S: NorFlash>(
                     && !is_page_empty(flash, flash_range.clone(), query, next_page, Some(state))
                         .await?
                 {
+                    query.unmark_dirty();
                     return Err(Error::FullStorage);
                 }
 
@@ -157,6 +163,7 @@ pub async fn push<S: NorFlash>(
 
     Item::write_new(flash, next_address.unwrap(), data).await?;
 
+    query.unmark_dirty();
     Ok(())
 }
 
@@ -253,6 +260,10 @@ impl<'d, S: MultiwriteNorFlash, Q: Cache> PopIterator<'d, S, Q> {
         &mut self,
         data_buffer: &'m mut [u8],
     ) -> Result<Option<&'m mut [u8]>, Error<S::Error>> {
+        if self.iter.query.is_dirty() {
+            self.iter.query.invalidate_cache_state();
+        }
+
         let reset_point = self.iter.create_reset_point();
 
         if let Some((item, item_address)) = self.iter.next(data_buffer).await? {
@@ -260,13 +271,17 @@ impl<'d, S: MultiwriteNorFlash, Q: Cache> PopIterator<'d, S, Q> {
             let ret = &mut data_buffer[..header.length as usize];
 
             match header.erase_data(self.iter.flash, item_address).await {
-                Ok(_) => Ok(Some(ret)),
+                Ok(_) => {
+                    self.iter.query.unmark_dirty();
+                    Ok(Some(ret))
+                }
                 Err(e) => {
                     self.iter.recover_from_reset_point(reset_point);
                     Err(e)
                 }
             }
         } else {
+            self.iter.query.unmark_dirty();
             Ok(None)
         }
     }
@@ -291,6 +306,10 @@ impl<'d, S: NorFlash, Q: Cache> PeekIterator<'d, S, Q> {
         &mut self,
         data_buffer: &'m mut [u8],
     ) -> Result<Option<&'m mut [u8]>, Error<S::Error>> {
+        if self.iter.query.is_dirty() {
+            self.iter.query.invalidate_cache_state();
+        }
+
         Ok(self.iter.next(data_buffer).await?.map(|(item, _)| {
             let (header, data_buffer) = item.destruct();
             &mut data_buffer[..header.length as usize]
@@ -332,6 +351,10 @@ impl<'d, S: NorFlash, Q: StateQuery> QueueIterator<'d, S, Q> {
         assert!(S::ERASE_SIZE >= S::WORD_SIZE * 4);
         assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
 
+        if query.is_dirty() {
+            query.invalidate_cache_state();
+        }
+
         // We start at the start of the oldest page
         let current_address = calculate_page_address::<S>(
             flash_range.clone(),
@@ -352,6 +375,10 @@ impl<'d, S: NorFlash, Q: StateQuery> QueueIterator<'d, S, Q> {
     ) -> Result<Option<(Item<'m>, u32)>, Error<S::Error>> {
         let mut data_buffer = Some(data_buffer);
 
+        if self.query.is_dirty() {
+            self.query.invalidate_cache_state();
+        }
+
         loop {
             // Get the current page and address based on what was stored
             let (current_page, current_address) = match self.current_address {
@@ -366,6 +393,7 @@ impl<'d, S: NorFlash, Q: StateQuery> QueueIterator<'d, S, Q> {
                             == find_oldest_page(self.flash, self.flash_range.clone(), self.query)
                                 .await?
                     {
+                        self.query.unmark_dirty();
                         return Ok(None);
                     }
 
@@ -421,6 +449,7 @@ impl<'d, S: NorFlash, Q: StateQuery> QueueIterator<'d, S, Q> {
                             CurrentAddress::Address(next_address)
                         };
                         // Return the item we found
+                        self.query.unmark_dirty();
                         return Ok(Some((item, found_item_address)));
                     }
                 }
@@ -458,6 +487,10 @@ pub async fn find_max_fit<S: NorFlash>(
     assert!(S::ERASE_SIZE >= S::WORD_SIZE * 4);
     assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
 
+    if query.is_dirty() {
+        query.invalidate_cache_state();
+    }
+
     let current_page = find_youngest_page(flash, flash_range.clone(), query).await?;
 
     // Check if we have space on the next page
@@ -468,10 +501,12 @@ pub async fn find_max_fit<S: NorFlash>(
     {
         state @ PageState::Closed => {
             if is_page_empty(flash, flash_range.clone(), query, next_page, Some(state)).await? {
+                query.unmark_dirty();
                 return Ok(Some((S::ERASE_SIZE - (2 * S::WORD_SIZE)) as u32));
             }
         }
         PageState::Open => {
+            query.unmark_dirty();
             return Ok(Some((S::ERASE_SIZE - (2 * S::WORD_SIZE)) as u32));
         }
         PageState::PartialOpen => {
@@ -494,6 +529,7 @@ pub async fn find_max_fit<S: NorFlash>(
         .await?
         .1;
 
+    query.unmark_dirty();
     Ok(ItemHeader::available_data_bytes::<S>(
         page_data_end_address - next_item_address,
     ))
