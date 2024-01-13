@@ -599,6 +599,7 @@ pub async fn try_repair<I: StorageItem, S: NorFlash>(
     data_buffer: &mut [u8],
 ) -> Result<(), MapError<I::Error, S::Error>> {
     query.invalidate_cache_state();
+    #[allow(dropping_references)]
     drop(query);
 
     crate::try_general_repair(flash, flash_range.clone(), &mut NoCache).await?;

@@ -560,6 +560,7 @@ pub async fn try_repair<S: NorFlash>(
     query: &mut impl Cache,
 ) -> Result<(), Error<S::Error>> {
     query.invalidate_cache_state();
+    #[allow(dropping_references)]
     drop(query);
 
     crate::try_general_repair(flash, flash_range.clone(), &mut NoCache).await?;
