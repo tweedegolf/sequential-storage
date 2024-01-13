@@ -273,7 +273,7 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
         #[cfg(feature = "defmt")]
         defmt::trace!("Store item inner. Recursion: {}", recursion_level);
 
-        // Check if we're in an infinite recursion which happens when
+        // Check if we're in an infinite recursion which happens when we don't have enough space to store the new data
         if recursion_level == get_pages::<S>(flash_range.clone(), 0).count() {
             return Err(MapError::FullStorage);
         }
@@ -599,8 +599,9 @@ pub async fn try_repair<I: StorageItem, S: NorFlash>(
     data_buffer: &mut [u8],
 ) -> Result<(), MapError<I::Error, S::Error>> {
     query.invalidate_cache_state();
+    drop(query);
 
-    crate::try_general_repair(flash, flash_range.clone(), query).await?;
+    crate::try_general_repair(flash, flash_range.clone(), &mut NoCache).await?;
 
     // Let's check if we corrupted in the middle of a migration
     if let Some(partial_open_page) = find_first_page(
@@ -620,7 +621,7 @@ pub async fn try_repair<I: StorageItem, S: NorFlash>(
         {
             // Yes, the migration got interrupted. Let's redo it.
             // To do that, we erase the partial open page first because it contains incomplete data.
-            open_page(flash, flash_range.clone(), query, partial_open_page).await?;
+            open_page(flash, flash_range.clone(), &mut NoCache, partial_open_page).await?;
 
             // Then partially close it again
             partial_close_page(flash, flash_range.clone(), &mut NoCache, partial_open_page).await?;

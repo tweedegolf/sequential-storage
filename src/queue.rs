@@ -559,7 +559,10 @@ pub async fn try_repair<S: NorFlash>(
     flash_range: Range<u32>,
     query: &mut impl Cache,
 ) -> Result<(), Error<S::Error>> {
-    crate::try_general_repair(flash, flash_range.clone(), query).await?;
+    query.invalidate_cache_state();
+    drop(query);
+
+    crate::try_general_repair(flash, flash_range.clone(), &mut NoCache).await?;
     Ok(())
 }
 
@@ -792,7 +795,7 @@ mod tests {
     async fn push_pop_tiny() {
         let mut flash = MockFlashTiny::new(WriteCountCheck::Twice, None);
         let flash_range = 0x00..0x40;
-        let mut data_buffer = [0; 1024];
+        let mut data_buffer = AlignedBuf([0; 1024]);
 
         for i in 0..2000 {
             println!("{i}");
@@ -851,7 +854,7 @@ mod tests {
     async fn push_peek_pop_many() {
         let mut flash = MockFlashBig::new(WriteCountCheck::Twice, None);
         let flash_range = 0x000..0x1000;
-        let mut data_buffer = [0; 1024];
+        let mut data_buffer = AlignedBuf([0; 1024]);
 
         let mut push_ops = (0, 0, 0, 0);
         let mut peek_ops = (0, 0, 0, 0);
@@ -945,7 +948,7 @@ mod tests {
     async fn push_lots_then_pop_lots() {
         let mut flash = MockFlashBig::new(WriteCountCheck::Twice, None);
         let flash_range = 0x000..0x1000;
-        let mut data_buffer = [0; 1024];
+        let mut data_buffer = AlignedBuf([0; 1024]);
 
         let mut push_ops = (0, 0, 0, 0);
         let mut pop_ops = (0, 0, 0, 0);
