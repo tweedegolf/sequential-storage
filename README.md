@@ -92,6 +92,10 @@ When using peek_many, you can look at all data from oldest to newest.
 
 ### Unreleased
 
+- *Breaking* Added cache options to the functions to speed up reading the state of the flash.
+  To retain the old behaviour you can pass the `NoCache` type as the cache parameter.
+- Removed defmt logging since that wasn't being maintained. The format impl for the errors remain.
+
 ### 0.7.0 10-01-24
 
 - *Breaking* Data CRC has been upgraded to 32-bit from 16-bit. Turns out 16-bit has too many collisions.

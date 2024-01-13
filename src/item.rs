@@ -461,15 +461,7 @@ impl ItemIter {
                 .read_item(flash, buffer, address, self.header.end_address)
                 .await?
             {
-                MaybeItem::Corrupted(_, buffer) => {
-                    #[cfg(feature = "defmt")]
-                    defmt::error!(
-                        "Found a corrupted item at {:X}. Skipping...",
-                        self.header.current_address
-                    );
-                    data_buffer.replace(buffer);
-                }
-                MaybeItem::Erased(_, buffer) => {
+                MaybeItem::Corrupted(_, buffer) | MaybeItem::Erased(_, buffer) => {
                     data_buffer.replace(buffer);
                 }
                 MaybeItem::Present(item) => {

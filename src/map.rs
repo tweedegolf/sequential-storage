@@ -165,9 +165,6 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
     let mut last_used_page =
         find_first_page(flash, flash_range.clone(), query, 0, PageState::PartialOpen).await?;
 
-    #[cfg(feature = "defmt")]
-    defmt::trace!("Fetch item, last used page: {}", last_used_page);
-
     if last_used_page.is_none() {
         // In the event that all pages are still open or the last used page was just closed, we search for the first open page.
         // If the page one before that is closed, then that's the last used page.
@@ -270,9 +267,6 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
 
     let mut recursion_level = 0;
     loop {
-        #[cfg(feature = "defmt")]
-        defmt::trace!("Store item inner. Recursion: {}", recursion_level);
-
         // Check if we're in an infinite recursion which happens when we don't have enough space to store the new data
         if recursion_level == get_pages::<S>(flash_range.clone(), 0).count() {
             return Err(MapError::FullStorage);
@@ -282,9 +276,6 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
         let next_page_to_use = if let Some(partial_open_page) =
             find_first_page(flash, flash_range.clone(), query, 0, PageState::PartialOpen).await?
         {
-            #[cfg(feature = "defmt")]
-            defmt::trace!("Partial open page found: {}", partial_open_page);
-
             // We found a partial open page, but at this point it's relatively cheap to do a consistency check
             if !query
                 .get_page_state(
@@ -329,18 +320,9 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
                     Item::write_new(flash, free_spot_address, &data_buffer[..item_data_length])
                         .await?;
 
-                    #[cfg(feature = "defmt")]
-                    defmt::trace!("Item has been written ok");
-
                     return Ok(());
                 }
                 None => {
-                    #[cfg(feature = "defmt")]
-                    defmt::trace!(
-                        "Partial open page is too small. Closing it now: {}",
-                        partial_open_page
-                    );
-
                     // The item doesn't fit here, so we need to close this page and move to the next
                     close_page(flash, flash_range.clone(), query, partial_open_page).await?;
                     Some(next_page::<S>(flash_range.clone(), partial_open_page))
@@ -354,9 +336,6 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
         // If there was a partial page, then we need to look at the next page. It's supposed to be open since it was the previous empty buffer page.
         // The new buffer page has to be emptied if it was closed.
         // If there was no partial page, we just use the first open page.
-
-        #[cfg(feature = "defmt")]
-        defmt::trace!("Next page to use: {}", next_page_to_use);
 
         match next_page_to_use {
             Some(next_page_to_use) => {
@@ -402,11 +381,6 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
                     {
                         Some(first_open_page) => first_open_page,
                         None => {
-                            #[cfg(feature = "defmt")]
-                            defmt::error!(
-                                "No open pages found for sequential storage in the range: {}",
-                                flash_range
-                            );
                             // Uh oh, no open pages.
                             // Something has gone wrong.
                             // We should never get here.

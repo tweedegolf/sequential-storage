@@ -147,8 +147,6 @@ pub async fn push<S: NorFlash>(
             }
             PageState::PartialOpen => {
                 // This should never happen
-                #[cfg(feature = "defmt")]
-                defmt::error!("Corrupted: A we expected an open or closed page, but found a partial open page");
                 return Err(Error::Corrupted {
                     #[cfg(feature = "_test")]
                     backtrace: std::backtrace::Backtrace::capture(),
@@ -521,9 +519,6 @@ async fn find_youngest_page<S: NorFlash>(
     }
 
     // All pages are closed... This is not correct.
-    #[cfg(feature = "defmt")]
-    defmt::error!("Corrupted: All pages are closed");
-
     Err(Error::Corrupted {
         #[cfg(feature = "_test")]
         backtrace: std::backtrace::Backtrace::capture(),
