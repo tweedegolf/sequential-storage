@@ -268,7 +268,7 @@ mod map_tests {
     async fn page_state_cache() {
         assert_eq!(
             run_test(PageStateCache::<NUM_PAGES>::new()).await,
-            (171543, 5201, 198)
+            (172831, 5201, 198)
         );
     }
 

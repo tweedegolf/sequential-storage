@@ -266,7 +266,7 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
 ) -> Result<(), MapError<I::Error, S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
-    
+
     assert!(flash_range.end - flash_range.start >= S::ERASE_SIZE as u32 * 2);
 
     assert!(S::ERASE_SIZE >= S::WORD_SIZE * 3);
