@@ -124,7 +124,7 @@ fn fuzz(ops: Input) {
                         &mut flash,
                         FLASH_RANGE,
                         &mut buf.0,
-                        item.clone(),
+                        &item,
                     )) {
                         Ok(_) => {
                             map.insert(item.key, item.value);
