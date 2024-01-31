@@ -91,7 +91,7 @@
 //!     &mut flash,
 //!     flash_range.clone(),
 //!     &mut data_buffer,
-//!     MyCustomType { key: 42, data: 104729 },
+//!     &MyCustomType { key: 42, data: 104729 },
 //! ).await.unwrap();
 //!
 //! // When we ask for key 42, we not get back a Some with the correct value
@@ -241,7 +241,7 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     data_buffer: &mut [u8],
-    item: I,
+    item: &I,
 ) -> Result<(), MapError<I::Error, S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
@@ -733,7 +733,7 @@ mod tests {
             &mut flash,
             flash_range.clone(),
             &mut data_buffer,
-            MockStorageItem {
+            &MockStorageItem {
                 key: 0,
                 value: vec![5],
             },
@@ -744,7 +744,7 @@ mod tests {
             &mut flash,
             flash_range.clone(),
             &mut data_buffer,
-            MockStorageItem {
+            &MockStorageItem {
                 key: 0,
                 value: vec![5, 6],
             },
@@ -764,7 +764,7 @@ mod tests {
             &mut flash,
             flash_range.clone(),
             &mut data_buffer,
-            MockStorageItem {
+            &MockStorageItem {
                 key: 1,
                 value: vec![2, 2, 2, 2, 2, 2],
             },
@@ -793,7 +793,7 @@ mod tests {
                 &mut flash,
                 flash_range.clone(),
                 &mut data_buffer,
-                MockStorageItem {
+                &MockStorageItem {
                     key: (index % 10) as u8,
                     value: vec![(index % 10) as u8 * 2; index % 10],
                 },
@@ -821,7 +821,7 @@ mod tests {
                 &mut flash,
                 flash_range.clone(),
                 &mut data_buffer,
-                MockStorageItem {
+                &MockStorageItem {
                     key: 11,
                     value: vec![0; 10],
                 },
@@ -864,7 +864,7 @@ mod tests {
             };
             println!("Storing {item:?}");
 
-            store_item::<_, _>(&mut tiny_flash, 0x00..0x40, &mut data_buffer, item)
+            store_item::<_, _>(&mut tiny_flash, 0x00..0x40, &mut data_buffer, &item)
                 .await
                 .unwrap();
         }
@@ -874,7 +874,7 @@ mod tests {
                 &mut tiny_flash,
                 0x00..0x40,
                 &mut data_buffer,
-                MockStorageItem {
+                &MockStorageItem {
                     key: UPPER_BOUND,
                     value: vec![0; UPPER_BOUND as usize],
                 },
@@ -914,7 +914,7 @@ mod tests {
             };
             println!("Storing {item:?}");
 
-            store_item::<_, _>(&mut big_flash, 0x0000..0x1000, &mut data_buffer, item)
+            store_item::<_, _>(&mut big_flash, 0x0000..0x1000, &mut data_buffer, &item)
                 .await
                 .unwrap();
         }
@@ -924,7 +924,7 @@ mod tests {
                 &mut big_flash,
                 0x0000..0x1000,
                 &mut data_buffer,
-                MockStorageItem {
+                &MockStorageItem {
                     key: UPPER_BOUND,
                     value: vec![0; UPPER_BOUND as usize],
                 },
@@ -966,7 +966,7 @@ mod tests {
                     value: vec![i as u8; LENGHT_PER_KEY[i]],
                 };
 
-                store_item::<_, _>(&mut flash, 0x0000..0x4000, &mut data_buffer, item)
+                store_item::<_, _>(&mut flash, 0x0000..0x4000, &mut data_buffer, &item)
                     .await
                     .unwrap();
             }

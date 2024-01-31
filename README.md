@@ -91,6 +91,7 @@ When using peek_many, you can look at all data from oldest to newest.
 (DD-MM-YY)
 
 ### Unreleased
+- *Breaking* The item to store is now passed by reference to Map `store_item`
 
 ### 0.7.0 10-01-24
 
