@@ -99,7 +99,7 @@
 //!     flash_range.clone(),
 //!     &mut cache,
 //!     &mut data_buffer,
-//!     MyCustomType { key: 42, data: 104729 },
+//!     &MyCustomType { key: 42, data: 104729 },
 //! ).await.unwrap();
 //!
 //! // When we ask for key 42, we not get back a Some with the correct value
@@ -262,7 +262,7 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
     flash_range: Range<u32>,
     cache: &mut Cache<impl PageStatesCache>,
     data_buffer: &mut [u8],
-    item: I,
+    item: &I,
 ) -> Result<(), MapError<I::Error, S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
@@ -764,7 +764,7 @@ mod tests {
             flash_range.clone(),
             &mut cache::NoCache::new(),
             &mut data_buffer,
-            MockStorageItem {
+            &MockStorageItem {
                 key: 0,
                 value: vec![5],
             },
@@ -776,7 +776,7 @@ mod tests {
             flash_range.clone(),
             &mut cache::NoCache::new(),
             &mut data_buffer,
-            MockStorageItem {
+            &MockStorageItem {
                 key: 0,
                 value: vec![5, 6],
             },
@@ -802,7 +802,7 @@ mod tests {
             flash_range.clone(),
             &mut cache::NoCache::new(),
             &mut data_buffer,
-            MockStorageItem {
+            &MockStorageItem {
                 key: 1,
                 value: vec![2, 2, 2, 2, 2, 2],
             },
@@ -842,7 +842,7 @@ mod tests {
                 flash_range.clone(),
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                MockStorageItem {
+                &MockStorageItem {
                     key: (index % 10) as u8,
                     value: vec![(index % 10) as u8 * 2; index % 10],
                 },
@@ -872,7 +872,7 @@ mod tests {
                 flash_range.clone(),
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                MockStorageItem {
+                &MockStorageItem {
                     key: 11,
                     value: vec![0; 10],
                 },
@@ -921,7 +921,7 @@ mod tests {
                 0x00..0x40,
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                item,
+                &item,
             )
             .await
             .unwrap();
@@ -933,7 +933,7 @@ mod tests {
                 0x00..0x40,
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                MockStorageItem {
+                &MockStorageItem {
                     key: UPPER_BOUND,
                     value: vec![0; UPPER_BOUND as usize],
                 },
@@ -979,7 +979,7 @@ mod tests {
                 0x0000..0x1000,
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                item,
+                &item,
             )
             .await
             .unwrap();
@@ -991,7 +991,7 @@ mod tests {
                 0x0000..0x1000,
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                MockStorageItem {
+                &MockStorageItem {
                     key: UPPER_BOUND,
                     value: vec![0; UPPER_BOUND as usize],
                 },
@@ -1039,7 +1039,7 @@ mod tests {
                     0x0000..0x4000,
                     &mut cache::NoCache::new(),
                     &mut data_buffer,
-                    item,
+                    &item,
                 )
                 .await
                 .unwrap();
