@@ -35,10 +35,10 @@ impl DerefMut for NoCache {
 ///
 /// Valid usecase:  
 /// `Create cache 1` -> `use 1` -> `use 1` -> `create cache 2` -> `use 2` -> `use 2`
-/// 
+///
 /// Invalid usecase:  
 /// `Create cache 1` -> `use 1` -> `create cache 2` -> `use 2` -> `❌ use 1 ❌`
-/// 
+///
 /// Make sure the page count is correct. If the number is lower than the actual amount, the code will panic at some point.
 pub struct PageStateCache<const PAGE_COUNT: usize>(Cache<CachedPageStates<PAGE_COUNT>>);
 
