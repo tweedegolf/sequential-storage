@@ -107,6 +107,8 @@ When using peek_many, you can look at all data from oldest to newest.
 
 ### Unreleased
 
+### 0.8.0 05-12-24
+
 - *Breaking* The item to store is now passed by reference to Map `store_item`
 - *Breaking* Added cache options to the functions to speed up reading the state of the flash.
   To retain the old behaviour you can pass the `NoCache` type as the cache parameter.
