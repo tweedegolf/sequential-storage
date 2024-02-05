@@ -31,13 +31,15 @@ pub struct MockFlashBase<const PAGES: usize, const BYTES_PER_WORD: usize, const 
     pub write_count_check: WriteCountCheck,
     /// A countdown to shutoff. When some and 0, an early shutoff will happen.
     pub bytes_until_shutoff: Option<u32>,
+    /// When true, write buffers have to be aligned
+    pub alignment_check: bool,
 }
 
 impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> Default
     for MockFlashBase<PAGES, BYTES_PER_WORD, PAGE_WORDS>
 {
     fn default() -> Self {
-        Self::new(WriteCountCheck::OnceOnly, None)
+        Self::new(WriteCountCheck::OnceOnly, None, true)
     }
 }
 
@@ -53,7 +55,11 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
     pub const FULL_FLASH_RANGE: Range<u32> = 0..(PAGES * PAGE_WORDS * BYTES_PER_WORD) as u32;
 
     /// Create a new flash instance.
-    pub fn new(write_count_check: WriteCountCheck, bytes_until_shutoff: Option<u32>) -> Self {
+    pub fn new(
+        write_count_check: WriteCountCheck,
+        bytes_until_shutoff: Option<u32>,
+        alignment_check: bool,
+    ) -> Self {
         Self {
             writable: vec![T; Self::CAPACITY_WORDS],
             data: vec![u8::MAX; Self::CAPACITY_BYTES],
@@ -62,6 +68,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
             writes: 0,
             write_count_check,
             bytes_until_shutoff,
+            alignment_check,
         }
     }
 
@@ -288,7 +295,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
 
         // Check alignment. Some flash types are strict about the alignment of the input buffer. This ensures
         // that the mock flash is also strict to catch bugs and avoid regressions.
-        if bytes.as_ptr() as usize % 4 != 0 {
+        if self.alignment_check && bytes.as_ptr() as usize % 4 != 0 {
             panic!("write buffer must be aligned to 4 bytes");
         }
 

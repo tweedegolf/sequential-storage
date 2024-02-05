@@ -1,180 +1,142 @@
-use core::ops::Range;
+use core::ops::{Deref, DerefMut};
 
-use embedded_storage_async::nor_flash::NorFlash;
+use crate::PageState;
 
-use crate::{calculate_page_address, Error, PageState, MAX_WORD_SIZE};
+pub struct NoCache(Cache<UncachedPageSates>);
 
-#[allow(private_bounds)]
-pub trait Cache: StateQuery {}
-
-impl<T: StateQuery> Cache for T {}
-
-pub(crate) trait StateQuery {
-    fn invalidate_cache_state(&mut self);
-    fn mark_dirty(&mut self);
-    fn unmark_dirty(&mut self);
-    fn is_dirty(&self) -> bool;
-
-    fn notice_page_state(&mut self, _page_index: usize, _new_state: PageState) {}
-
-    /// Get the state of the page located at the given index
-    async fn get_page_state<S: NorFlash>(
-        &mut self,
-        flash: &mut S,
-        flash_range: Range<u32>,
-        page_index: usize,
-    ) -> Result<PageState, Error<S::Error>> {
-        let page_address = calculate_page_address::<S>(flash_range, page_index);
-        /// We only care about the data in the first byte to aid shutdown/cancellation.
-        /// But we also don't want it to be too too definitive because we want to survive the occasional bitflip.
-        /// So only half of the byte needs to be zero.
-        const HALF_MARKER_BITS: u32 = 4;
-
-        let mut buffer = [0; MAX_WORD_SIZE];
-        flash
-            .read(page_address, &mut buffer[..S::READ_SIZE])
-            .await
-            .map_err(|e| Error::Storage {
-                value: e,
-                #[cfg(feature = "_test")]
-                backtrace: std::backtrace::Backtrace::capture(),
-            })?;
-        let start_marked = buffer[..S::READ_SIZE]
-            .iter()
-            .map(|marker_byte| marker_byte.count_zeros())
-            .sum::<u32>()
-            >= HALF_MARKER_BITS;
-
-        flash
-            .read(
-                page_address + (S::ERASE_SIZE - S::READ_SIZE) as u32,
-                &mut buffer[..S::READ_SIZE],
-            )
-            .await
-            .map_err(|e| Error::Storage {
-                value: e,
-                #[cfg(feature = "_test")]
-                backtrace: std::backtrace::Backtrace::capture(),
-            })?;
-        let end_marked = buffer[..S::READ_SIZE]
-            .iter()
-            .map(|marker_byte| marker_byte.count_zeros())
-            .sum::<u32>()
-            >= HALF_MARKER_BITS;
-
-        match (start_marked, end_marked) {
-            (true, true) => Ok(PageState::Closed),
-            (true, false) => Ok(PageState::PartialOpen),
-            // Probably an interrupted erase
-            (false, true) => Err(Error::Corrupted {
-                #[cfg(feature = "_test")]
-                backtrace: std::backtrace::Backtrace::capture(),
-            }),
-            (false, false) => Ok(PageState::Open),
-        }
+impl NoCache {
+    pub const fn new() -> Self {
+        Self(Cache::new(UncachedPageSates))
     }
 }
 
-pub struct NoCache;
+impl Deref for NoCache {
+    type Target = Cache<UncachedPageSates>;
 
-impl StateQuery for NoCache {
-    fn invalidate_cache_state(&mut self) {}
-
-    fn mark_dirty(&mut self) {}
-
-    fn unmark_dirty(&mut self) {}
-
-    fn is_dirty(&self) -> bool {
-        false
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
-struct DirtyCache {
-    dirty: bool,
-}
-
-impl StateQuery for DirtyCache {
-    fn invalidate_cache_state(&mut self) {
-        self.dirty = false;
-    }
-
-    fn mark_dirty(&mut self) {
-        self.dirty = true;
-    }
-
-    fn unmark_dirty(&mut self) {
-        self.dirty = false;
-    }
-
-    fn is_dirty(&self) -> bool {
-        self.dirty
+impl DerefMut for NoCache {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
-pub struct PageStateCache<const PAGE_COUNT: usize> {
-    dirty_cache: DirtyCache,
-    pages: [Option<PageState>; PAGE_COUNT],
-}
+pub struct PageStateCache<const PAGE_COUNT: usize>(Cache<CachedPageStates<PAGE_COUNT>>);
 
 impl<const PAGE_COUNT: usize> PageStateCache<PAGE_COUNT> {
     pub const fn new() -> Self {
+        Self(Cache::new(CachedPageStates::new()))
+    }
+}
+
+impl<const PAGE_COUNT: usize> Deref for PageStateCache<PAGE_COUNT> {
+    type Target = Cache<CachedPageStates<PAGE_COUNT>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<const PAGE_COUNT: usize> DerefMut for PageStateCache<PAGE_COUNT> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+#[derive(Debug)]
+pub struct Cache<PSC: PageStatesCache> {
+    dirty: bool,
+    page_states: PSC,
+}
+
+impl<PSC: PageStatesCache> Cache<PSC> {
+    pub(crate) const fn new(page_states: PSC) -> Self {
         Self {
-            dirty_cache: DirtyCache { dirty: false },
+            dirty: false,
+            page_states,
+        }
+    }
+
+    pub(crate) fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub(crate) fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    pub(crate) fn unmark_dirty(&mut self) {
+        self.dirty = false;
+    }
+
+    pub(crate) fn invalidate_cache_state(&mut self) {
+        self.dirty = false;
+        self.page_states.invalidate_cache_state();
+    }
+
+    pub(crate) fn get_page_state(&self, page_index: usize) -> Option<PageState> {
+        self.page_states.get_page_state(page_index)
+    }
+
+    pub(crate) fn notice_page_state(&mut self, page_index: usize, new_state: PageState) {
+        self.mark_dirty();
+        self.page_states.notice_page_state(page_index, new_state)
+    }
+}
+
+pub trait PageStatesCache {
+    fn get_page_state(&self, page_index: usize) -> Option<PageState>;
+    fn notice_page_state(&mut self, page_index: usize, new_state: PageState);
+    fn invalidate_cache_state(&mut self);
+}
+
+#[derive(Debug)]
+pub struct CachedPageStates<const PAGE_COUNT: usize> {
+    pages: [Option<PageState>; PAGE_COUNT],
+}
+
+impl<const PAGE_COUNT: usize> CachedPageStates<PAGE_COUNT> {
+    pub const fn new() -> Self {
+        Self {
             pages: [None; PAGE_COUNT],
         }
     }
 }
 
-impl<const PAGE_COUNT: usize> Default for PageStateCache<PAGE_COUNT> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<const PAGE_COUNT: usize> StateQuery for PageStateCache<PAGE_COUNT> {
-    fn invalidate_cache_state(&mut self) {
-        self.dirty_cache.invalidate_cache_state();
-        self.pages = [None; PAGE_COUNT];
-    }
-
-    fn mark_dirty(&mut self) {
-        self.dirty_cache.mark_dirty();
-    }
-
-    fn unmark_dirty(&mut self) {
-        self.dirty_cache.unmark_dirty();
-    }
-
-    fn is_dirty(&self) -> bool {
-        self.dirty_cache.is_dirty()
+impl<const PAGE_COUNT: usize> PageStatesCache for CachedPageStates<PAGE_COUNT> {
+    fn get_page_state(&self, page_index: usize) -> Option<PageState> {
+        self.pages[page_index]
     }
 
     fn notice_page_state(&mut self, page_index: usize, new_state: PageState) {
-        self.mark_dirty();
         self.pages[page_index] = Some(new_state);
     }
 
-    async fn get_page_state<S: NorFlash>(
-        &mut self,
-        flash: &mut S,
-        flash_range: Range<u32>,
-        page_index: usize,
-    ) -> Result<PageState, Error<S::Error>> {
-        match self.pages[page_index] {
-            Some(state) => Ok(state),
-            None => {
-                let state = NoCache
-                    .get_page_state(flash, flash_range, page_index)
-                    .await?;
-                self.pages[page_index] = Some(state);
-                Ok(state)
-            }
-        }
+    fn invalidate_cache_state(&mut self) {
+        *self = Self::new();
     }
+}
+
+#[derive(Debug, Default)]
+pub struct UncachedPageSates;
+
+impl PageStatesCache for UncachedPageSates {
+    fn get_page_state(&self, _page_index: usize) -> Option<PageState> {
+        None
+    }
+
+    fn notice_page_state(&mut self, _page_index: usize, _new_state: PageState) {}
+
+    fn invalidate_cache_state(&mut self) {}
 }
 
 #[cfg(test)]
 mod queue_tests {
+    use core::ops::Range;
+
     use crate::{
         mock_flash::{self, WriteCountCheck},
         queue::{peek, pop, push},
@@ -189,20 +151,20 @@ mod queue_tests {
 
     #[test]
     async fn no_cache() {
-        assert_eq!(run_test(NoCache).await, (594934, 6299, 146));
+        assert_eq!(run_test(&mut NoCache::new()).await, (594934, 6299, 146));
     }
 
     #[test]
     async fn page_state_cache() {
         assert_eq!(
-            run_test(PageStateCache::<NUM_PAGES>::new()).await,
+            run_test(&mut PageStateCache::<NUM_PAGES>::new()).await,
             (308740, 6299, 146)
         );
     }
 
-    async fn run_test(mut cache: impl Cache) -> (u32, u32, u32) {
+    async fn run_test(cache: &mut Cache<impl PageStatesCache>) -> (u32, u32, u32) {
         let mut flash =
-            mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None);
+            mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true);
         const FLASH_RANGE: Range<u32> = 0x00..0x400;
         let mut data_buffer = AlignedBuf([0; 1024]);
 
@@ -211,11 +173,11 @@ mod queue_tests {
             let data = vec![i as u8; i % 20 + 1];
 
             println!("PUSH");
-            push(&mut flash, FLASH_RANGE, &mut cache, &data, true)
+            push(&mut flash, FLASH_RANGE, cache, &data, true)
                 .await
                 .unwrap();
             assert_eq!(
-                &peek(&mut flash, FLASH_RANGE, &mut cache, &mut data_buffer)
+                &peek(&mut flash, FLASH_RANGE, cache, &mut data_buffer)
                     .await
                     .unwrap()
                     .unwrap()[..],
@@ -224,7 +186,7 @@ mod queue_tests {
             );
             println!("POP");
             assert_eq!(
-                &pop(&mut flash, FLASH_RANGE, &mut cache, &mut data_buffer)
+                &pop(&mut flash, FLASH_RANGE, cache, &mut data_buffer)
                     .await
                     .unwrap()
                     .unwrap()[..],
@@ -233,7 +195,7 @@ mod queue_tests {
             );
             println!("PEEK");
             assert_eq!(
-                peek(&mut flash, FLASH_RANGE, &mut cache, &mut data_buffer)
+                peek(&mut flash, FLASH_RANGE, cache, &mut data_buffer)
                     .await
                     .unwrap(),
                 None,
@@ -248,6 +210,8 @@ mod queue_tests {
 
 #[cfg(test)]
 mod map_tests {
+    use core::ops::Range;
+
     use crate::{
         map::{fetch_item, store_item, StorageItem},
         mock_flash::{self, WriteCountCheck},
@@ -261,13 +225,13 @@ mod map_tests {
 
     #[test]
     async fn no_cache() {
-        assert_eq!(run_test(NoCache).await, (224161, 5201, 198));
+        assert_eq!(run_test(&mut NoCache::new()).await, (224161, 5201, 198));
     }
 
     #[test]
     async fn page_state_cache() {
         assert_eq!(
-            run_test(PageStateCache::<NUM_PAGES>::new()).await,
+            run_test(&mut PageStateCache::<NUM_PAGES>::new()).await,
             (172831, 5201, 198)
         );
     }
@@ -340,9 +304,9 @@ mod map_tests {
         }
     }
 
-    async fn run_test(mut cache: impl Cache) -> (u32, u32, u32) {
+    async fn run_test(cache: &mut Cache<impl PageStatesCache>) -> (u32, u32, u32) {
         let mut flash =
-            mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None);
+            mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true);
         const FLASH_RANGE: Range<u32> = 0x00..0x400;
         let mut data_buffer = AlignedBuf([0; 128]);
 
@@ -357,7 +321,7 @@ mod map_tests {
                     value: vec![i as u8; LENGHT_PER_KEY[i]],
                 };
 
-                store_item::<_, _>(&mut flash, FLASH_RANGE, &mut cache, &mut data_buffer, item)
+                store_item::<_, _>(&mut flash, FLASH_RANGE, cache, &mut data_buffer, item)
                     .await
                     .unwrap();
             }
@@ -366,7 +330,7 @@ mod map_tests {
                 let item = fetch_item::<MockStorageItem, _>(
                     &mut flash,
                     FLASH_RANGE,
-                    &mut cache,
+                    cache,
                     &mut data_buffer,
                     i as u8,
                 )
