@@ -49,7 +49,7 @@ fn fuzz(ops: Input) {
     );
     const FLASH_RANGE: Range<u32> = 0x000..0x1000;
 
-    let mut cache = sequential_storage::NoCache::new();
+    let mut cache = sequential_storage::cache::NoCache::new();
 
     let mut order = VecDeque::new();
     let mut buf = AlignedBuf([0; MAX_VALUE_SIZE + 1]);

@@ -9,7 +9,7 @@
 //!
 //! ```rust
 //! # use sequential_storage::map::{store_item, fetch_item, StorageItem};
-//! # use sequential_storage::NoCache;
+//! # use sequential_storage::cache::NoCache;
 //! # use mock_flash::MockFlashBase;
 //! # use futures::executor::block_on;
 //! # type Flash = MockFlashBase<10, 1, 4096>;
@@ -76,8 +76,6 @@
 //! // this buffer to be aligned in RAM as well.
 //! let mut data_buffer = [0; 128];
 //!
-//! let mut cache = NoCache::new();
-//!
 //! // We can fetch an item from the flash.
 //! // Nothing is stored in it yet, so it will return None.
 //!
@@ -85,7 +83,7 @@
 //!     fetch_item::<MyCustomType, _>(
 //!         &mut flash,
 //!         flash_range.clone(),
-//!         &mut cache,
+//!         NoCache::new(),
 //!         &mut data_buffer,
 //!         42,
 //!     ).await.unwrap(),
@@ -97,7 +95,7 @@
 //! store_item::<MyCustomType, _>(
 //!     &mut flash,
 //!     flash_range.clone(),
-//!     &mut cache,
+//!     NoCache::new(),
 //!     &mut data_buffer,
 //!     &MyCustomType { key: 42, data: 104729 },
 //! ).await.unwrap();
@@ -108,7 +106,7 @@
 //!     fetch_item::<MyCustomType, _>(
 //!         &mut flash,
 //!         flash_range.clone(),
-//!         &mut cache,
+//!         NoCache::new(),
 //!         &mut data_buffer,
 //!         42,
 //!     ).await.unwrap(),
@@ -121,6 +119,8 @@ use crate::{
     cache::Cache,
     item::{find_next_free_item_spot, Item, ItemHeader, ItemIter},
 };
+
+use self::cache::{CacheImpl, PrivateCacheImpl};
 
 use super::*;
 
@@ -137,12 +137,12 @@ use super::*;
 pub async fn fetch_item<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache>,
+    mut cache: impl CacheImpl,
     data_buffer: &mut [u8],
     search_key: I::Key,
 ) -> Result<Option<I>, MapError<I::Error, S::Error>> {
     Ok(
-        fetch_item_with_location(flash, flash_range, cache, data_buffer, search_key)
+        fetch_item_with_location(flash, flash_range, cache.inner(), data_buffer, search_key)
             .await?
             .map(|(item, _, _)| item),
     )
@@ -260,7 +260,7 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
 pub async fn store_item<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache>,
+    mut cache: impl CacheImpl,
     data_buffer: &mut [u8],
     item: &I,
 ) -> Result<(), MapError<I::Error, S::Error>> {
@@ -271,6 +271,8 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
 
     assert!(S::ERASE_SIZE >= S::WORD_SIZE * 3);
     assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
+
+    let cache = cache.inner();
 
     if cache.is_dirty() {
         cache.invalidate_cache_state();
@@ -580,20 +582,22 @@ async fn migrate_items<I: StorageItem, S: NorFlash>(
 pub async fn try_repair<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache>,
+    mut cache: impl CacheImpl,
     data_buffer: &mut [u8],
 ) -> Result<(), MapError<I::Error, S::Error>> {
+    let cache = cache.inner();
+
     cache.invalidate_cache_state();
     #[allow(dropping_references)]
     drop(cache);
 
-    crate::try_general_repair(flash, flash_range.clone(), &mut cache::NoCache::new()).await?;
+    crate::try_general_repair(flash, flash_range.clone()).await?;
 
     // Let's check if we corrupted in the middle of a migration
     if let Some(partial_open_page) = find_first_page(
         flash,
         flash_range.clone(),
-        &mut cache::NoCache::new(),
+        cache::NoCache::new().inner(),
         0,
         PageState::PartialOpen,
     )
@@ -603,7 +607,7 @@ pub async fn try_repair<I: StorageItem, S: NorFlash>(
         if !get_page_state(
             flash,
             flash_range.clone(),
-            &mut cache::NoCache::new(),
+            cache::NoCache::new().inner(),
             buffer_page,
         )
         .await?
@@ -614,7 +618,7 @@ pub async fn try_repair<I: StorageItem, S: NorFlash>(
             open_page(
                 flash,
                 flash_range.clone(),
-                &mut cache::NoCache::new(),
+                cache::NoCache::new().inner(),
                 partial_open_page,
             )
             .await?;
@@ -623,7 +627,7 @@ pub async fn try_repair<I: StorageItem, S: NorFlash>(
             partial_close_page(
                 flash,
                 flash_range.clone(),
-                &mut cache::NoCache::new(),
+                cache::NoCache::new().inner(),
                 partial_open_page,
             )
             .await?;
@@ -631,7 +635,7 @@ pub async fn try_repair<I: StorageItem, S: NorFlash>(
             migrate_items::<I, _>(
                 flash,
                 flash_range.clone(),
-                &mut cache::NoCache::new(),
+                cache::NoCache::new().inner(),
                 data_buffer,
                 buffer_page,
                 partial_open_page,
@@ -729,7 +733,7 @@ mod tests {
         let item = fetch_item::<MockStorageItem, _>(
             &mut flash,
             flash_range.clone(),
-            &mut cache::NoCache::new(),
+            cache::NoCache::new(),
             &mut data_buffer,
             0,
         )
@@ -740,7 +744,7 @@ mod tests {
         let item = fetch_item::<MockStorageItem, _>(
             &mut flash,
             flash_range.clone(),
-            &mut cache::NoCache::new(),
+            cache::NoCache::new(),
             &mut data_buffer,
             60,
         )
@@ -751,7 +755,7 @@ mod tests {
         let item = fetch_item::<MockStorageItem, _>(
             &mut flash,
             flash_range.clone(),
-            &mut cache::NoCache::new(),
+            cache::NoCache::new(),
             &mut data_buffer,
             0xFF,
         )
@@ -762,7 +766,7 @@ mod tests {
         store_item::<_, _>(
             &mut flash,
             flash_range.clone(),
-            &mut cache::NoCache::new(),
+            cache::NoCache::new(),
             &mut data_buffer,
             &MockStorageItem {
                 key: 0,
@@ -774,7 +778,7 @@ mod tests {
         store_item::<_, _>(
             &mut flash,
             flash_range.clone(),
-            &mut cache::NoCache::new(),
+            cache::NoCache::new(),
             &mut data_buffer,
             &MockStorageItem {
                 key: 0,
@@ -787,7 +791,7 @@ mod tests {
         let item = fetch_item::<MockStorageItem, _>(
             &mut flash,
             flash_range.clone(),
-            &mut cache::NoCache::new(),
+            cache::NoCache::new(),
             &mut data_buffer,
             0,
         )
@@ -800,7 +804,7 @@ mod tests {
         store_item::<_, _>(
             &mut flash,
             flash_range.clone(),
-            &mut cache::NoCache::new(),
+            cache::NoCache::new(),
             &mut data_buffer,
             &MockStorageItem {
                 key: 1,
@@ -813,7 +817,7 @@ mod tests {
         let item = fetch_item::<MockStorageItem, _>(
             &mut flash,
             flash_range.clone(),
-            &mut cache::NoCache::new(),
+            cache::NoCache::new(),
             &mut data_buffer,
             0,
         )
@@ -826,7 +830,7 @@ mod tests {
         let item = fetch_item::<MockStorageItem, _>(
             &mut flash,
             flash_range.clone(),
-            &mut cache::NoCache::new(),
+            cache::NoCache::new(),
             &mut data_buffer,
             1,
         )
@@ -840,7 +844,7 @@ mod tests {
             store_item::<_, _>(
                 &mut flash,
                 flash_range.clone(),
-                &mut cache::NoCache::new(),
+                cache::NoCache::new(),
                 &mut data_buffer,
                 &MockStorageItem {
                     key: (index % 10) as u8,
@@ -855,7 +859,7 @@ mod tests {
             let item = fetch_item::<MockStorageItem, _>(
                 &mut flash,
                 flash_range.clone(),
-                &mut cache::NoCache::new(),
+                cache::NoCache::new(),
                 &mut data_buffer,
                 i,
             )
@@ -870,7 +874,7 @@ mod tests {
             store_item::<_, _>(
                 &mut flash,
                 flash_range.clone(),
-                &mut cache::NoCache::new(),
+                cache::NoCache::new(),
                 &mut data_buffer,
                 &MockStorageItem {
                     key: 11,
@@ -885,7 +889,7 @@ mod tests {
             let item = fetch_item::<MockStorageItem, _>(
                 &mut flash,
                 flash_range.clone(),
-                &mut cache::NoCache::new(),
+                cache::NoCache::new(),
                 &mut data_buffer,
                 i,
             )
@@ -919,7 +923,7 @@ mod tests {
             store_item::<_, _>(
                 &mut tiny_flash,
                 0x00..0x40,
-                &mut cache::NoCache::new(),
+                cache::NoCache::new(),
                 &mut data_buffer,
                 &item,
             )
@@ -931,7 +935,7 @@ mod tests {
             store_item::<_, _>(
                 &mut tiny_flash,
                 0x00..0x40,
-                &mut cache::NoCache::new(),
+                cache::NoCache::new(),
                 &mut data_buffer,
                 &MockStorageItem {
                     key: UPPER_BOUND,
@@ -946,7 +950,7 @@ mod tests {
             let item = fetch_item::<MockStorageItem, _>(
                 &mut tiny_flash,
                 0x00..0x40,
-                &mut cache::NoCache::new(),
+                cache::NoCache::new(),
                 &mut data_buffer,
                 i as u8,
             )
@@ -977,7 +981,7 @@ mod tests {
             store_item::<_, _>(
                 &mut big_flash,
                 0x0000..0x1000,
-                &mut cache::NoCache::new(),
+                cache::NoCache::new(),
                 &mut data_buffer,
                 &item,
             )
@@ -989,7 +993,7 @@ mod tests {
             store_item::<_, _>(
                 &mut big_flash,
                 0x0000..0x1000,
-                &mut cache::NoCache::new(),
+                cache::NoCache::new(),
                 &mut data_buffer,
                 &MockStorageItem {
                     key: UPPER_BOUND,
@@ -1004,7 +1008,7 @@ mod tests {
             let item = fetch_item::<MockStorageItem, _>(
                 &mut big_flash,
                 0x0000..0x1000,
-                &mut cache::NoCache::new(),
+                cache::NoCache::new(),
                 &mut data_buffer,
                 i as u8,
             )
@@ -1037,7 +1041,7 @@ mod tests {
                 store_item::<_, _>(
                     &mut flash,
                     0x0000..0x4000,
-                    &mut cache::NoCache::new(),
+                    cache::NoCache::new(),
                     &mut data_buffer,
                     &item,
                 )
@@ -1050,7 +1054,7 @@ mod tests {
             let item = fetch_item::<MockStorageItem, _>(
                 &mut flash,
                 0x0000..0x4000,
-                &mut cache::NoCache::new(),
+                cache::NoCache::new(),
                 &mut data_buffer,
                 i as u8,
             )

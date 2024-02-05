@@ -1,7 +1,6 @@
 #![cfg_attr(not(any(test, doctest, feature = "_test")), no_std)]
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
-#![allow(async_fn_in_trait)]
 
 // Assumptions made in this crate:
 //
@@ -15,12 +14,12 @@ use core::{
 };
 use embedded_storage_async::nor_flash::NorFlash;
 
-mod cache;
+use crate::cache::NoCache;
+
+pub mod cache;
 mod item;
 pub mod map;
 pub mod queue;
-
-pub use cache::{NoCache, PageStateCache};
 
 #[cfg(any(test, doctest, feature = "_test"))]
 /// An in-memory flash type that can be used for mocking.
@@ -51,16 +50,29 @@ impl<const SIZE: usize> DerefMut for AlignedBuf<SIZE> {
 async fn try_general_repair<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache>,
 ) -> Result<(), Error<S::Error>> {
+    use crate::cache::PrivateCacheImpl;
+
     // Loop through the pages and get their state. If one returns the corrupted error,
     // the page is likely half-erased. Fix for that is to re-erase again to hopefully finish the job.
     for page_index in get_pages::<S>(flash_range.clone(), 0) {
         if matches!(
-            get_page_state(flash, flash_range.clone(), cache, page_index).await,
+            get_page_state(
+                flash,
+                flash_range.clone(),
+                NoCache::new().inner(),
+                page_index
+            )
+            .await,
             Err(Error::Corrupted { .. })
         ) {
-            open_page(flash, flash_range.clone(), cache, page_index).await?;
+            open_page(
+                flash,
+                flash_range.clone(),
+                NoCache::new().inner(),
+                page_index,
+            )
+            .await?;
         }
     }
 
@@ -298,7 +310,7 @@ async fn partial_close_page<S: NorFlash>(
 
 /// The state of a page
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PageState {
+enum PageState {
     /// This page was fully written and has now been sealed
     Closed,
     /// This page has been written to, but may have some space left over
@@ -421,6 +433,7 @@ impl<S: NorFlash> NorFlashExt for S {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache::PrivateCacheImpl;
     use futures_test::test;
 
     type MockFlash = mock_flash::MockFlashBase<4, 4, 64>;
@@ -467,7 +480,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x400,
-                &mut cache::NoCache::new(),
+                cache::NoCache::new().inner(),
                 0,
                 PageState::Open
             )
@@ -479,7 +492,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x400,
-                &mut cache::NoCache::new(),
+                cache::NoCache::new().inner(),
                 0,
                 PageState::PartialOpen
             )
@@ -491,7 +504,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x400,
-                &mut cache::NoCache::new(),
+                cache::NoCache::new().inner(),
                 1,
                 PageState::PartialOpen
             )
@@ -503,7 +516,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x400,
-                &mut cache::NoCache::new(),
+                cache::NoCache::new().inner(),
                 2,
                 PageState::PartialOpen
             )
@@ -515,7 +528,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x400,
-                &mut cache::NoCache::new(),
+                cache::NoCache::new().inner(),
                 3,
                 PageState::Open
             )
@@ -527,7 +540,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x200,
-                &mut cache::NoCache::new(),
+                cache::NoCache::new().inner(),
                 0,
                 PageState::PartialOpen
             )
@@ -540,7 +553,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x400,
-                &mut cache::NoCache::new(),
+                cache::NoCache::new().inner(),
                 0,
                 PageState::Closed
             )
@@ -552,7 +565,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x400,
-                &mut cache::NoCache::new(),
+                cache::NoCache::new().inner(),
                 1,
                 PageState::Closed
             )
@@ -564,7 +577,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x400,
-                &mut cache::NoCache::new(),
+                cache::NoCache::new().inner(),
                 2,
                 PageState::Closed
             )
@@ -576,7 +589,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x400,
-                &mut cache::NoCache::new(),
+                cache::NoCache::new().inner(),
                 3,
                 PageState::Closed
             )
@@ -588,7 +601,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x200..0x400,
-                &mut cache::NoCache::new(),
+                cache::NoCache::new().inner(),
                 0,
                 PageState::Closed
             )

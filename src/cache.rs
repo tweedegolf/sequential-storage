@@ -1,6 +1,36 @@
-use core::ops::{Deref, DerefMut};
+//! Module implementing all things cache related
 
 use crate::PageState;
+
+/// Trait implemented by all cache types
+#[allow(private_bounds)]
+pub trait CacheImpl: PrivateCacheImpl {}
+
+impl<T: CacheImpl> CacheImpl for &mut T {}
+
+impl<PSC: PageStatesCache> CacheImpl for Cache<PSC> {}
+
+pub(crate) trait PrivateCacheImpl {
+    type PSC: PageStatesCache;
+
+    fn inner(&mut self) -> &mut Cache<Self::PSC>;
+}
+
+impl<T: PrivateCacheImpl> PrivateCacheImpl for &mut T {
+    type PSC = T::PSC;
+
+    fn inner(&mut self) -> &mut Cache<Self::PSC> {
+        T::inner(self)
+    }
+}
+
+impl<PSC: PageStatesCache> PrivateCacheImpl for Cache<PSC> {
+    type PSC = PSC;
+
+    fn inner(&mut self) -> &mut Cache<Self::PSC> {
+        self
+    }
+}
 
 /// A cache object implementing no cache.
 ///
@@ -15,19 +45,15 @@ impl NoCache {
     }
 }
 
-impl Deref for NoCache {
-    type Target = Cache<UncachedPageSates>;
+impl PrivateCacheImpl for NoCache {
+    type PSC = UncachedPageSates;
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for NoCache {
-    fn deref_mut(&mut self) -> &mut Self::Target {
+    fn inner(&mut self) -> &mut Cache<Self::PSC> {
         &mut self.0
     }
 }
+
+impl CacheImpl for NoCache {}
 
 /// A cache object that keeps track of the page states.
 ///
@@ -49,22 +75,18 @@ impl<const PAGE_COUNT: usize> PageStateCache<PAGE_COUNT> {
     }
 }
 
-impl<const PAGE_COUNT: usize> Deref for PageStateCache<PAGE_COUNT> {
-    type Target = Cache<CachedPageStates<PAGE_COUNT>>;
+impl<const PAGE_COUNT: usize> PrivateCacheImpl for PageStateCache<PAGE_COUNT> {
+    type PSC = CachedPageStates<PAGE_COUNT>;
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<const PAGE_COUNT: usize> DerefMut for PageStateCache<PAGE_COUNT> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
+    fn inner(&mut self) -> &mut Cache<Self::PSC> {
         &mut self.0
     }
 }
 
+impl<const PAGE_COUNT: usize> CacheImpl for PageStateCache<PAGE_COUNT> {}
+
 #[derive(Debug)]
-pub struct Cache<PSC: PageStatesCache> {
+pub(crate) struct Cache<PSC: PageStatesCache> {
     dirty: bool,
     page_states: PSC,
 }
@@ -104,14 +126,14 @@ impl<PSC: PageStatesCache> Cache<PSC> {
     }
 }
 
-pub trait PageStatesCache {
+pub(crate) trait PageStatesCache {
     fn get_page_state(&self, page_index: usize) -> Option<PageState>;
     fn notice_page_state(&mut self, page_index: usize, new_state: PageState);
     fn invalidate_cache_state(&mut self);
 }
 
 #[derive(Debug)]
-pub struct CachedPageStates<const PAGE_COUNT: usize> {
+pub(crate) struct CachedPageStates<const PAGE_COUNT: usize> {
     pages: [Option<PageState>; PAGE_COUNT],
 }
 
@@ -138,7 +160,7 @@ impl<const PAGE_COUNT: usize> PageStatesCache for CachedPageStates<PAGE_COUNT> {
 }
 
 #[derive(Debug, Default)]
-pub struct UncachedPageSates;
+pub(crate) struct UncachedPageSates;
 
 impl PageStatesCache for UncachedPageSates {
     fn get_page_state(&self, _page_index: usize) -> Option<PageState> {
@@ -179,7 +201,7 @@ mod queue_tests {
         );
     }
 
-    async fn run_test(cache: &mut Cache<impl PageStatesCache>) -> (u32, u32, u32) {
+    async fn run_test(mut cache: impl CacheImpl) -> (u32, u32, u32) {
         let mut flash =
             mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true);
         const FLASH_RANGE: Range<u32> = 0x00..0x400;
@@ -190,11 +212,11 @@ mod queue_tests {
             let data = vec![i as u8; i % 20 + 1];
 
             println!("PUSH");
-            push(&mut flash, FLASH_RANGE, cache, &data, true)
+            push(&mut flash, FLASH_RANGE, &mut cache, &data, true)
                 .await
                 .unwrap();
             assert_eq!(
-                &peek(&mut flash, FLASH_RANGE, cache, &mut data_buffer)
+                &peek(&mut flash, FLASH_RANGE, &mut cache, &mut data_buffer)
                     .await
                     .unwrap()
                     .unwrap()[..],
@@ -203,7 +225,7 @@ mod queue_tests {
             );
             println!("POP");
             assert_eq!(
-                &pop(&mut flash, FLASH_RANGE, cache, &mut data_buffer)
+                &pop(&mut flash, FLASH_RANGE, &mut cache, &mut data_buffer)
                     .await
                     .unwrap()
                     .unwrap()[..],
@@ -212,7 +234,7 @@ mod queue_tests {
             );
             println!("PEEK");
             assert_eq!(
-                peek(&mut flash, FLASH_RANGE, cache, &mut data_buffer)
+                peek(&mut flash, FLASH_RANGE, &mut cache, &mut data_buffer)
                     .await
                     .unwrap(),
                 None,
@@ -321,7 +343,9 @@ mod map_tests {
         }
     }
 
-    async fn run_test(cache: &mut Cache<impl PageStatesCache>) -> (u32, u32, u32) {
+    async fn run_test(mut cache: impl CacheImpl) -> (u32, u32, u32) {
+        let mut cache = cache.inner();
+
         let mut flash =
             mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true);
         const FLASH_RANGE: Range<u32> = 0x00..0x400;
@@ -338,7 +362,7 @@ mod map_tests {
                     value: vec![i as u8; LENGHT_PER_KEY[i]],
                 };
 
-                store_item::<_, _>(&mut flash, FLASH_RANGE, cache, &mut data_buffer, &item)
+                store_item::<_, _>(&mut flash, FLASH_RANGE, &mut cache, &mut data_buffer, &item)
                     .await
                     .unwrap();
             }
@@ -347,7 +371,7 @@ mod map_tests {
                 let item = fetch_item::<MockStorageItem, _>(
                     &mut flash,
                     FLASH_RANGE,
-                    cache,
+                    &mut cache,
                     &mut data_buffer,
                     i as u8,
                 )

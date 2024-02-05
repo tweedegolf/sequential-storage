@@ -98,7 +98,7 @@ fn fuzz(ops: Input) {
     );
     const FLASH_RANGE: Range<u32> = 0x000..0x1000;
 
-    let mut cache = sequential_storage::NoCache::new();
+    let mut cache = sequential_storage::cache::NoCache::new();
 
     let mut map = HashMap::new();
     #[repr(align(4))]
