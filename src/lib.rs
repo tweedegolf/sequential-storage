@@ -1,5 +1,5 @@
 #![cfg_attr(not(any(test, doctest, feature = "_test")), no_std)]
-// #![deny(missing_docs)]
+#![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 #![allow(async_fn_in_trait)]
 

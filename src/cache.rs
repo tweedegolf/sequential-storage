@@ -2,9 +2,14 @@ use core::ops::{Deref, DerefMut};
 
 use crate::PageState;
 
+/// A cache object implementing no cache.
+///
+/// This type of cache doesn't have to be kept around and may be constructed on every api call.
+/// You could simply pass `&mut NoCache::new()` every time.
 pub struct NoCache(Cache<UncachedPageSates>);
 
 impl NoCache {
+    /// Construct a new instance
     pub const fn new() -> Self {
         Self(Cache::new(UncachedPageSates))
     }
@@ -24,9 +29,21 @@ impl DerefMut for NoCache {
     }
 }
 
+/// A cache object that keeps track of the page states.
+///
+/// This cache has to be kept around and passed to *every* api call to the same memory region until the cache gets discarded.
+///
+/// Valid usecase:  
+/// `Create cache 1` -> `use 1` -> `use 1` -> `create cache 2` -> `use 2` -> `use 2`
+/// 
+/// Invalid usecase:  
+/// `Create cache 1` -> `use 1` -> `create cache 2` -> `use 2` -> `❌ use 1 ❌`
+/// 
+/// Make sure the page count is correct. If the number is lower than the actual amount, the code will panic at some point.
 pub struct PageStateCache<const PAGE_COUNT: usize>(Cache<CachedPageStates<PAGE_COUNT>>);
 
 impl<const PAGE_COUNT: usize> PageStateCache<PAGE_COUNT> {
+    /// Construct a new instance
     pub const fn new() -> Self {
         Self(Cache::new(CachedPageStates::new()))
     }
