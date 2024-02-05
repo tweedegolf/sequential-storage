@@ -4,7 +4,7 @@
 //!
 //! ```rust
 //! # use sequential_storage::queue::{push, peek, pop};
-//! # use sequential_storage::cache::NoCache;
+//! # use sequential_storage::NoCache;
 //! # use mock_flash::MockFlashBase;
 //! # use futures::executor::block_on;
 //! # type Flash = MockFlashBase<10, 1, 4096>;

@@ -15,10 +15,12 @@ use core::{
 };
 use embedded_storage_async::nor_flash::NorFlash;
 
-pub mod cache;
+mod cache;
 mod item;
 pub mod map;
 pub mod queue;
+
+pub use cache::{NoCache, PageStateCache};
 
 #[cfg(any(test, doctest, feature = "_test"))]
 /// An in-memory flash type that can be used for mocking.

@@ -9,7 +9,7 @@
 //!
 //! ```rust
 //! # use sequential_storage::map::{store_item, fetch_item, StorageItem};
-//! # use sequential_storage::cache::NoCache;
+//! # use sequential_storage::NoCache;
 //! # use mock_flash::MockFlashBase;
 //! # use futures::executor::block_on;
 //! # type Flash = MockFlashBase<10, 1, 4096>;
