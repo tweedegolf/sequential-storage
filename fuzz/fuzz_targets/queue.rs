@@ -45,10 +45,11 @@ fn fuzz(ops: Input) {
     let mut flash = MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::new(
         WriteCountCheck::Twice,
         Some(ops.fuel as u32),
+        true,
     );
     const FLASH_RANGE: Range<u32> = 0x000..0x1000;
 
-    let mut cache = sequential_storage::cache::NoCache;
+    let mut cache = sequential_storage::NoCache::new();
 
     let mut order = VecDeque::new();
     let mut buf = AlignedBuf([0; MAX_VALUE_SIZE + 1]);
