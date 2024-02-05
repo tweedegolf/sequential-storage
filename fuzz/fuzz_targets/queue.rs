@@ -45,8 +45,11 @@ fn fuzz(ops: Input) {
     let mut flash = MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::new(
         WriteCountCheck::Twice,
         Some(ops.fuel as u32),
+        true,
     );
     const FLASH_RANGE: Range<u32> = 0x000..0x1000;
+
+    let mut cache = sequential_storage::cache::NoCache::new();
 
     let mut order = VecDeque::new();
     let mut buf = AlignedBuf([0; MAX_VALUE_SIZE + 1]);
@@ -73,6 +76,7 @@ fn fuzz(ops: Input) {
                     let max_fit = match block_on(sequential_storage::queue::find_max_fit(
                         &mut flash,
                         FLASH_RANGE,
+                        &mut cache,
                     )) {
                         Ok(val) => val,
                         Err(Error::Corrupted {
@@ -86,6 +90,7 @@ fn fuzz(ops: Input) {
                             block_on(sequential_storage::queue::try_repair(
                                 &mut flash,
                                 FLASH_RANGE,
+                                &mut cache,
                             ))
                             .unwrap();
                             corruption_repaired = true;
@@ -99,6 +104,7 @@ fn fuzz(ops: Input) {
                     match block_on(sequential_storage::queue::push(
                         &mut flash,
                         FLASH_RANGE,
+                        &mut cache,
                         &buf.0[..val.len()],
                         false,
                     )) {
@@ -145,6 +151,7 @@ fn fuzz(ops: Input) {
                             block_on(sequential_storage::queue::try_repair(
                                 &mut flash,
                                 FLASH_RANGE,
+                                &mut cache,
                             ))
                             .unwrap();
                             corruption_repaired = true;
@@ -157,6 +164,7 @@ fn fuzz(ops: Input) {
                     match block_on(sequential_storage::queue::pop(
                         &mut flash,
                         FLASH_RANGE,
+                        &mut cache,
                         &mut buf.0,
                     )) {
                         Ok(value) => {
@@ -193,6 +201,7 @@ fn fuzz(ops: Input) {
                             block_on(sequential_storage::queue::try_repair(
                                 &mut flash,
                                 FLASH_RANGE,
+                                &mut cache,
                             ))
                             .unwrap();
                             corruption_repaired = true;
@@ -205,6 +214,7 @@ fn fuzz(ops: Input) {
                     let mut popper = match block_on(sequential_storage::queue::pop_many(
                         &mut flash,
                         FLASH_RANGE,
+                        &mut cache,
                     )) {
                         Ok(val) => val,
                         Err(Error::Corrupted {
@@ -218,6 +228,7 @@ fn fuzz(ops: Input) {
                             block_on(sequential_storage::queue::try_repair(
                                 &mut flash,
                                 FLASH_RANGE,
+                                &mut cache,
                             ))
                             .unwrap();
                             corruption_repaired = true;
@@ -267,6 +278,7 @@ fn fuzz(ops: Input) {
                                 block_on(sequential_storage::queue::try_repair(
                                     &mut flash,
                                     FLASH_RANGE,
+                                    &mut cache,
                                 ))
                                 .unwrap();
                                 corruption_repaired = true;
@@ -282,6 +294,7 @@ fn fuzz(ops: Input) {
                     match block_on(sequential_storage::queue::peek(
                         &mut flash,
                         FLASH_RANGE,
+                        &mut cache,
                         &mut buf.0,
                     )) {
                         Ok(value) => {
@@ -301,6 +314,7 @@ fn fuzz(ops: Input) {
                             block_on(sequential_storage::queue::try_repair(
                                 &mut flash,
                                 FLASH_RANGE,
+                                &mut cache,
                             ))
                             .unwrap();
                             corruption_repaired = true;
@@ -313,6 +327,7 @@ fn fuzz(ops: Input) {
                     let mut peeker = match block_on(sequential_storage::queue::peek_many(
                         &mut flash,
                         FLASH_RANGE,
+                        &mut cache,
                     )) {
                         Ok(val) => val,
                         Err(Error::Corrupted {
@@ -326,6 +341,7 @@ fn fuzz(ops: Input) {
                             block_on(sequential_storage::queue::try_repair(
                                 &mut flash,
                                 FLASH_RANGE,
+                                &mut cache,
                             ))
                             .unwrap();
                             corruption_repaired = true;
@@ -357,6 +373,7 @@ fn fuzz(ops: Input) {
                                 block_on(sequential_storage::queue::try_repair(
                                     &mut flash,
                                     FLASH_RANGE,
+                                    &mut cache,
                                 ))
                                 .unwrap();
                                 corruption_repaired = true;

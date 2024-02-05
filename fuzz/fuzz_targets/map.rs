@@ -94,8 +94,11 @@ fn fuzz(ops: Input) {
     let mut flash = MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::new(
         WriteCountCheck::OnceOnly,
         Some(ops.fuel as u32),
+        true,
     );
     const FLASH_RANGE: Range<u32> = 0x000..0x1000;
+
+    let mut cache = sequential_storage::cache::NoCache::new();
 
     let mut map = HashMap::new();
     #[repr(align(4))]
@@ -123,6 +126,7 @@ fn fuzz(ops: Input) {
                     match block_on(sequential_storage::map::store_item(
                         &mut flash,
                         FLASH_RANGE,
+                        &mut cache,
                         &mut buf.0,
                         &item,
                     )) {
@@ -137,6 +141,7 @@ fn fuzz(ops: Input) {
                             match block_on(sequential_storage::map::fetch_item::<TestItem, _>(
                                 &mut flash,
                                 FLASH_RANGE,
+                                &mut cache,
                                 &mut buf.0,
                                 item.key,
                             )) {
@@ -167,6 +172,7 @@ fn fuzz(ops: Input) {
                             block_on(sequential_storage::map::try_repair::<TestItem, _>(
                                 &mut flash,
                                 FLASH_RANGE,
+                                &mut cache,
                                 &mut buf.0,
                             ))
                             .unwrap();
@@ -180,6 +186,7 @@ fn fuzz(ops: Input) {
                     match block_on(sequential_storage::map::fetch_item::<TestItem, _>(
                         &mut flash,
                         FLASH_RANGE,
+                        &mut cache,
                         &mut buf.0,
                         key,
                     )) {
@@ -213,6 +220,7 @@ fn fuzz(ops: Input) {
                             block_on(sequential_storage::map::try_repair::<TestItem, _>(
                                 &mut flash,
                                 FLASH_RANGE,
+                                &mut cache,
                                 &mut buf.0,
                             ))
                             .unwrap();

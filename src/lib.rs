@@ -7,12 +7,16 @@
 // - flash erase size is quite big, aka, this is a paged flash
 // - flash write size is quite small, so it writes words and not full pages
 
+use cache::{Cache, PageStatesCache};
 use core::{
     fmt::Debug,
     ops::{Deref, DerefMut, Range},
 };
 use embedded_storage_async::nor_flash::NorFlash;
 
+use crate::cache::NoCache;
+
+pub mod cache;
 mod item;
 pub mod map;
 pub mod queue;
@@ -47,24 +51,28 @@ async fn try_general_repair<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
 ) -> Result<(), Error<S::Error>> {
+    use crate::cache::PrivateCacheImpl;
+
     // Loop through the pages and get their state. If one returns the corrupted error,
     // the page is likely half-erased. Fix for that is to re-erase again to hopefully finish the job.
     for page_index in get_pages::<S>(flash_range.clone(), 0) {
         if matches!(
-            get_page_state(flash, flash_range.clone(), page_index).await,
+            get_page_state(
+                flash,
+                flash_range.clone(),
+                NoCache::new().inner(),
+                page_index
+            )
+            .await,
             Err(Error::Corrupted { .. })
         ) {
-            flash
-                .erase(
-                    calculate_page_address::<S>(flash_range.clone(), page_index),
-                    calculate_page_end_address::<S>(flash_range.clone(), page_index),
-                )
-                .await
-                .map_err(|e| Error::Storage {
-                    value: e,
-                    #[cfg(feature = "_test")]
-                    backtrace: std::backtrace::Backtrace::capture(),
-                })?;
+            open_page(
+                flash,
+                flash_range.clone(),
+                NoCache::new().inner(),
+                page_index,
+            )
+            .await?;
         }
     }
 
@@ -77,11 +85,12 @@ async fn try_general_repair<S: NorFlash>(
 async fn find_first_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
+    cache: &mut Cache<impl PageStatesCache>,
     starting_page_index: usize,
     page_state: PageState,
 ) -> Result<Option<usize>, Error<S::Error>> {
     for page_index in get_pages::<S>(flash_range.clone(), starting_page_index) {
-        if page_state == get_page_state::<S>(flash, flash_range.clone(), page_index).await? {
+        if page_state == get_page_state::<S>(flash, flash_range.clone(), cache, page_index).await? {
             return Ok(Some(page_index));
         }
     }
@@ -141,8 +150,13 @@ const MARKER: u8 = 0;
 async fn get_page_state<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
+    cache: &mut Cache<impl PageStatesCache>,
     page_index: usize,
 ) -> Result<PageState, Error<S::Error>> {
+    if let Some(cached_page_state) = cache.get_page_state(page_index) {
+        return Ok(cached_page_state);
+    }
+
     let page_address = calculate_page_address::<S>(flash_range, page_index);
     /// We only care about the data in the first byte to aid shutdown/cancellation.
     /// But we also don't want it to be too too definitive because we want to survive the occasional bitflip.
@@ -181,29 +195,63 @@ async fn get_page_state<S: NorFlash>(
         .sum::<u32>()
         >= HALF_MARKER_BITS;
 
-    match (start_marked, end_marked) {
-        (true, true) => Ok(PageState::Closed),
-        (true, false) => Ok(PageState::PartialOpen),
+    let discovered_state = match (start_marked, end_marked) {
+        (true, true) => PageState::Closed,
+        (true, false) => PageState::PartialOpen,
         // Probably an interrupted erase
-        (false, true) => Err(Error::Corrupted {
+        (false, true) => {
+            return Err(Error::Corrupted {
+                #[cfg(feature = "_test")]
+                backtrace: std::backtrace::Backtrace::capture(),
+            })
+        }
+        (false, false) => PageState::Open,
+    };
+
+    cache.notice_page_state(page_index, discovered_state);
+
+    Ok(discovered_state)
+}
+
+/// Erase the page to open it again
+async fn open_page<S: NorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+    cache: &mut Cache<impl PageStatesCache>,
+    page_index: usize,
+) -> Result<(), Error<S::Error>> {
+    cache.notice_page_state(page_index, PageState::Open);
+
+    flash
+        .erase(
+            calculate_page_address::<S>(flash_range.clone(), page_index),
+            calculate_page_end_address::<S>(flash_range.clone(), page_index),
+        )
+        .await
+        .map_err(|e| Error::Storage {
+            value: e,
             #[cfg(feature = "_test")]
             backtrace: std::backtrace::Backtrace::capture(),
-        }),
-        (false, false) => Ok(PageState::Open),
-    }
+        })?;
+
+    Ok(())
 }
 
 /// Fully closes a page by writing both the start and end marker
 async fn close_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
+    cache: &mut Cache<impl PageStatesCache>,
     page_index: usize,
 ) -> Result<(), Error<S::Error>> {
-    let current_state = partial_close_page::<S>(flash, flash_range.clone(), page_index).await?;
+    let current_state =
+        partial_close_page::<S>(flash, flash_range.clone(), cache, page_index).await?;
 
     if current_state != PageState::PartialOpen {
         return Ok(());
     }
+
+    cache.notice_page_state(page_index, PageState::Closed);
 
     let buffer = AlignedBuf([MARKER; MAX_WORD_SIZE]);
     // Close the end marker
@@ -226,13 +274,22 @@ async fn close_page<S: NorFlash>(
 async fn partial_close_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
+    cache: &mut Cache<impl PageStatesCache>,
     page_index: usize,
 ) -> Result<PageState, Error<S::Error>> {
-    let current_state = get_page_state::<S>(flash, flash_range.clone(), page_index).await?;
+    let current_state = get_page_state::<S>(flash, flash_range.clone(), cache, page_index).await?;
 
     if current_state != PageState::Open {
         return Ok(current_state);
     }
+
+    let new_state = match current_state {
+        PageState::Closed => PageState::Closed,
+        PageState::PartialOpen => PageState::PartialOpen,
+        PageState::Open => PageState::PartialOpen,
+    };
+
+    cache.notice_page_state(page_index, new_state);
 
     let buffer = AlignedBuf([MARKER; MAX_WORD_SIZE]);
     // Close the start marker
@@ -248,11 +305,7 @@ async fn partial_close_page<S: NorFlash>(
             backtrace: std::backtrace::Backtrace::capture(),
         })?;
 
-    Ok(match current_state {
-        PageState::Closed => PageState::Closed,
-        PageState::PartialOpen => PageState::PartialOpen,
-        PageState::Open => PageState::PartialOpen,
-    })
+    Ok(new_state)
 }
 
 /// The state of a page
@@ -380,6 +433,7 @@ impl<S: NorFlash> NorFlashExt for S {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache::PrivateCacheImpl;
     use futures_test::test;
 
     type MockFlash = mock_flash::MockFlashBase<4, 4, 64>;
@@ -423,70 +477,136 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            find_first_page(&mut flash, 0x000..0x400, 0, PageState::Open)
-                .await
-                .unwrap(),
+            find_first_page(
+                &mut flash,
+                0x000..0x400,
+                cache::NoCache::new().inner(),
+                0,
+                PageState::Open
+            )
+            .await
+            .unwrap(),
             Some(3)
         );
         assert_eq!(
-            find_first_page(&mut flash, 0x000..0x400, 0, PageState::PartialOpen)
-                .await
-                .unwrap(),
+            find_first_page(
+                &mut flash,
+                0x000..0x400,
+                cache::NoCache::new().inner(),
+                0,
+                PageState::PartialOpen
+            )
+            .await
+            .unwrap(),
             Some(2)
         );
         assert_eq!(
-            find_first_page(&mut flash, 0x000..0x400, 1, PageState::PartialOpen)
-                .await
-                .unwrap(),
+            find_first_page(
+                &mut flash,
+                0x000..0x400,
+                cache::NoCache::new().inner(),
+                1,
+                PageState::PartialOpen
+            )
+            .await
+            .unwrap(),
             Some(2)
         );
         assert_eq!(
-            find_first_page(&mut flash, 0x000..0x400, 2, PageState::PartialOpen)
-                .await
-                .unwrap(),
+            find_first_page(
+                &mut flash,
+                0x000..0x400,
+                cache::NoCache::new().inner(),
+                2,
+                PageState::PartialOpen
+            )
+            .await
+            .unwrap(),
             Some(2)
         );
         assert_eq!(
-            find_first_page(&mut flash, 0x000..0x400, 3, PageState::Open)
-                .await
-                .unwrap(),
+            find_first_page(
+                &mut flash,
+                0x000..0x400,
+                cache::NoCache::new().inner(),
+                3,
+                PageState::Open
+            )
+            .await
+            .unwrap(),
             Some(3)
         );
         assert_eq!(
-            find_first_page(&mut flash, 0x000..0x200, 0, PageState::PartialOpen)
-                .await
-                .unwrap(),
+            find_first_page(
+                &mut flash,
+                0x000..0x200,
+                cache::NoCache::new().inner(),
+                0,
+                PageState::PartialOpen
+            )
+            .await
+            .unwrap(),
             None
         );
 
         assert_eq!(
-            find_first_page(&mut flash, 0x000..0x400, 0, PageState::Closed)
-                .await
-                .unwrap(),
+            find_first_page(
+                &mut flash,
+                0x000..0x400,
+                cache::NoCache::new().inner(),
+                0,
+                PageState::Closed
+            )
+            .await
+            .unwrap(),
             Some(0)
         );
         assert_eq!(
-            find_first_page(&mut flash, 0x000..0x400, 1, PageState::Closed)
-                .await
-                .unwrap(),
+            find_first_page(
+                &mut flash,
+                0x000..0x400,
+                cache::NoCache::new().inner(),
+                1,
+                PageState::Closed
+            )
+            .await
+            .unwrap(),
             Some(1)
         );
         assert_eq!(
-            find_first_page(&mut flash, 0x000..0x400, 2, PageState::Closed)
-                .await
-                .unwrap(),
+            find_first_page(
+                &mut flash,
+                0x000..0x400,
+                cache::NoCache::new().inner(),
+                2,
+                PageState::Closed
+            )
+            .await
+            .unwrap(),
             Some(0)
         );
         assert_eq!(
-            find_first_page(&mut flash, 0x000..0x400, 3, PageState::Closed)
-                .await
-                .unwrap(),
+            find_first_page(
+                &mut flash,
+                0x000..0x400,
+                cache::NoCache::new().inner(),
+                3,
+                PageState::Closed
+            )
+            .await
+            .unwrap(),
             Some(0)
         );
         assert_eq!(
-            find_first_page(&mut flash, 0x200..0x400, 0, PageState::Closed)
-                .await
-                .unwrap(),
+            find_first_page(
+                &mut flash,
+                0x200..0x400,
+                cache::NoCache::new().inner(),
+                0,
+                PageState::Closed
+            )
+            .await
+            .unwrap(),
             None
         );
     }

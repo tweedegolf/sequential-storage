@@ -31,6 +31,21 @@ If you're looking for an alternative with different tradeoffs, take a look at [e
 If for some reason an operation returns the corrupted error, then it might be repairable in many cases.
 See the repair functions in the map and queue modules for more info.
 
+## Caching
+
+There are various cache options that speed up the operations.
+By default (no cache) all state is stored in flash and the state has to be fully read every time.
+Instead, we can optionally store some state in ram.
+
+These numbers are taken from the test cases in the cache module:
+
+|           Name | Map # flash reads | Queue # flash reads |
+| -------------: | ----------------: | ------------------: |
+|        NoCache |              100% |                100% |
+| PageStateCache |               77% |                 51% |
+
+***Note:** These are the number of reads, not the amount of bytes.*
+
 ## Inner workings
 
 To save on erase cycles, this crate only really appends data to the pages. Exactly how this is done depends
@@ -91,7 +106,11 @@ When using peek_many, you can look at all data from oldest to newest.
 (DD-MM-YY)
 
 ### Unreleased
+
 - *Breaking* The item to store is now passed by reference to Map `store_item`
+- *Breaking* Added cache options to the functions to speed up reading the state of the flash.
+  To retain the old behaviour you can pass the `NoCache` type as the cache parameter.
+- Removed defmt logging since that wasn't being maintained. The format impl for the errors remain.
 
 ### 0.7.0 10-01-24
 
