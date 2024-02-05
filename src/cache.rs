@@ -321,7 +321,7 @@ mod map_tests {
                     value: vec![i as u8; LENGHT_PER_KEY[i]],
                 };
 
-                store_item::<_, _>(&mut flash, FLASH_RANGE, cache, &mut data_buffer, item)
+                store_item::<_, _>(&mut flash, FLASH_RANGE, cache, &mut data_buffer, &item)
                     .await
                     .unwrap();
             }
