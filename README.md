@@ -11,27 +11,61 @@ There are two datastructures:
 
 Each live in their own module. See the module documentation for more info and examples.
 
-Make sure not to mix the datastructures in flash!
-You can't fetch a key-value item from a flash region where you pushed to the queue.
+***Note:** Make sure not to mix the datastructures in flash!*  
+You can't e.g. fetch a key-value item from a flash region where you pushed to the queue.
 
 To search for data, the crate first searches for the flash page that is likeliest to contain it and
 then performs a linear scan over the data, skipping data blocks where it can.
 
-All data is crc protected, so if there is corruption of the data, you should not read back corrupted data unless there's
-a perfect storm of unfortunate bitflips. But this chance is very low.
-Corrupted data is ignored. This means you will lose the corrupted data, but not any other data.
+## Status
+
+This crate is used in production in multiple projects inside and outside of Tweede golf.
+
+The in-flash representation is not (yet?) stable. This too follows semver.
+
+- A breaking change to the in-flash representation will lead to a major version bump
+- A feature addition will lead to a minor version bump
+  - This is always backward-compatible. So data created by e.g. `0.8.0` can be used by `0.8.1`.
+  - This may not be forward-compatible. So data created by e.g. `0.8.1` may not be usable by `0.8.0`.
+- After 1.0, patch releases only fix bugs and don't change the in-flash representation
+
+For any update, consult the changelog to see what changed. Any externally noticable changes are recorded there.
+
+The `_test` feature of the crate is considered private. It and anything it enables is not covered by semver.
+
+## Features
+
+- Key value datastore (Map)
+  - User defined key and value types
+  - Great for creating configs
+- Fifo queue datastore (Queue)
+  - Store byte slices in memory
+  - Great for caching data
+- Simple APIs:
+  - Just call the function you think you need
+  - No need to worry about anything else
+- Item header CRC protected
+- Item data CRC protected
+- Power-fail safe
+  - The system is always fine or fully recoverable
+- Corrupted items are ignored
+- Optional caching to speed things up
+- Wear leveling
+  - Pages are used cyclically, so all pages get erased an equal amount
+- Built on [`embedded-storage`](https://github.com/rust-embedded-community/embedded-storage)
+  - This is the only required dependency
 
 If you're looking for an alternative with different tradeoffs, take a look at [ekv](https://github.com/embassy-rs/ekv).
 
 ***Note:** The crate uses futures for its operations. These futures write to flash. If a future is cancelled, this can lead*
 *to a corrupted flash state, so cancelling is at your own risc. This state then might have to be repaired first before operation can be continued. In any case, the thing you tried to store or erase might or might not have fully happened.*
 
-## Corruption repair
+### Corruption repair
 
 If for some reason an operation returns the corrupted error, then it might be repairable in many cases.
 See the repair functions in the map and queue modules for more info.
 
-## Caching
+### Caching
 
 There are various cache options that speed up the operations.
 By default (no cache) all state is stored in flash and the state has to be fully read every time.
@@ -100,86 +134,3 @@ Peeking and popping look at the oldest data it can find.
 When popping, the item is also erased.
 
 When using peek_many, you can look at all data from oldest to newest.
-
-## Changelog
-
-(DD-MM-YY)
-
-### Unreleased
-
-### 0.8.0 05-12-24
-
-- *Breaking* The item to store is now passed by reference to Map `store_item`
-- *Breaking* Added cache options to the functions to speed up reading the state of the flash.
-  To retain the old behaviour you can pass the `NoCache` type as the cache parameter.
-- Removed defmt logging since that wasn't being maintained. The format impl for the errors remain.
-
-### 0.7.0 10-01-24
-
-- *Breaking* Data CRC has been upgraded to 32-bit from 16-bit. Turns out 16-bit has too many collisions.
-  This increases the item header size from 6 to 8. The CRC was also moved to the front of the header to
-  aid with shutdown/cancellation issues.
-- When the state is corrupted, many issues can now be repaired with the repair functions in the map and queue modules
-- Made changes to the entire to better survive shutoffs
-- *Breaking* Convert API to async first supporting the traits from embedded-storage-async. Flash
-  drivers supporting `sequential-storage` can be wrapped using
-  [BlockingAsync](https://docs.embassy.dev/embassy-embedded-hal/git/default/adapter/struct.BlockingAsync.html), and a 
-  simple [blocking executor](https://docs.rs/futures/0.3.30/futures/executor/fn.block_on.html) can be used to call the 
-  API from a non-async function.
-
-### 0.6.2 - 22-12-23
-
-- Small bug fixes and refactorings including an off-by-one error. Found with added fuzzing from ([#13](https://github.com/tweedegolf/sequential-storage/pull/13))
-
-### 0.6.1 - 16-12-23
-
-- Added queue peek_many and pop_many ([#12](https://github.com/tweedegolf/sequential-storage/pull/12))
-
-### 0.6.0 - 21-11-23
-
-- *Breaking* Internal overhaul of the code. Both map and queue now use the same `item` module to store and read their data with.
-- *Breaking* Map serialization is no longer done in a stack buffer, but in the buffer provided by the user.
-- *Breaking* Map StorageItemError trait has been removed.
-- Added CRC protection of the user data. If user data is corrupted, it will now be skipped as if it wasn't stored.
-  If you think it should be reported to the user, let me know and propose an API for that!
-- Read word size is no longer required to be 1. It can now be 1-32.
-
-### 0.5.0 - 13-11-23
-
-- *Breaking* Map `store_item` item no longer uses a ram buffer to temporarily store erased items in.
-  Instead it keeps an extra open page so it can copy from one page to another page directly.
-  This means the minimum page count for map is now 2.
-
-### 0.4.2 - 13-11-23
-
-- Map no longer erases the flash when corrupted to self-recover. It now just returns an error so the user can choose what to do.
-
-### 0.4.1 - 26-09-23
-
-- Flipped one of the error messages in `queue::pop` and `queue::peek` from `BufferTooBig` to `BufferTooSmall` because that's a lot clearer
-- Massive performance bug fixed for the queue. Before it had to read all pages from the start until the first pop or peek data was found.
-  Now empty pages are erased which solves this issue.
-
-### 0.4.0 - 04-07-23
-
-- Fixed the queue implementation for devices with a write size of 1
-- *Breaking:* The internal storage format for queue has changed, so is incompatible with existing stored memory. The max size has come down to 0x7FFE.
-
-### 0.3.0 - 30-06-23
-
-- Added new queue implementation with `push`, `peek` and `pop` which requires multiwrite flash
-- *Breaking:* the map implementation now moved to its own module. You'll need to change your imports.
-
-### 0.2.2 - 11-05-23
-
-- Optimized reading items from flash which reduces the amount of reads by ~30% for small items.
-
-### 0.2.1 - 19-01-23
-
-- Added defmt behind a feature flag. When enabled, the error type implements Format
-
-### 0.2.0 - 13-01-23
-
-- Fixed a scenario where an infinite recursion could lead to a stackoverflow.
-  If there's no more space to fit all items, you'll now get an error instead.
-- Made the error non-exhaustive so that next time this update wouldn't be a breaking one.
