@@ -141,6 +141,10 @@ pub async fn fetch_item<I: StorageItem, S: NorFlash>(
     data_buffer: &mut [u8],
     search_key: I::Key,
 ) -> Result<Option<I>, MapError<I::Error, S::Error>> {
+    if cache.inner().is_dirty() {
+        cache.inner().invalidate_cache_state();
+    }
+
     Ok(
         fetch_item_with_location(flash, flash_range, cache.inner(), data_buffer, search_key)
             .await?
@@ -163,10 +167,6 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
 
     assert!(S::ERASE_SIZE >= S::WORD_SIZE * 3);
     assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
-
-    if cache.is_dirty() {
-        cache.invalidate_cache_state();
-    }
 
     // We need to find the page we were last using. This should be the only partial open page.
     let mut last_used_page =

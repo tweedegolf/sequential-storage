@@ -134,8 +134,15 @@ impl<const PAGE_COUNT: usize> PrivateCacheImpl for PagePointerCache<PAGE_COUNT> 
 
 impl<const PAGE_COUNT: usize> CacheImpl for PagePointerCache<PAGE_COUNT> {}
 
+/// The cache struct that is behind it all.
+///
+/// It manages the cache state in a generic way. For every field it can be chosen to have it be cached or not.
 #[derive(Debug)]
 pub(crate) struct Cache<PSC: PageStatesCache, PPC: PagePointersCache> {
+    /// Managed from the library code.
+    ///
+    /// When true, the cache and/or flash has changed and things might not be fully
+    /// consistent if there's an early return due to error.
     dirty: bool,
     page_states: PSC,
     page_pointers: PPC,
@@ -150,40 +157,63 @@ impl<PSC: PageStatesCache, PPC: PagePointersCache> Cache<PSC, PPC> {
         }
     }
 
+    /// True if the cache might be inconsistent
     pub(crate) fn is_dirty(&self) -> bool {
         self.dirty
     }
 
+    /// Mark the cache as potentially inconsistent with reality
     pub(crate) fn mark_dirty(&mut self) {
         self.dirty = true;
     }
 
+    /// Mark the cache as being consistent with reality
     pub(crate) fn unmark_dirty(&mut self) {
         self.dirty = false;
     }
 
+    /// Wipe the cache
     pub(crate) fn invalidate_cache_state(&mut self) {
         self.dirty = false;
         self.page_states.invalidate_cache_state();
+        self.page_pointers.invalidate_cache_state();
     }
 
+    /// Get the cache state of the requested page
     pub(crate) fn get_page_state(&self, page_index: usize) -> Option<PageState> {
         self.page_states.get_page_state(page_index)
     }
 
-    pub(crate) fn notice_page_state(&mut self, page_index: usize, new_state: PageState) {
-        self.mark_dirty();
+    /// Let the cache know a page state changed
+    ///
+    /// The dirty flag should be true if the page state is actually going to be changed.
+    /// Keep it false if we're only discovering the state.
+    pub(crate) fn notice_page_state(
+        &mut self,
+        page_index: usize,
+        new_state: PageState,
+        dirty: bool,
+    ) {
+        if dirty {
+            self.mark_dirty();
+        }
         self.page_states.notice_page_state(page_index, new_state);
         self.page_pointers.notice_page_state(page_index, new_state);
     }
 
+    /// Get the cached address of the first non-erased item in the requested page.
+    ///
+    /// This is purely for the items that get erased from start to end.
     pub(crate) fn first_item_after_erased(&self, page_index: usize) -> Option<u32> {
         self.page_pointers.first_item_after_erased(page_index)
     }
+
+    /// Get the cached address of the first free unwritten item in the requested page.
     pub(crate) fn first_item_after_written(&self, page_index: usize) -> Option<u32> {
         self.page_pointers.first_item_after_written(page_index)
     }
 
+    /// Let the cache know that an item has been written to flash
     pub(crate) fn notice_item_written<S: NorFlash>(
         &mut self,
         flash_range: Range<u32>,
@@ -194,6 +224,8 @@ impl<PSC: PageStatesCache, PPC: PagePointersCache> Cache<PSC, PPC> {
         self.page_pointers
             .notice_item_written::<S>(flash_range, item_address, item_header)
     }
+
+    /// Let the cache know that an item has been erased from flash
     pub(crate) fn notice_item_erased<S: NorFlash>(
         &mut self,
         flash_range: Range<u32>,
@@ -526,9 +558,9 @@ mod map_tests {
             run_test(&mut PageStateCache::<NUM_PAGES>::new()).await,
             FlashStatsResult {
                 erases: 198,
-                reads: 172831,
+                reads: 171543,
                 writes: 5201,
-                bytes_read: 1719644,
+                bytes_read: 1718356,
                 bytes_written: 50401
             }
         );
@@ -540,9 +572,9 @@ mod map_tests {
             run_test(&mut PagePointerCache::<NUM_PAGES>::new()).await,
             FlashStatsResult {
                 erases: 198,
-                reads: 154955,
+                reads: 153667,
                 writes: 5201,
-                bytes_read: 1576636,
+                bytes_read: 1575348,
                 bytes_written: 50401
             }
         );

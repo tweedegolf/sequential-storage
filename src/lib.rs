@@ -208,7 +208,8 @@ async fn get_page_state<S: NorFlash>(
         (false, false) => PageState::Open,
     };
 
-    cache.notice_page_state(page_index, discovered_state);
+    // Not dirty because nothing changed and nothing can be inconsistent
+    cache.notice_page_state(page_index, discovered_state, false);
 
     Ok(discovered_state)
 }
@@ -220,7 +221,7 @@ async fn open_page<S: NorFlash>(
     cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
     page_index: usize,
 ) -> Result<(), Error<S::Error>> {
-    cache.notice_page_state(page_index, PageState::Open);
+    cache.notice_page_state(page_index, PageState::Open, true);
 
     flash
         .erase(
@@ -251,7 +252,7 @@ async fn close_page<S: NorFlash>(
         return Ok(());
     }
 
-    cache.notice_page_state(page_index, PageState::Closed);
+    cache.notice_page_state(page_index, PageState::Closed, true);
 
     let buffer = AlignedBuf([MARKER; MAX_WORD_SIZE]);
     // Close the end marker
@@ -289,7 +290,7 @@ async fn partial_close_page<S: NorFlash>(
         PageState::Open => PageState::PartialOpen,
     };
 
-    cache.notice_page_state(page_index, new_state);
+    cache.notice_page_state(page_index, new_state, true);
 
     let buffer = AlignedBuf([MARKER; MAX_WORD_SIZE]);
     // Close the start marker
