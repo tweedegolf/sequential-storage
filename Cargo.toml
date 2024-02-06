@@ -15,6 +15,7 @@ keywords = ["no_std", "embedded", "flash", "storage"]
 embedded-storage-async = "0.4.1"
 defmt = { version = "0.3", optional = true }
 futures = { version = "0.3.30", features = ["executor"], optional = true }
+approx = { version = "0.5.1", optional = true }
 
 [dev-dependencies]
 approx = "0.5.1"
@@ -23,4 +24,4 @@ futures-test = "0.3.30"
 
 [features]
 defmt = ["dep:defmt"]
-_test = ["dep:futures"]
+_test = ["dep:futures", "dep:approx"]

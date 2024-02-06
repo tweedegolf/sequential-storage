@@ -730,6 +730,8 @@ mod tests {
 
         let mut data_buffer = AlignedBuf([0; 128]);
 
+        let start_snapshot = flash.stats_snapshot();
+
         let item = fetch_item::<MockStorageItem, _>(
             &mut flash,
             flash_range.clone(),
@@ -900,10 +902,7 @@ mod tests {
             assert_eq!(item.value, vec![(i % 10) as u8 * 2; (i % 10) as usize]);
         }
 
-        println!(
-            "Erases: {}, reads: {}, writes: {}",
-            flash.erases, flash.reads, flash.writes
-        );
+        println!("{:?}", start_snapshot.compare_to(flash.stats_snapshot()),);
     }
 
     #[test]

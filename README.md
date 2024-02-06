@@ -73,12 +73,16 @@ Instead, we can optionally store some state in ram.
 
 These numbers are taken from the test cases in the cache module:
 
-|           Name | Map # flash reads | Queue # flash reads |
-| -------------: | ----------------: | ------------------: |
-|        NoCache |              100% |                100% |
-| PageStateCache |               77% |                 51% |
+|           Name | Map # flash reads | Map flash bytes read | Queue # flash reads | Queue flash bytes read |
+| -------------: | ----------------: | -------------------: | ------------------: | ---------------------: |
+|        NoCache |              100% |                 100% |                100% |                   100% |
+| PageStateCache |               77% |                  97% |                 51% |                    90% |
 
-***Note:** These are the number of reads, not the amount of bytes.*
+#### Takeaways
+
+- PageStateCache
+  - Mostly tackles number of reads
+  - Very cheap in RAM, so easy win
 
 ## Inner workings
 

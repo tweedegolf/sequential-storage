@@ -605,7 +605,7 @@ pub async fn try_repair<S: NorFlash>(
 #[cfg(test)]
 mod tests {
     use crate::cache::PrivateCacheImpl;
-    use crate::mock_flash::WriteCountCheck;
+    use crate::mock_flash::{FlashAverageStatsResult, FlashStatsResult, WriteCountCheck};
 
     use super::*;
     use futures_test::test;
@@ -905,9 +905,12 @@ mod tests {
         let flash_range = 0x000..0x1000;
         let mut data_buffer = AlignedBuf([0; 1024]);
 
-        let mut push_ops = (0, 0, 0, 0);
-        let mut peek_ops = (0, 0, 0, 0);
-        let mut pop_ops = (0, 0, 0, 0);
+        let mut push_stats = FlashStatsResult::default();
+        let mut pushes = 0;
+        let mut peek_stats = FlashStatsResult::default();
+        let mut peeks = 0;
+        let mut pop_stats = FlashStatsResult::default();
+        let mut pops = 0;
 
         let mut cache = cache::NoCache::new();
 
@@ -915,82 +918,125 @@ mod tests {
             println!("Loop index: {loop_index}");
 
             for i in 0..20 {
+                let start_snapshot = flash.stats_snapshot();
                 let data = vec![i as u8; 50];
                 push(&mut flash, flash_range.clone(), &mut cache, &data, false)
                     .await
                     .unwrap();
-                add_ops(&mut flash, &mut push_ops);
+                pushes += 1;
+                push_stats += start_snapshot.compare_to(flash.stats_snapshot());
             }
 
+            let start_snapshot = flash.stats_snapshot();
             let mut peeker = peek_many(&mut flash, flash_range.clone(), &mut cache)
                 .await
                 .unwrap();
+            peek_stats += start_snapshot.compare_to(peeker.iter.flash.stats_snapshot());
             for i in 0..5 {
+                let start_snapshot = peeker.iter.flash.stats_snapshot();
                 let mut data = vec![i as u8; 50];
                 assert_eq!(
                     peeker.next(&mut data_buffer).await.unwrap(),
                     Some(&mut data[..]),
                     "At {i}"
                 );
-                add_ops(peeker.iter.flash, &mut peek_ops);
+                peeks += 1;
+                peek_stats += start_snapshot.compare_to(peeker.iter.flash.stats_snapshot());
             }
 
+            let start_snapshot = flash.stats_snapshot();
             let mut popper = pop_many(&mut flash, flash_range.clone(), &mut cache)
                 .await
                 .unwrap();
+            pop_stats += start_snapshot.compare_to(popper.iter.flash.stats_snapshot());
             for i in 0..5 {
+                let start_snapshot = popper.iter.flash.stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
                     &popper.next(&mut data_buffer).await.unwrap().unwrap()[..],
                     &data,
                     "At {i}"
                 );
-                add_ops(popper.iter.flash, &mut pop_ops);
+                pops += 1;
+                pop_stats += start_snapshot.compare_to(popper.iter.flash.stats_snapshot());
             }
 
             for i in 20..25 {
+                let start_snapshot = flash.stats_snapshot();
                 let data = vec![i as u8; 50];
                 push(&mut flash, flash_range.clone(), &mut cache, &data, false)
                     .await
                     .unwrap();
-                add_ops(&mut flash, &mut push_ops);
+                pushes += 1;
+                push_stats += start_snapshot.compare_to(flash.stats_snapshot());
             }
 
+            let start_snapshot = flash.stats_snapshot();
             let mut peeker = peek_many(&mut flash, flash_range.clone(), &mut cache)
                 .await
                 .unwrap();
+            peek_stats += start_snapshot.compare_to(peeker.iter.flash.stats_snapshot());
             for i in 5..25 {
+                let start_snapshot = peeker.iter.flash.stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
                     &peeker.next(&mut data_buffer).await.unwrap().unwrap()[..],
                     &data,
                     "At {i}"
                 );
-                add_ops(peeker.iter.flash, &mut peek_ops);
+                peeks += 1;
+                peek_stats += start_snapshot.compare_to(peeker.iter.flash.stats_snapshot());
             }
 
+            let start_snapshot = flash.stats_snapshot();
             let mut popper = pop_many(&mut flash, flash_range.clone(), &mut cache)
                 .await
                 .unwrap();
+            pop_stats += start_snapshot.compare_to(popper.iter.flash.stats_snapshot());
             for i in 5..25 {
+                let start_snapshot = popper.iter.flash.stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
                     &popper.next(&mut data_buffer).await.unwrap().unwrap()[..],
                     &data,
                     "At {i}"
                 );
-                add_ops(popper.iter.flash, &mut pop_ops);
+                pops += 1;
+                pop_stats += start_snapshot.compare_to(popper.iter.flash.stats_snapshot());
             }
         }
 
         // Assert the performance. These numbers can be changed if acceptable.
-        // Format = (writes, reads, erases, num operations)
-        println!("Asserting push ops:");
-        assert_avg_ops(&push_ops, (3.1252, 17.902, 0.0612));
-        println!("Asserting peek ops:");
-        assert_avg_ops(&peek_ops, (0.0, 8.0188, 0.0));
-        println!("Asserting pop ops:");
-        assert_avg_ops(&pop_ops, (1.0, 8.0188, 0.0));
+        approx::assert_relative_eq!(
+            push_stats.take_average(pushes),
+            FlashAverageStatsResult {
+                avg_erases: 0.0612,
+                avg_reads: 17.902,
+                avg_writes: 3.1252,
+                avg_bytes_read: 113.7248,
+                avg_bytes_written: 60.5008
+            }
+        );
+        approx::assert_relative_eq!(
+            peek_stats.take_average(peeks),
+            FlashAverageStatsResult {
+                avg_erases: 0.0,
+                avg_reads: 8.0188,
+                avg_writes: 0.0,
+                avg_bytes_read: 96.4224,
+                avg_bytes_written: 0.0
+            }
+        );
+        approx::assert_relative_eq!(
+            pop_stats.take_average(pops),
+            FlashAverageStatsResult {
+                avg_erases: 0.0,
+                avg_reads: 8.0188,
+                avg_writes: 1.0,
+                avg_bytes_read: 96.4224,
+                avg_bytes_written: 8.0
+            }
+        );
     }
 
     #[test]
@@ -999,13 +1045,16 @@ mod tests {
         let flash_range = 0x000..0x1000;
         let mut data_buffer = AlignedBuf([0; 1024]);
 
-        let mut push_ops = (0, 0, 0, 0);
-        let mut pop_ops = (0, 0, 0, 0);
+        let mut push_stats = FlashStatsResult::default();
+        let mut pushes = 0;
+        let mut pop_stats = FlashStatsResult::default();
+        let mut pops = 0;
 
         for loop_index in 0..100 {
             println!("Loop index: {loop_index}");
 
             for i in 0..20 {
+                let start_snapshot = flash.stats_snapshot();
                 let data = vec![i as u8; 50];
                 push(
                     &mut flash,
@@ -1016,10 +1065,12 @@ mod tests {
                 )
                 .await
                 .unwrap();
-                add_ops(&mut flash, &mut push_ops);
+                pushes += 1;
+                push_stats += start_snapshot.compare_to(flash.stats_snapshot());
             }
 
             for i in 0..5 {
+                let start_snapshot = flash.stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
                     &pop(
@@ -1034,10 +1085,12 @@ mod tests {
                     &data,
                     "At {i}"
                 );
-                add_ops(&mut flash, &mut pop_ops);
+                pops += 1;
+                pop_stats += start_snapshot.compare_to(flash.stats_snapshot());
             }
 
             for i in 20..25 {
+                let start_snapshot = flash.stats_snapshot();
                 let data = vec![i as u8; 50];
                 push(
                     &mut flash,
@@ -1048,10 +1101,12 @@ mod tests {
                 )
                 .await
                 .unwrap();
-                add_ops(&mut flash, &mut push_ops);
+                pushes += 1;
+                push_stats += start_snapshot.compare_to(flash.stats_snapshot());
             }
 
             for i in 5..25 {
+                let start_snapshot = flash.stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
                     &pop(
@@ -1066,48 +1121,32 @@ mod tests {
                     &data,
                     "At {i}"
                 );
-                add_ops(&mut flash, &mut pop_ops);
+                pops += 1;
+                pop_stats += start_snapshot.compare_to(flash.stats_snapshot());
             }
         }
 
         // Assert the performance. These numbers can be changed if acceptable.
-        // Format = (writes, reads, erases, num operations)
-        println!("Asserting push ops:");
-        assert_avg_ops(&push_ops, (3.1252, 17.902, 0.0612));
-        println!("Asserting pop ops:");
-        assert_avg_ops(&pop_ops, (1.0, 82.618, 0.0));
-    }
-
-    fn add_ops(flash: &mut MockFlashBig, ops: &mut (u32, u32, u32, u32)) {
-        ops.0 += core::mem::replace(&mut flash.writes, 0);
-        ops.1 += core::mem::replace(&mut flash.reads, 0);
-        ops.2 += core::mem::replace(&mut flash.erases, 0);
-        ops.3 += 1;
-    }
-
-    #[track_caller]
-    fn assert_avg_ops(ops: &(u32, u32, u32, u32), expected_averages: (f32, f32, f32)) {
-        let averages = (
-            ops.0 as f32 / ops.3 as f32,
-            ops.1 as f32 / ops.3 as f32,
-            ops.2 as f32 / ops.3 as f32,
+        approx::assert_relative_eq!(
+            push_stats.take_average(pushes),
+            FlashAverageStatsResult {
+                avg_erases: 0.0612,
+                avg_reads: 17.902,
+                avg_writes: 3.1252,
+                avg_bytes_read: 113.7248,
+                avg_bytes_written: 60.5008
+            }
         );
-
-        println!(
-            "Average writes: {}, expected: {}",
-            averages.0, expected_averages.0
+        approx::assert_relative_eq!(
+            pop_stats.take_average(pops),
+            FlashAverageStatsResult {
+                avg_erases: 0.0,
+                avg_reads: 82.618,
+                avg_writes: 1.0,
+                avg_bytes_read: 567.9904,
+                avg_bytes_written: 8.0
+            }
         );
-        println!(
-            "Average reads: {}, expected: {}",
-            averages.1, expected_averages.1
-        );
-        println!(
-            "Average erases: {}, expected: {}",
-            averages.2, expected_averages.2
-        );
-        approx::assert_relative_eq!(averages.0, expected_averages.0);
-        approx::assert_relative_eq!(averages.1, expected_averages.1);
-        approx::assert_relative_eq!(averages.2, expected_averages.2);
     }
 
     #[test]

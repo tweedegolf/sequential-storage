@@ -177,7 +177,7 @@ mod queue_tests {
     use core::ops::Range;
 
     use crate::{
-        mock_flash::{self, WriteCountCheck},
+        mock_flash::{self, FlashStatsResult, WriteCountCheck},
         queue::{peek, pop, push},
         AlignedBuf,
     };
@@ -190,22 +190,39 @@ mod queue_tests {
 
     #[test]
     async fn no_cache() {
-        assert_eq!(run_test(&mut NoCache::new()).await, (594934, 6299, 146));
+        assert_eq!(
+            run_test(&mut NoCache::new()).await,
+            FlashStatsResult {
+                erases: 146,
+                reads: 594934,
+                writes: 6299,
+                bytes_read: 2766058,
+                bytes_written: 53299
+            }
+        );
     }
 
     #[test]
     async fn page_state_cache() {
         assert_eq!(
             run_test(&mut PageStateCache::<NUM_PAGES>::new()).await,
-            (308740, 6299, 146)
+            FlashStatsResult {
+                erases: 146,
+                reads: 308740,
+                writes: 6299,
+                bytes_read: 2479864,
+                bytes_written: 53299
+            }
         );
     }
 
-    async fn run_test(mut cache: impl CacheImpl) -> (u32, u32, u32) {
+    async fn run_test(mut cache: impl CacheImpl) -> FlashStatsResult {
         let mut flash =
             mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true);
         const FLASH_RANGE: Range<u32> = 0x00..0x400;
         let mut data_buffer = AlignedBuf([0; 1024]);
+
+        let start_snapshot = flash.stats_snapshot();
 
         for i in 0..LOOP_COUNT {
             println!("{i}");
@@ -243,7 +260,7 @@ mod queue_tests {
             println!("DONE");
         }
 
-        (flash.reads, flash.writes, flash.erases)
+        start_snapshot.compare_to(flash.stats_snapshot())
     }
 }
 
@@ -253,7 +270,7 @@ mod map_tests {
 
     use crate::{
         map::{fetch_item, store_item, StorageItem},
-        mock_flash::{self, WriteCountCheck},
+        mock_flash::{self, FlashStatsResult, WriteCountCheck},
         AlignedBuf,
     };
 
@@ -264,14 +281,29 @@ mod map_tests {
 
     #[test]
     async fn no_cache() {
-        assert_eq!(run_test(&mut NoCache::new()).await, (224161, 5201, 198));
+        assert_eq!(
+            run_test(&mut NoCache::new()).await,
+            FlashStatsResult {
+                erases: 198,
+                reads: 224161,
+                writes: 5201,
+                bytes_read: 1770974,
+                bytes_written: 50401
+            }
+        );
     }
 
     #[test]
     async fn page_state_cache() {
         assert_eq!(
             run_test(&mut PageStateCache::<NUM_PAGES>::new()).await,
-            (172831, 5201, 198)
+            FlashStatsResult {
+                erases: 198,
+                reads: 172831,
+                writes: 5201,
+                bytes_read: 1719644,
+                bytes_written: 50401
+            }
         );
     }
 
@@ -343,7 +375,7 @@ mod map_tests {
         }
     }
 
-    async fn run_test(mut cache: impl CacheImpl) -> (u32, u32, u32) {
+    async fn run_test(mut cache: impl CacheImpl) -> FlashStatsResult {
         let mut cache = cache.inner();
 
         let mut flash =
@@ -354,6 +386,8 @@ mod map_tests {
         const LENGHT_PER_KEY: [usize; 24] = [
             11, 13, 6, 13, 13, 10, 2, 3, 5, 36, 1, 65, 4, 6, 1, 15, 10, 7, 3, 15, 9, 3, 4, 5,
         ];
+
+        let start_snapshot = flash.stats_snapshot();
 
         for _ in 0..100 {
             for i in 0..24 {
@@ -385,6 +419,6 @@ mod map_tests {
             }
         }
 
-        (flash.reads, flash.writes, flash.erases)
+        start_snapshot.compare_to(flash.stats_snapshot())
     }
 }
