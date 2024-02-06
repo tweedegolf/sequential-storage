@@ -114,6 +114,8 @@ pub async fn push<S: NorFlash>(
 
     let mut next_address = find_next_free_item_spot(
         flash,
+        flash_range.clone(),
+        cache,
         page_data_start_address,
         page_data_end_address,
         data.len() as u32,
@@ -160,7 +162,14 @@ pub async fn push<S: NorFlash>(
         }
     }
 
-    Item::write_new(flash, next_address.unwrap(), data).await?;
+    Item::write_new(
+        flash,
+        flash_range.clone(),
+        cache,
+        next_address.unwrap(),
+        data,
+    )
+    .await?;
 
     cache.unmark_dirty();
     Ok(())
@@ -269,7 +278,15 @@ impl<'d, S: MultiwriteNorFlash, CI: CacheImpl> PopIterator<'d, S, CI> {
             let (header, data_buffer) = item.destruct();
             let ret = &mut data_buffer[..header.length as usize];
 
-            match header.erase_data(self.iter.flash, item_address).await {
+            match header
+                .erase_data(
+                    self.iter.flash,
+                    self.iter.flash_range.clone(),
+                    self.iter.cache.inner(),
+                    item_address,
+                )
+                .await
+            {
                 Ok(_) => {
                     self.iter.cache.inner().unmark_dirty();
                     Ok(Some(ret))
@@ -354,11 +371,15 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIterator<'d, S, CI> {
             cache.inner().invalidate_cache_state();
         }
 
+        let oldest_page = find_oldest_page(flash, flash_range.clone(), cache.inner()).await?;
+
         // We start at the start of the oldest page
-        let current_address = calculate_page_address::<S>(
-            flash_range.clone(),
-            find_oldest_page(flash, flash_range.clone(), cache.inner()).await?,
-        ) + S::WORD_SIZE as u32;
+        let current_address = match cache.inner().first_item_after_erased(oldest_page) {
+            Some(address) => address,
+            None => {
+                calculate_page_address::<S>(flash_range.clone(), oldest_page) + S::WORD_SIZE as u32
+            }
+        };
 
         Ok(Self {
             flash,
@@ -423,6 +444,7 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIterator<'d, S, CI> {
 
             // Search for the first item with data
             let mut it = ItemHeaderIter::new(current_address, page_data_end_address);
+            // No need to worry about cache here since that has been dealt with at the creation of this iterator
             if let (Some(found_item_header), found_item_address) = it
                 .traverse(self.flash, |header, _| header.crc.is_none())
                 .await?
@@ -529,10 +551,20 @@ pub async fn find_max_fit<S: NorFlash>(
     let page_data_end_address =
         calculate_page_end_address::<S>(flash_range.clone(), current_page) - S::WORD_SIZE as u32;
 
-    let next_item_address = ItemHeaderIter::new(page_data_start_address, page_data_end_address)
-        .traverse(flash, |_, _| true)
-        .await?
-        .1;
+    let next_item_address = match cache.first_item_after_written(current_page) {
+        Some(next_item_address) => next_item_address,
+        None => {
+            ItemHeaderIter::new(
+                cache
+                    .first_item_after_erased(current_page)
+                    .unwrap_or(page_data_start_address),
+                page_data_end_address,
+            )
+            .traverse(flash, |_, _| true)
+            .await?
+            .1
+        }
+    };
 
     cache.unmark_dirty();
     Ok(ItemHeader::available_data_bytes::<S>(
@@ -543,7 +575,7 @@ pub async fn find_max_fit<S: NorFlash>(
 async fn find_youngest_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache>,
+    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
 ) -> Result<usize, Error<S::Error>> {
     let last_used_page =
         find_first_page(flash, flash_range.clone(), cache, 0, PageState::PartialOpen).await?;
@@ -569,7 +601,7 @@ async fn find_youngest_page<S: NorFlash>(
 async fn find_oldest_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache>,
+    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
 ) -> Result<usize, Error<S::Error>> {
     let youngest_page = find_youngest_page(flash, flash_range.clone(), cache).await?;
 

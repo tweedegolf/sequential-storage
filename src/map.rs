@@ -153,7 +153,7 @@ pub async fn fetch_item<I: StorageItem, S: NorFlash>(
 async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache>,
+    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
     data_buffer: &mut [u8],
     search_key: I::Key,
 ) -> Result<Option<(I, u32, ItemHeader)>, MapError<I::Error, S::Error>> {
@@ -323,6 +323,8 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
 
             let free_spot_address = find_next_free_item_spot(
                 flash,
+                flash_range.clone(),
+                cache,
                 page_data_start_address,
                 page_data_end_address,
                 item_data_length as u32,
@@ -331,8 +333,14 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
 
             match free_spot_address {
                 Some(free_spot_address) => {
-                    Item::write_new(flash, free_spot_address, &data_buffer[..item_data_length])
-                        .await?;
+                    Item::write_new(
+                        flash,
+                        flash_range.clone(),
+                        cache,
+                        free_spot_address,
+                        &data_buffer[..item_data_length],
+                    )
+                    .await?;
 
                     cache.unmark_dirty();
                     return Ok(());
@@ -521,7 +529,7 @@ impl<S: PartialEq, I: PartialEq> PartialEq for MapError<I, S> {
 async fn migrate_items<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache>,
+    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
     data_buffer: &mut [u8],
     source_page: usize,
     target_page: usize,
@@ -559,7 +567,8 @@ async fn migrate_items<I: StorageItem, S: NorFlash>(
                 .read_item(flash, data_buffer, item_address, u32::MAX)
                 .await?
                 .unwrap()?;
-            item.write(flash, next_page_write_address).await?;
+            item.write(flash, flash_range.clone(), cache, next_page_write_address)
+                .await?;
             next_page_write_address = item.header.next_item_address::<S>(next_page_write_address);
         }
     }

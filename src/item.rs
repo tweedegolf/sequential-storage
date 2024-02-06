@@ -27,10 +27,10 @@ use core::ops::Range;
 use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
 
 use crate::{
-    cache::{Cache, PageStatesCache},
-    calculate_page_address, calculate_page_end_address, get_page_state, round_down_to_alignment,
-    round_down_to_alignment_usize, round_up_to_alignment, round_up_to_alignment_usize, AlignedBuf,
-    Error, NorFlashExt, PageState, MAX_WORD_SIZE,
+    cache::{Cache, PagePointersCache, PageStatesCache},
+    calculate_page_address, calculate_page_end_address, calculate_page_index, get_page_state,
+    round_down_to_alignment, round_down_to_alignment_usize, round_up_to_alignment,
+    round_up_to_alignment_usize, AlignedBuf, Error, NorFlashExt, PageState, MAX_WORD_SIZE,
 };
 
 #[derive(Debug)]
@@ -138,7 +138,13 @@ impl ItemHeader {
         }
     }
 
-    async fn write<S: NorFlash>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
+    async fn write<S: NorFlash>(
+        &self,
+        flash: &mut S,
+        flash_range: Range<u32>,
+        cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
+        address: u32,
+    ) -> Result<(), Error<S::Error>> {
         let mut buffer = AlignedBuf([0xFF; MAX_WORD_SIZE]);
 
         buffer[Self::DATA_CRC_FIELD]
@@ -146,6 +152,8 @@ impl ItemHeader {
         buffer[Self::LENGTH_FIELD].copy_from_slice(&self.length.to_le_bytes());
         buffer[Self::LENGTH_CRC_FIELD]
             .copy_from_slice(&crc16(&self.length.to_le_bytes()).to_le_bytes());
+
+        cache.notice_item_written::<S>(flash_range, address, self);
 
         flash
             .write(
@@ -163,10 +171,13 @@ impl ItemHeader {
     pub async fn erase_data<S: MultiwriteNorFlash>(
         mut self,
         flash: &mut S,
+        flash_range: Range<u32>,
+        cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
         address: u32,
     ) -> Result<Self, Error<S::Error>> {
         self.crc = None;
-        self.write(flash, address).await?;
+        cache.notice_item_erased::<S>(flash_range.clone(), address, &self);
+        self.write(flash, flash_range, cache, address).await?;
         Ok(self)
     }
 
@@ -206,6 +217,8 @@ impl<'d> Item<'d> {
 
     pub async fn write_new<S: NorFlash>(
         flash: &mut S,
+        flash_range: Range<u32>,
+        cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
         address: u32,
         data: &'d [u8],
     ) -> Result<ItemHeader, Error<S::Error>> {
@@ -214,18 +227,20 @@ impl<'d> Item<'d> {
             crc: Some(adapted_crc32(data)),
         };
 
-        Self::write_raw(&header, data, flash, address).await?;
+        Self::write_raw(flash, flash_range, cache, &header, data, address).await?;
 
         Ok(header)
     }
 
     async fn write_raw<S: NorFlash>(
+        flash: &mut S,
+        flash_range: Range<u32>,
+        cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
         header: &ItemHeader,
         data: &[u8],
-        flash: &mut S,
         address: u32,
     ) -> Result<(), Error<S::Error>> {
-        header.write(flash, address).await?;
+        header.write(flash, flash_range, cache, address).await?;
 
         let (data_block, data_left) = data.split_at(round_down_to_alignment_usize::<S>(data.len()));
 
@@ -261,9 +276,19 @@ impl<'d> Item<'d> {
     pub async fn write<S: NorFlash>(
         &self,
         flash: &mut S,
+        flash_range: Range<u32>,
+        cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
         address: u32,
     ) -> Result<(), Error<S::Error>> {
-        Self::write_raw(&self.header, self.data(), flash, address).await
+        Self::write_raw(
+            flash,
+            flash_range,
+            cache,
+            &self.header,
+            self.data(),
+            address,
+        )
+        .await
     }
 }
 
@@ -284,13 +309,30 @@ impl<'d> core::fmt::Debug for Item<'d> {
 /// - `end_address` is exclusive.
 pub async fn find_next_free_item_spot<S: NorFlash>(
     flash: &mut S,
+    flash_range: Range<u32>,
+    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
     start_address: u32,
     end_address: u32,
     data_length: u32,
 ) -> Result<Option<u32>, Error<S::Error>> {
-    let (_, free_item_address) = ItemHeaderIter::new(start_address, end_address)
-        .traverse(flash, |_, _| true)
-        .await?;
+    let page_index = calculate_page_index::<S>(flash_range, start_address);
+
+    let free_item_address = match cache.first_item_after_written(page_index) {
+        Some(free_item_address) => free_item_address,
+        None => {
+            ItemHeaderIter::new(
+                cache
+                    .first_item_after_erased(page_index)
+                    .unwrap_or(0)
+                    .max(start_address),
+                end_address,
+            )
+            .traverse(flash, |_, _| true)
+            .await?
+            .1
+        }
+    };
+
     if let Some(available) = ItemHeader::available_data_bytes::<S>(end_address - free_item_address)
     {
         if available >= data_length {
@@ -405,7 +447,7 @@ fn crc32_with_initial(data: &[u8], initial: u32) -> u32 {
 pub async fn is_page_empty<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache>,
+    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
     page_index: usize,
     page_state: Option<PageState>,
 ) -> Result<bool, Error<S::Error>> {
@@ -422,13 +464,16 @@ pub async fn is_page_empty<S: NorFlash>(
                 calculate_page_end_address::<S>(flash_range.clone(), page_index)
                     - S::WORD_SIZE as u32;
 
-            Ok(
-                ItemHeaderIter::new(page_data_start_address, page_data_end_address)
-                    .traverse(flash, |header, _| header.crc.is_none())
-                    .await?
-                    .0
-                    .is_none(),
+            Ok(ItemHeaderIter::new(
+                cache
+                    .first_item_after_erased(page_index)
+                    .unwrap_or(page_data_start_address),
+                page_data_end_address,
             )
+            .traverse(flash, |header, _| header.crc.is_none())
+            .await?
+            .0
+            .is_none())
         }
         PageState::PartialOpen => Ok(false),
         PageState::Open => Ok(true),
