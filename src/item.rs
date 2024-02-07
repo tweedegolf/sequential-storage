@@ -138,13 +138,7 @@ impl ItemHeader {
         }
     }
 
-    async fn write<S: NorFlash>(
-        &self,
-        flash: &mut S,
-        flash_range: Range<u32>,
-        cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
-        address: u32,
-    ) -> Result<(), Error<S::Error>> {
+    async fn write<S: NorFlash>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
         let mut buffer = AlignedBuf([0xFF; MAX_WORD_SIZE]);
 
         buffer[Self::DATA_CRC_FIELD]
@@ -152,8 +146,6 @@ impl ItemHeader {
         buffer[Self::LENGTH_FIELD].copy_from_slice(&self.length.to_le_bytes());
         buffer[Self::LENGTH_CRC_FIELD]
             .copy_from_slice(&crc16(&self.length.to_le_bytes()).to_le_bytes());
-
-        cache.notice_item_written::<S>(flash_range, address, self);
 
         flash
             .write(
@@ -177,7 +169,7 @@ impl ItemHeader {
     ) -> Result<Self, Error<S::Error>> {
         self.crc = None;
         cache.notice_item_erased::<S>(flash_range.clone(), address, &self);
-        self.write(flash, flash_range, cache, address).await?;
+        self.write(flash, address).await?;
         Ok(self)
     }
 
@@ -240,7 +232,8 @@ impl<'d> Item<'d> {
         data: &[u8],
         address: u32,
     ) -> Result<(), Error<S::Error>> {
-        header.write(flash, flash_range, cache, address).await?;
+        cache.notice_item_written::<S>(flash_range, address, &header);
+        header.write(flash, address).await?;
 
         let (data_block, data_left) = data.split_at(round_down_to_alignment_usize::<S>(data.len()));
 

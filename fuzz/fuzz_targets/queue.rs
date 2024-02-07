@@ -5,19 +5,29 @@ use libfuzzer_sys::arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use rand::{Rng, SeedableRng};
 use sequential_storage::{
+    cache::{CacheImpl, NoCache, PagePointerCache, PageStateCache},
     mock_flash::{MockFlashBase, MockFlashError, WriteCountCheck},
     Error,
 };
 use std::{collections::VecDeque, ops::Range};
 const MAX_VALUE_SIZE: usize = u8::MAX as usize;
 
-fuzz_target!(|data: Input| fuzz(data));
+const PAGES: usize = 4;
+const WORD_SIZE: usize = 4;
+const WORDS_PER_PAGE: usize = 256;
+
+fuzz_target!(|data: Input| match data.cache_type {
+    CacheType::NoCache => fuzz(data, NoCache::new()),
+    CacheType::PageStateCache => fuzz(data, PageStateCache::<PAGES>::new()),
+    CacheType::PagePointerCache => fuzz(data, PagePointerCache::<PAGES>::new()),
+});
 
 #[derive(Arbitrary, Debug, Clone)]
 struct Input {
     seed: u64,
     fuel: u16,
     ops: Vec<Op>,
+    cache_type: CacheType,
 }
 
 #[derive(Arbitrary, Debug, Clone)]
@@ -34,22 +44,23 @@ struct PushOp {
     value_len: u8,
 }
 
+#[derive(Arbitrary, Debug, Clone)]
+enum CacheType {
+    NoCache,
+    PageStateCache,
+    PagePointerCache,
+}
+
 #[repr(align(4))]
 struct AlignedBuf([u8; MAX_VALUE_SIZE + 1]);
 
-fn fuzz(ops: Input) {
-    const PAGES: usize = 4;
-    const WORD_SIZE: usize = 4;
-    const WORDS_PER_PAGE: usize = 256;
-
+fn fuzz(ops: Input, mut cache: impl CacheImpl) {
     let mut flash = MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::new(
         WriteCountCheck::Twice,
         Some(ops.fuel as u32),
         true,
     );
     const FLASH_RANGE: Range<u32> = 0x000..0x1000;
-
-    let mut cache = sequential_storage::cache::NoCache::new();
 
     let mut order = VecDeque::new();
     let mut buf = AlignedBuf([0; MAX_VALUE_SIZE + 1]);
@@ -67,7 +78,9 @@ fn fuzz(ops: Input) {
             #[cfg(fuzzing_repro)]
             eprintln!("{}", flash.print_items());
             #[cfg(fuzzing_repro)]
-            eprintln!("=== OP: {op:?} ===");
+            eprintln!("{:?}", cache);
+            #[cfg(fuzzing_repro)]
+            eprintln!("\n=== OP: {op:?} ===\n");
 
             match &mut op {
                 Op::Push(op) => {

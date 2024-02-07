@@ -1,6 +1,6 @@
 //! Module implementing all things cache related
 
-use core::{num::NonZeroU32, ops::Range};
+use core::{fmt::Debug, num::NonZeroU32, ops::Range};
 
 use embedded_storage_async::nor_flash::NorFlash;
 
@@ -10,7 +10,7 @@ use crate::{
 
 /// Trait implemented by all cache types
 #[allow(private_bounds)]
-pub trait CacheImpl: PrivateCacheImpl {}
+pub trait CacheImpl: PrivateCacheImpl + Debug {}
 
 impl<T: CacheImpl> CacheImpl for &mut T {}
 
@@ -45,6 +45,7 @@ impl<PSC: PageStatesCache, PPC: PagePointersCache> PrivateCacheImpl for Cache<PS
 ///
 /// This type of cache doesn't have to be kept around and may be constructed on every api call.
 /// You could simply pass `&mut NoCache::new()` every time.
+#[derive(Debug)]
 pub struct NoCache(Cache<UncachedPageSates, UncachedPagePointers>);
 
 impl NoCache {
@@ -76,6 +77,7 @@ impl CacheImpl for NoCache {}
 /// `Create cache 1` -> `use 1` -> `create cache 2` -> `use 2` -> `❌ use 1 ❌`
 ///
 /// Make sure the page count is correct. If the number is lower than the actual amount, the code will panic at some point.
+#[derive(Debug)]
 pub struct PageStateCache<const PAGE_COUNT: usize>(
     Cache<CachedPageStates<PAGE_COUNT>, UncachedPagePointers>,
 );
@@ -109,6 +111,7 @@ impl<const PAGE_COUNT: usize> CacheImpl for PageStateCache<PAGE_COUNT> {}
 /// `Create cache 1` -> `use 1` -> `create cache 2` -> `use 2` -> `❌ use 1 ❌`
 ///
 /// Make sure the page count is correct. If the number is lower than the actual amount, the code will panic at some point.
+#[derive(Debug)]
 pub struct PagePointerCache<const PAGE_COUNT: usize>(
     Cache<CachedPageStates<PAGE_COUNT>, CachedPagePointers<PAGE_COUNT>>,
 );
@@ -238,15 +241,34 @@ impl<PSC: PageStatesCache, PPC: PagePointersCache> Cache<PSC, PPC> {
     }
 }
 
-pub(crate) trait PageStatesCache {
+pub(crate) trait PageStatesCache: Debug {
     fn get_page_state(&self, page_index: usize) -> Option<PageState>;
     fn notice_page_state(&mut self, page_index: usize, new_state: PageState);
     fn invalidate_cache_state(&mut self);
 }
 
-#[derive(Debug)]
 pub(crate) struct CachedPageStates<const PAGE_COUNT: usize> {
     pages: [Option<PageState>; PAGE_COUNT],
+}
+
+impl<const PAGE_COUNT: usize> Debug for CachedPageStates<PAGE_COUNT> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "[")?;
+        for (i, val) in self.pages.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+
+            if let Some(val) = val {
+                write!(f, "{val:?}")?;
+            } else {
+                write!(f, "?")?;
+            }
+        }
+        write!(f, "]")?;
+
+        Ok(())
+    }
 }
 
 impl<const PAGE_COUNT: usize> CachedPageStates<PAGE_COUNT> {
@@ -284,7 +306,7 @@ impl PageStatesCache for UncachedPageSates {
     fn invalidate_cache_state(&mut self) {}
 }
 
-pub(crate) trait PagePointersCache {
+pub(crate) trait PagePointersCache: Debug {
     fn first_item_after_erased(&self, page_index: usize) -> Option<u32>;
     fn first_item_after_written(&self, page_index: usize) -> Option<u32>;
 
@@ -307,10 +329,41 @@ pub(crate) trait PagePointersCache {
 
 // Use NoneZeroU32 because we never store 0's in here (because of the first page marker)
 // and so Option can make use of the niche so we save bytes
-#[derive(Debug)]
 pub(crate) struct CachedPagePointers<const PAGE_COUNT: usize> {
     after_erased_pointers: [Option<NonZeroU32>; PAGE_COUNT],
     after_written_pointers: [Option<NonZeroU32>; PAGE_COUNT],
+}
+
+impl<const PAGE_COUNT: usize> Debug for CachedPagePointers<PAGE_COUNT> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{{ after_erased_pointers: [")?;
+        for (i, val) in self.after_erased_pointers.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+
+            if let Some(val) = val {
+                write!(f, "{:?}", val.get())?;
+            } else {
+                write!(f, "?")?;
+            }
+        }
+        write!(f, "], after_written_pointers: [")?;
+        for (i, val) in self.after_written_pointers.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+
+            if let Some(val) = val {
+                write!(f, "{:?}", val.get())?;
+            } else {
+                write!(f, "?")?;
+            }
+        }
+        write!(f, "] }}")?;
+
+        Ok(())
+    }
 }
 
 impl<const PAGE_COUNT: usize> CachedPagePointers<PAGE_COUNT> {
