@@ -2,7 +2,9 @@
 
 (DD-MM-YY)
 
-## Unreleased
+## 0.8.1 07-02-24
+
+- Added new PagePointerCache that caches more than the PageStateCache. See the readme for more details.
 
 ## 0.8.0 05-12-24
 

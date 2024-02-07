@@ -5,18 +5,28 @@ use libfuzzer_sys::arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use rand::SeedableRng;
 use sequential_storage::{
+    cache::{CacheImpl, NoCache, PagePointerCache, PageStateCache},
     map::{MapError, StorageItem},
     mock_flash::{MockFlashBase, MockFlashError, WriteCountCheck},
 };
 use std::{collections::HashMap, ops::Range};
 
-fuzz_target!(|data: Input| fuzz(data));
+const PAGES: usize = 4;
+const WORD_SIZE: usize = 4;
+const WORDS_PER_PAGE: usize = 256;
+
+fuzz_target!(|data: Input| match data.cache_type {
+    CacheType::NoCache => fuzz(data, NoCache::new()),
+    CacheType::PageStateCache => fuzz(data, PageStateCache::<PAGES>::new()),
+    CacheType::PagePointerCache => fuzz(data, PagePointerCache::<PAGES>::new()),
+});
 
 #[derive(Arbitrary, Debug, Clone)]
 struct Input {
     seed: u64,
     fuel: u16,
     ops: Vec<Op>,
+    cache_type: CacheType,
 }
 
 #[derive(Arbitrary, Debug, Clone)]
@@ -86,19 +96,20 @@ impl StorageItem for TestItem {
     }
 }
 
-fn fuzz(ops: Input) {
-    const PAGES: usize = 4;
-    const WORD_SIZE: usize = 4;
-    const WORDS_PER_PAGE: usize = 256;
+#[derive(Arbitrary, Debug, Clone)]
+enum CacheType {
+    NoCache,
+    PageStateCache,
+    PagePointerCache,
+}
 
+fn fuzz(ops: Input, mut cache: impl CacheImpl) {
     let mut flash = MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::new(
         WriteCountCheck::OnceOnly,
         Some(ops.fuel as u32),
         true,
     );
     const FLASH_RANGE: Range<u32> = 0x000..0x1000;
-
-    let mut cache = sequential_storage::cache::NoCache::new();
 
     let mut map = HashMap::new();
     #[repr(align(4))]
