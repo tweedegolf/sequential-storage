@@ -232,7 +232,7 @@ impl<'d> Item<'d> {
         data: &[u8],
         address: u32,
     ) -> Result<(), Error<S::Error>> {
-        cache.notice_item_written::<S>(flash_range, address, &header);
+        cache.notice_item_written::<S>(flash_range, address, header);
         header.write(flash, address).await?;
 
         let (data_block, data_left) = data.split_at(round_down_to_alignment_usize::<S>(data.len()));
