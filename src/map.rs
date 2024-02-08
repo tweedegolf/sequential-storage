@@ -137,7 +137,7 @@ use super::*;
 pub async fn fetch_item<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    mut cache: impl CacheImpl,
+    mut cache: impl CacheImpl<KEY = I::Key>,
     data_buffer: &mut [u8],
     search_key: I::Key,
 ) -> Result<Option<I>, MapError<I::Error, S::Error>> {
@@ -157,7 +157,7 @@ pub async fn fetch_item<I: StorageItem, S: NorFlash>(
 async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
+    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache, impl KeyPointersCache<Key = I::Key>>,
     data_buffer: &mut [u8],
     search_key: I::Key,
 ) -> Result<Option<(I, u32, ItemHeader)>, MapError<I::Error, S::Error>> {
@@ -171,6 +171,8 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
     // We need to find the page we were last using. This should be the only partial open page.
     let mut last_used_page =
         find_first_page(flash, flash_range.clone(), cache, 0, PageState::PartialOpen).await?;
+
+    cache.key_location(&search_key);
 
     if last_used_page.is_none() {
         // In the event that all pages are still open or the last used page was just closed, we search for the first open page.
@@ -529,7 +531,7 @@ impl<S: PartialEq, I: PartialEq> PartialEq for MapError<I, S> {
 async fn migrate_items<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
+    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache, impl KeyPointersCache<Key = I::Key>>,
     data_buffer: &mut [u8],
     source_page: usize,
     target_page: usize,

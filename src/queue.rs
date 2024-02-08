@@ -575,7 +575,7 @@ pub async fn find_max_fit<S: NorFlash>(
 async fn find_youngest_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
+    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache, impl KeyPointersCache>,
 ) -> Result<usize, Error<S::Error>> {
     let last_used_page =
         find_first_page(flash, flash_range.clone(), cache, 0, PageState::PartialOpen).await?;
@@ -601,7 +601,7 @@ async fn find_youngest_page<S: NorFlash>(
 async fn find_oldest_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
+    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache, impl KeyPointersCache>,
 ) -> Result<usize, Error<S::Error>> {
     let youngest_page = find_youngest_page(flash, flash_range.clone(), cache).await?;
 

@@ -7,7 +7,7 @@
 // - flash erase size is quite big, aka, this is a paged flash
 // - flash write size is quite small, so it writes words and not full pages
 
-use cache::{Cache, PagePointersCache, PageStatesCache};
+use cache::{key_pointers::KeyPointersCache, Cache, PagePointersCache, PageStatesCache};
 use core::{
     fmt::Debug,
     ops::{Deref, DerefMut, Range},
@@ -85,7 +85,7 @@ async fn try_general_repair<S: NorFlash>(
 async fn find_first_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
+    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache, impl KeyPointersCache>,
     starting_page_index: usize,
     page_state: PageState,
 ) -> Result<Option<usize>, Error<S::Error>> {
@@ -150,7 +150,7 @@ const MARKER: u8 = 0;
 async fn get_page_state<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
+    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache, impl KeyPointersCache>,
     page_index: usize,
 ) -> Result<PageState, Error<S::Error>> {
     if let Some(cached_page_state) = cache.get_page_state(page_index) {
@@ -218,7 +218,7 @@ async fn get_page_state<S: NorFlash>(
 async fn open_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
+    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache, impl KeyPointersCache>,
     page_index: usize,
 ) -> Result<(), Error<S::Error>> {
     cache.notice_page_state(page_index, PageState::Open, true);
@@ -242,7 +242,7 @@ async fn open_page<S: NorFlash>(
 async fn close_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
+    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache, impl KeyPointersCache>,
     page_index: usize,
 ) -> Result<(), Error<S::Error>> {
     let current_state =
@@ -275,7 +275,7 @@ async fn close_page<S: NorFlash>(
 async fn partial_close_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
+    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache, impl KeyPointersCache>,
     page_index: usize,
 ) -> Result<PageState, Error<S::Error>> {
     let current_state = get_page_state::<S>(flash, flash_range.clone(), cache, page_index).await?;

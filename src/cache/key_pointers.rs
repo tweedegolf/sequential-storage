@@ -1,0 +1,291 @@
+use core::{fmt::Debug, marker::PhantomData, num::NonZeroU32};
+
+pub(crate) trait KeyPointersCache {
+    type Key: Eq;
+
+    fn key_location(&self, key: &Self::Key) -> Option<u32>;
+
+    fn notice_key_location(&mut self, key: Self::Key, item_address: u32);
+    fn notice_key_erased(&mut self, key: &Self::Key);
+
+    fn invalidate_cache_state(&mut self);
+}
+
+#[derive(Debug)]
+pub(crate) struct CachedKeyPointers<KEY: Eq, const KEYS: usize> {
+    key_pointers: [Option<(KEY, NonZeroU32)>; KEYS],
+}
+
+impl<KEY: Eq, const KEYS: usize> CachedKeyPointers<KEY, KEYS> {
+    const ARRAY_REPEAT_VALUE: Option<(KEY, NonZeroU32)> = None;
+
+    pub(crate) const fn new() -> Self {
+        Self {
+            key_pointers: [Self::ARRAY_REPEAT_VALUE; KEYS],
+        }
+    }
+
+    fn key_index(&self, key: &KEY) -> Option<usize> {
+        self.key_pointers
+            .iter()
+            .enumerate()
+            .filter_map(|(index, val)| val.as_ref().map(|val| (index, val)))
+            .find_map(
+                |(index, (known_key, _))| {
+                    if key == known_key {
+                        Some(index)
+                    } else {
+                        None
+                    }
+                },
+            )
+    }
+
+    fn insert_front(&mut self, value: (KEY, NonZeroU32)) {
+        self.key_pointers[KEYS - 1] = Some(value);
+        move_to_front(&mut self.key_pointers, KEYS - 1);
+    }
+}
+
+impl<KEY: Eq, const KEYS: usize> KeyPointersCache for CachedKeyPointers<KEY, KEYS> {
+    type Key = KEY;
+
+    fn key_location(&self, key: &Self::Key) -> Option<u32> {
+        self.key_index(key)
+            .map(|index| self.key_pointers[index].as_ref().unwrap().1.get())
+    }
+
+    fn notice_key_location(&mut self, key: Self::Key, item_address: u32) {
+        match self.key_index(&key) {
+            Some(existing_index) => {
+                self.key_pointers[existing_index] =
+                    Some((key, NonZeroU32::new(item_address).unwrap()));
+                move_to_front(&mut self.key_pointers, existing_index);
+            }
+            None => self.insert_front((key, NonZeroU32::new(item_address).unwrap())),
+        }
+    }
+
+    fn notice_key_erased(&mut self, key: &Self::Key) {
+        match self.key_index(key) {
+            Some(existing_index) => {
+                self.key_pointers[existing_index] = None;
+                move_to_back(&mut self.key_pointers, existing_index);
+            }
+            None => {}
+        }
+    }
+
+    fn invalidate_cache_state(&mut self) {
+        *self = Self::new();
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct UncachedKeyPointers;
+
+impl KeyPointersCache for UncachedKeyPointers {
+    type Key = ();
+
+    fn key_location(&self, _key: &Self::Key) -> Option<u32> {
+        None
+    }
+
+    fn notice_key_location(&mut self, _key: Self::Key, _item_address: u32) {}
+
+    fn notice_key_erased(&mut self, _key: &Self::Key) {}
+
+    fn invalidate_cache_state(&mut self) {}
+}
+
+fn move_to_front<T>(data: &mut [Option<T>], index: usize) {
+    assert!(index < data.len());
+
+    // Swap the item we're moving into this temporary
+    let mut item = None;
+    core::mem::swap(&mut item, &mut data[index]);
+
+    unsafe {
+        // Move the items until the index back one.
+        // This overwrites the None we just put in.
+        // This is fine because it's none and no drop has to occur
+        let ptr = data.as_mut_ptr();
+        ptr.copy_to(ptr.add(1), index);
+
+        // The item in front is now duplicated.
+        // Swap back our item into the front.
+        core::mem::swap(&mut item, &mut data[0]);
+        // The duplicated item must not drop, so just forget it
+        core::mem::forget(item);
+    }
+}
+
+fn move_to_back<T>(data: &mut [Option<T>], index: usize) {
+    assert!(index < data.len());
+
+    // Swap the item we're moving into this temporary
+    let mut item = None;
+    core::mem::swap(&mut item, &mut data[index]);
+
+    unsafe {
+        // Move the items until the index back one.
+        // This overwrites the None we just put in.
+        // This is fine because it's none and no drop has to occur
+        let ptr = data.as_mut_ptr();
+        ptr.add(index + 1)
+            .copy_to(ptr.add(index), data.len() - 1 - index);
+
+        // The item in front is now duplicated.
+        // Swap back our item into the back.
+        core::mem::swap(&mut item, &mut data[data.len() - 1]);
+        // The duplicated item must not drop, so just forget it
+        core::mem::forget(item);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_move_to_front() {
+        let mut array = [
+            Some("0".into()),
+            Some("1".into()),
+            Some("2".into()),
+            Some("3".into()),
+        ];
+        move_to_front::<String>(&mut array, 0);
+        assert_eq!(
+            array,
+            [
+                Some("0".into()),
+                Some("1".into()),
+                Some("2".into()),
+                Some("3".into()),
+            ]
+        );
+
+        let mut array = [
+            Some("0".into()),
+            Some("1".into()),
+            Some("2".into()),
+            Some("3".into()),
+        ];
+        move_to_front::<String>(&mut array, 1);
+        assert_eq!(
+            array,
+            [
+                Some("1".into()),
+                Some("0".into()),
+                Some("2".into()),
+                Some("3".into()),
+            ]
+        );
+
+        let mut array = [
+            Some("0".into()),
+            Some("1".into()),
+            Some("2".into()),
+            Some("3".into()),
+        ];
+        move_to_front::<String>(&mut array, 2);
+        assert_eq!(
+            array,
+            [
+                Some("2".into()),
+                Some("0".into()),
+                Some("1".into()),
+                Some("3".into()),
+            ]
+        );
+
+        let mut array = [
+            Some("0".into()),
+            Some("1".into()),
+            Some("2".into()),
+            Some("3".into()),
+        ];
+        move_to_front::<String>(&mut array, 3);
+        assert_eq!(
+            array,
+            [
+                Some("3".into()),
+                Some("0".into()),
+                Some("1".into()),
+                Some("2".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_move_to_back() {
+        let mut array = [
+            Some("0".into()),
+            Some("1".into()),
+            Some("2".into()),
+            Some("3".into()),
+        ];
+        move_to_back::<String>(&mut array, 0);
+        assert_eq!(
+            array,
+            [
+                Some("1".into()),
+                Some("2".into()),
+                Some("3".into()),
+                Some("0".into()),
+            ]
+        );
+
+        let mut array = [
+            Some("0".into()),
+            Some("1".into()),
+            Some("2".into()),
+            Some("3".into()),
+        ];
+        move_to_back::<String>(&mut array, 1);
+        assert_eq!(
+            array,
+            [
+                Some("0".into()),
+                Some("2".into()),
+                Some("3".into()),
+                Some("1".into()),
+            ]
+        );
+
+        let mut array = [
+            Some("0".into()),
+            Some("1".into()),
+            Some("2".into()),
+            Some("3".into()),
+        ];
+        move_to_back::<String>(&mut array, 2);
+        assert_eq!(
+            array,
+            [
+                Some("0".into()),
+                Some("1".into()),
+                Some("3".into()),
+                Some("2".into()),
+            ]
+        );
+
+        let mut array = [
+            Some("0".into()),
+            Some("1".into()),
+            Some("2".into()),
+            Some("3".into()),
+        ];
+        move_to_back::<String>(&mut array, 3);
+        assert_eq!(
+            array,
+            [
+                Some("0".into()),
+                Some("1".into()),
+                Some("2".into()),
+                Some("3".into()),
+            ]
+        );
+    }
+}
