@@ -55,9 +55,9 @@ impl<const PAGE_COUNT: usize> PageStatesCache for CachedPageStates<PAGE_COUNT> {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct UncachedPageSates;
+pub(crate) struct UncachedPageStates;
 
-impl PageStatesCache for UncachedPageSates {
+impl PageStatesCache for UncachedPageStates {
     fn get_page_state(&self, _page_index: usize) -> Option<PageState> {
         None
     }

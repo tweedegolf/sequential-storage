@@ -73,11 +73,15 @@ Instead, we can optionally store some state in ram.
 
 These numbers are taken from the test cases in the cache module:
 
-|             Name |     RAM bytes | Map # flash reads | Map flash bytes read | Queue # flash reads | Queue flash bytes read |
-| ---------------: | ------------: | ----------------: | -------------------: | ------------------: | ---------------------: |
-|          NoCache |             0 |              100% |                 100% |                100% |                   100% |
-|   PageStateCache | 1 * num pages |               77% |                  97% |                 51% |                    90% |
-| PagePointerCache | 9 * num pages |               69% |                  89% |                 35% |                    61% |
+|                    Name |                                    RAM bytes | Map # flash reads | Map flash bytes read | Queue # flash reads | Queue flash bytes read |
+| ----------------------: | -------------------------------------------: | ----------------: | -------------------: | ------------------: | ---------------------: |
+|                 NoCache |                                            0 |              100% |                 100% |                100% |                   100% |
+|          PageStateCache |                                1 * num pages |               77% |                  97% |                 51% |                    90% |
+|        PagePointerCache |                                9 * num pages |               69% |                  89% |                 35% |                    61% |
+| KeyPointerCache (half*) | 9 * num pages + (sizeof(KEY) + 4) * num keys |               58% |                  74% |                   - |                      - |
+|         KeyPointerCache | 9 * num pages + (sizeof(KEY) + 4) * num keys |              6.5% |                 8.5% |                   - |                      - |
+
+(* With only half the slots for the keys. Performance can be better or worse depending on the order of reading. This is on the bad side for this situation)
 
 #### Takeaways
 

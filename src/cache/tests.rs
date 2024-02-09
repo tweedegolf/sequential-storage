@@ -109,7 +109,7 @@ mod map_tests {
     use core::ops::Range;
 
     use crate::{
-        cache::{CacheImpl, NoCache, PagePointerCache, PageStateCache},
+        cache::{KeyCacheImpl, KeyPointerCache, NoCache, PagePointerCache, PageStateCache},
         map::{fetch_item, store_item, StorageItem},
         mock_flash::{self, FlashStatsResult, WriteCountCheck},
         AlignedBuf,
@@ -156,6 +156,34 @@ mod map_tests {
                 reads: 153667,
                 writes: 5201,
                 bytes_read: 1575348,
+                bytes_written: 50401
+            }
+        );
+    }
+
+    #[test]
+    async fn key_pointer_cache_half() {
+        assert_eq!(
+            run_test(&mut KeyPointerCache::<NUM_PAGES, u8, 12>::new()).await,
+            FlashStatsResult {
+                erases: 198,
+                reads: 130523,
+                writes: 5201,
+                bytes_read: 1318479,
+                bytes_written: 50401
+            }
+        );
+    }
+
+    #[test]
+    async fn key_pointer_cache_full() {
+        assert_eq!(
+            run_test(&mut KeyPointerCache::<NUM_PAGES, u8, 24>::new()).await,
+            FlashStatsResult {
+                erases: 198,
+                reads: 14506,
+                writes: 5201,
+                bytes_read: 150566,
                 bytes_written: 50401
             }
         );
@@ -229,9 +257,7 @@ mod map_tests {
         }
     }
 
-    async fn run_test(mut cache: impl CacheImpl<KEY = u8>) -> FlashStatsResult {
-        let mut cache = cache.inner();
-
+    async fn run_test(mut cache: impl KeyCacheImpl<u8>) -> FlashStatsResult {
         let mut flash =
             mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true);
         const FLASH_RANGE: Range<u32> = 0x00..0x400;

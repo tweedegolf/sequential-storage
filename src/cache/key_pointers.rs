@@ -1,12 +1,10 @@
-use core::{fmt::Debug, marker::PhantomData, num::NonZeroU32};
+use core::{fmt::Debug, num::NonZeroU32};
 
-pub(crate) trait KeyPointersCache {
-    type Key: Eq;
+pub(crate) trait KeyPointersCache<KEY: Eq> {
+    fn key_location(&self, key: &KEY) -> Option<u32>;
 
-    fn key_location(&self, key: &Self::Key) -> Option<u32>;
-
-    fn notice_key_location(&mut self, key: Self::Key, item_address: u32);
-    fn notice_key_erased(&mut self, key: &Self::Key);
+    fn notice_key_location(&mut self, key: KEY, item_address: u32);
+    fn notice_key_erased(&mut self, key: &KEY);
 
     fn invalidate_cache_state(&mut self);
 }
@@ -47,15 +45,13 @@ impl<KEY: Eq, const KEYS: usize> CachedKeyPointers<KEY, KEYS> {
     }
 }
 
-impl<KEY: Eq, const KEYS: usize> KeyPointersCache for CachedKeyPointers<KEY, KEYS> {
-    type Key = KEY;
-
-    fn key_location(&self, key: &Self::Key) -> Option<u32> {
+impl<KEY: Eq, const KEYS: usize> KeyPointersCache<KEY> for CachedKeyPointers<KEY, KEYS> {
+    fn key_location(&self, key: &KEY) -> Option<u32> {
         self.key_index(key)
             .map(|index| self.key_pointers[index].as_ref().unwrap().1.get())
     }
 
-    fn notice_key_location(&mut self, key: Self::Key, item_address: u32) {
+    fn notice_key_location(&mut self, key: KEY, item_address: u32) {
         match self.key_index(&key) {
             Some(existing_index) => {
                 self.key_pointers[existing_index] =
@@ -66,13 +62,10 @@ impl<KEY: Eq, const KEYS: usize> KeyPointersCache for CachedKeyPointers<KEY, KEY
         }
     }
 
-    fn notice_key_erased(&mut self, key: &Self::Key) {
-        match self.key_index(key) {
-            Some(existing_index) => {
-                self.key_pointers[existing_index] = None;
-                move_to_back(&mut self.key_pointers, existing_index);
-            }
-            None => {}
+    fn notice_key_erased(&mut self, key: &KEY) {
+        if let Some(existing_index) = self.key_index(key) {
+            self.key_pointers[existing_index] = None;
+            move_to_back(&mut self.key_pointers, existing_index);
         }
     }
 
@@ -84,16 +77,14 @@ impl<KEY: Eq, const KEYS: usize> KeyPointersCache for CachedKeyPointers<KEY, KEY
 #[derive(Debug)]
 pub(crate) struct UncachedKeyPointers;
 
-impl KeyPointersCache for UncachedKeyPointers {
-    type Key = ();
-
-    fn key_location(&self, _key: &Self::Key) -> Option<u32> {
+impl<KEY: Eq> KeyPointersCache<KEY> for UncachedKeyPointers {
+    fn key_location(&self, _key: &KEY) -> Option<u32> {
         None
     }
 
-    fn notice_key_location(&mut self, _key: Self::Key, _item_address: u32) {}
+    fn notice_key_location(&mut self, _key: KEY, _item_address: u32) {}
 
-    fn notice_key_erased(&mut self, _key: &Self::Key) {}
+    fn notice_key_erased(&mut self, _key: &KEY) {}
 
     fn invalidate_cache_state(&mut self) {}
 }

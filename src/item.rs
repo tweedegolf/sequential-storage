@@ -27,10 +27,10 @@ use core::ops::Range;
 use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
 
 use crate::{
-    cache::{key_pointers::KeyPointersCache, Cache, PagePointersCache, PageStatesCache},
-    calculate_page_address, calculate_page_end_address, calculate_page_index, get_page_state,
-    round_down_to_alignment, round_down_to_alignment_usize, round_up_to_alignment,
-    round_up_to_alignment_usize, AlignedBuf, Error, NorFlashExt, PageState, MAX_WORD_SIZE,
+    cache::PrivateCacheImpl, calculate_page_address, calculate_page_end_address,
+    calculate_page_index, get_page_state, round_down_to_alignment, round_down_to_alignment_usize,
+    round_up_to_alignment, round_up_to_alignment_usize, AlignedBuf, Error, NorFlashExt, PageState,
+    MAX_WORD_SIZE,
 };
 
 #[derive(Debug)]
@@ -164,7 +164,7 @@ impl ItemHeader {
         mut self,
         flash: &mut S,
         flash_range: Range<u32>,
-        cache: &mut Cache<impl PageStatesCache, impl PagePointersCache, impl KeyPointersCache>,
+        cache: &mut impl PrivateCacheImpl,
         address: u32,
     ) -> Result<Self, Error<S::Error>> {
         self.crc = None;
@@ -210,7 +210,7 @@ impl<'d> Item<'d> {
     pub async fn write_new<S: NorFlash>(
         flash: &mut S,
         flash_range: Range<u32>,
-        cache: &mut Cache<impl PageStatesCache, impl PagePointersCache, impl KeyPointersCache>,
+        cache: &mut impl PrivateCacheImpl,
         address: u32,
         data: &'d [u8],
     ) -> Result<ItemHeader, Error<S::Error>> {
@@ -227,7 +227,7 @@ impl<'d> Item<'d> {
     async fn write_raw<S: NorFlash>(
         flash: &mut S,
         flash_range: Range<u32>,
-        cache: &mut Cache<impl PageStatesCache, impl PagePointersCache, impl KeyPointersCache>,
+        cache: &mut impl PrivateCacheImpl,
         header: &ItemHeader,
         data: &[u8],
         address: u32,
@@ -270,7 +270,7 @@ impl<'d> Item<'d> {
         &self,
         flash: &mut S,
         flash_range: Range<u32>,
-        cache: &mut Cache<impl PageStatesCache, impl PagePointersCache, impl KeyPointersCache>,
+        cache: &mut impl PrivateCacheImpl,
         address: u32,
     ) -> Result<(), Error<S::Error>> {
         Self::write_raw(
@@ -303,7 +303,7 @@ impl<'d> core::fmt::Debug for Item<'d> {
 pub async fn find_next_free_item_spot<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache, impl KeyPointersCache>,
+    cache: &mut impl PrivateCacheImpl,
     start_address: u32,
     end_address: u32,
     data_length: u32,
@@ -440,7 +440,7 @@ fn crc32_with_initial(data: &[u8], initial: u32) -> u32 {
 pub async fn is_page_empty<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache, impl KeyPointersCache>,
+    cache: &mut impl PrivateCacheImpl,
     page_index: usize,
     page_state: Option<PageState>,
 ) -> Result<bool, Error<S::Error>> {
