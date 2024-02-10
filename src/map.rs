@@ -177,7 +177,7 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
             else {
                 // The cache points to a non-existing item?
                 if cfg!(feature = "_test") {
-                    panic!("Wrong cache value");
+                    panic!("Wrong cache value. Addr: {cached_location}");
                 }
                 cache.invalidate_cache_state();
                 break 'cache;
@@ -190,7 +190,7 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
             match item {
                 item::MaybeItem::Corrupted(_, _) | item::MaybeItem::Erased(_, _) => {
                     if cfg!(feature = "_test") {
-                        panic!("Wrong cache value");
+                        panic!("Wrong cache value. Addr: {cached_location}");
                     }
 
                     // The cache points to a corrupted or erased item?
@@ -604,9 +604,14 @@ async fn migrate_items<I: StorageItem, S: NorFlash>(
         let (item_header, data_buffer) = item.destruct();
 
         // Search for the newest item with the key we found
-        let Some((_, found_address, _)) =
-            fetch_item_with_location::<I, S>(flash, flash_range.clone(), cache, data_buffer, key.clone())
-                .await?
+        let Some((_, found_address, _)) = fetch_item_with_location::<I, S>(
+            flash,
+            flash_range.clone(),
+            cache,
+            data_buffer,
+            key.clone(),
+        )
+        .await?
         else {
             // We couldn't even find our own item?
             return Err(MapError::Corrupted {
@@ -622,7 +627,7 @@ async fn migrate_items<I: StorageItem, S: NorFlash>(
                 .read_item(flash, data_buffer, item_address, u32::MAX)
                 .await?
                 .unwrap()?;
-            cache.notice_key_location(key, item_address, true);
+            cache.notice_key_location(key, next_page_write_address, true);
             item.write(flash, flash_range.clone(), cache, next_page_write_address)
                 .await?;
             next_page_write_address = item.header.next_item_address::<S>(next_page_write_address);
