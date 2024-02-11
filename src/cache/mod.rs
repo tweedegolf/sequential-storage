@@ -383,8 +383,9 @@ impl<KEY: Eq, const PAGE_COUNT: usize> PrivateKeyCacheImpl<KEY> for PagePointerC
     }
 }
 
-/// A cache object that keeps track of the page states and some pointers to the items in the page.
-///
+/// An object that caches the location of the newest item with a given key.
+/// This cache also caches pages states and page pointers.
+/// 
 /// This cache has to be kept around and passed to *every* api call to the same memory region until the cache gets discarded.
 ///
 /// Valid usecase:  
@@ -394,6 +395,10 @@ impl<KEY: Eq, const PAGE_COUNT: usize> PrivateKeyCacheImpl<KEY> for PagePointerC
 /// `Create cache 1` -> `use 1` -> `create cache 2` -> `use 2` -> `❌ use 1 ❌`
 ///
 /// Make sure the page count is correct. If the number is lower than the actual amount, the code will panic at some point.
+/// 
+/// The number of key slots can be lower than the total amount of possible keys used, but this will lower
+/// the chance of a cache hit.
+/// The keys are cached in a fifo and any time its location is updated in cache it's added to the front.
 #[derive(Debug)]
 pub struct KeyPointerCache<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> {
     dirt_tracker: DirtTracker,
