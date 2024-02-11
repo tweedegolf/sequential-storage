@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## 0.9.0 11-02-24
+
 - *Breaking:* Storage item key must now also be clone
 - Added KeyPointerCache which significantly helps out the map
 

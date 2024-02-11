@@ -33,6 +33,12 @@ For any update, consult the changelog to see what changed. Any externally notica
 
 The `_test` feature of the crate is considered private. It and anything it enables is not covered by semver.
 
+The performance of any of the cache types is not covered by semver either. If you use this crate in a
+performance sensitive application, then make sure that everything remains working even when no cache is used.
+That way you've covered the worst-case execution time for that part of your application.
+
+A cache performance regression might be a bug though. Open an issue to discus your situation if you find a regression.
+
 ## Features
 
 - Key value datastore (Map)
@@ -124,7 +130,7 @@ An item is considered erased when its data CRC field is 0.
 *NOTE: This means the data itself is still stored on the flash when it's considered erased.*
 *Depending on your usecase, this might not be secure*
 
-The length is a u16, so any item cannot be longer than 0xFFFF or `page size - the item header (aligned to word boundary) - page state (2 words)`.
+The length is a u16, so any item cannot be longer than 0xFFFF or `page size - the item header (padded to word boundary) - page state (2 words)`.
 
 ### Inner workings for map
 
