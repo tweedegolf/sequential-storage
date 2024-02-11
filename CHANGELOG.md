@@ -2,6 +2,11 @@
 
 (DD-MM-YY)
 
+## Unreleased
+
+- *Breaking:* Storage item key must now also be clone
+- Added KeyPointerCache which significantly helps out the map
+
 ## 0.8.1 07-02-24
 
 - Added new PagePointerCache that caches more than the PageStateCache. See the readme for more details.

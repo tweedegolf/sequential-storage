@@ -115,12 +115,9 @@
 //! # });
 //! ```
 
-use crate::{
-    cache::Cache,
-    item::{find_next_free_item_spot, Item, ItemHeader, ItemIter},
-};
+use crate::item::{find_next_free_item_spot, Item, ItemHeader, ItemIter};
 
-use self::cache::{CacheImpl, PrivateCacheImpl};
+use self::cache::{KeyCacheImpl, PrivateKeyCacheImpl};
 
 use super::*;
 
@@ -137,16 +134,16 @@ use super::*;
 pub async fn fetch_item<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    mut cache: impl CacheImpl,
+    mut cache: impl KeyCacheImpl<I::Key>,
     data_buffer: &mut [u8],
     search_key: I::Key,
 ) -> Result<Option<I>, MapError<I::Error, S::Error>> {
-    if cache.inner().is_dirty() {
-        cache.inner().invalidate_cache_state();
+    if cache.is_dirty() {
+        cache.invalidate_cache_state();
     }
 
     Ok(
-        fetch_item_with_location(flash, flash_range, cache.inner(), data_buffer, search_key)
+        fetch_item_with_location(flash, flash_range, &mut cache, data_buffer, search_key)
             .await?
             .map(|(item, _, _)| item),
     )
@@ -157,7 +154,7 @@ pub async fn fetch_item<I: StorageItem, S: NorFlash>(
 async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
+    cache: &mut impl PrivateKeyCacheImpl<I::Key>,
     data_buffer: &mut [u8],
     search_key: I::Key,
 ) -> Result<Option<(I, u32, ItemHeader)>, MapError<I::Error, S::Error>> {
@@ -167,6 +164,49 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
 
     assert!(S::ERASE_SIZE >= S::WORD_SIZE * 3);
     assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
+
+    'cache: {
+        if let Some(cached_location) = cache.key_location(&search_key) {
+            let page_index = calculate_page_index::<S>(flash_range.clone(), cached_location);
+            let page_data_end_address =
+                calculate_page_end_address::<S>(flash_range.clone(), page_index)
+                    - S::WORD_SIZE as u32;
+
+            let Some(header) =
+                ItemHeader::read_new(flash, cached_location, page_data_end_address).await?
+            else {
+                // The cache points to a non-existing item?
+                if cfg!(feature = "_test") {
+                    panic!("Wrong cache value. Addr: {cached_location}");
+                }
+                cache.invalidate_cache_state();
+                break 'cache;
+            };
+
+            let item = header
+                .read_item(flash, data_buffer, cached_location, page_data_end_address)
+                .await?;
+
+            match item {
+                item::MaybeItem::Corrupted(_, _) | item::MaybeItem::Erased(_, _) => {
+                    if cfg!(feature = "_test") {
+                        panic!("Wrong cache value. Addr: {cached_location}");
+                    }
+
+                    // The cache points to a corrupted or erased item?
+                    cache.invalidate_cache_state();
+                    break 'cache;
+                }
+                item::MaybeItem::Present(item) => {
+                    return Ok(Some((
+                        I::deserialize_from(item.data()).map_err(MapError::Item)?,
+                        cached_location,
+                        item.header,
+                    )));
+                }
+            }
+        }
+    }
 
     // We need to find the page we were last using. This should be the only partial open page.
     let mut last_used_page =
@@ -227,7 +267,9 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
         }
 
         // We've found the item! We can stop searching
-        if newest_found_item.is_some() {
+        if let Some(newest_found_item) = newest_found_item.as_ref() {
+            cache.notice_key_location(search_key, newest_found_item.1, false);
+
             break;
         }
 
@@ -260,7 +302,7 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
 pub async fn store_item<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    mut cache: impl CacheImpl,
+    mut cache: impl KeyCacheImpl<I::Key>,
     data_buffer: &mut [u8],
     item: &I,
 ) -> Result<(), MapError<I::Error, S::Error>> {
@@ -271,8 +313,6 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
 
     assert!(S::ERASE_SIZE >= S::WORD_SIZE * 3);
     assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
-
-    let cache = cache.inner();
 
     if cache.is_dirty() {
         cache.invalidate_cache_state();
@@ -287,14 +327,20 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
         }
 
         // If there is a partial open page, we try to write in that first if there is enough space
-        let next_page_to_use = if let Some(partial_open_page) =
-            find_first_page(flash, flash_range.clone(), cache, 0, PageState::PartialOpen).await?
+        let next_page_to_use = if let Some(partial_open_page) = find_first_page(
+            flash,
+            flash_range.clone(),
+            &mut cache,
+            0,
+            PageState::PartialOpen,
+        )
+        .await?
         {
             // We found a partial open page, but at this point it's relatively cheap to do a consistency check
             if !get_page_state(
                 flash,
                 flash_range.clone(),
-                cache,
+                &mut cache,
                 next_page::<S>(flash_range.clone(), partial_open_page),
             )
             .await?
@@ -324,7 +370,7 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
             let free_spot_address = find_next_free_item_spot(
                 flash,
                 flash_range.clone(),
-                cache,
+                &mut cache,
                 page_data_start_address,
                 page_data_end_address,
                 item_data_length as u32,
@@ -333,10 +379,11 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
 
             match free_spot_address {
                 Some(free_spot_address) => {
+                    cache.notice_key_location(item.key(), free_spot_address, true);
                     Item::write_new(
                         flash,
                         flash_range.clone(),
-                        cache,
+                        &mut cache,
                         free_spot_address,
                         &data_buffer[..item_data_length],
                     )
@@ -347,7 +394,7 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
                 }
                 None => {
                     // The item doesn't fit here, so we need to close this page and move to the next
-                    close_page(flash, flash_range.clone(), cache, partial_open_page).await?;
+                    close_page(flash, flash_range.clone(), &mut cache, partial_open_page).await?;
                     Some(next_page::<S>(flash_range.clone(), partial_open_page))
                 }
             }
@@ -363,7 +410,8 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
         match next_page_to_use {
             Some(next_page_to_use) => {
                 let next_page_state =
-                    get_page_state(flash, flash_range.clone(), cache, next_page_to_use).await?;
+                    get_page_state(flash, flash_range.clone(), &mut cache, next_page_to_use)
+                        .await?;
 
                 if !next_page_state.is_open() {
                     // What was the previous buffer page was not open...
@@ -376,17 +424,19 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
                 // Since we're gonna write data here, let's already partially close the page
                 // This could be done after moving the data, but this is more robust in the
                 // face of shutdowns and cancellations
-                partial_close_page(flash, flash_range.clone(), cache, next_page_to_use).await?;
+                partial_close_page(flash, flash_range.clone(), &mut cache, next_page_to_use)
+                    .await?;
 
                 let next_buffer_page = next_page::<S>(flash_range.clone(), next_page_to_use);
                 let next_buffer_page_state =
-                    get_page_state(flash, flash_range.clone(), cache, next_buffer_page).await?;
+                    get_page_state(flash, flash_range.clone(), &mut cache, next_buffer_page)
+                        .await?;
 
                 if !next_buffer_page_state.is_open() {
                     migrate_items::<I, _>(
                         flash,
                         flash_range.clone(),
-                        cache,
+                        &mut cache,
                         data_buffer,
                         next_buffer_page,
                         next_page_to_use,
@@ -396,23 +446,28 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
             }
             None => {
                 // There's no partial open page, so we just gotta turn the first open page into a partial open one
-                let first_open_page =
-                    match find_first_page(flash, flash_range.clone(), cache, 0, PageState::Open)
-                        .await?
-                    {
-                        Some(first_open_page) => first_open_page,
-                        None => {
-                            // Uh oh, no open pages.
-                            // Something has gone wrong.
-                            // We should never get here.
-                            return Err(MapError::Corrupted {
-                                #[cfg(feature = "_test")]
-                                backtrace: std::backtrace::Backtrace::capture(),
-                            });
-                        }
-                    };
+                let first_open_page = match find_first_page(
+                    flash,
+                    flash_range.clone(),
+                    &mut cache,
+                    0,
+                    PageState::Open,
+                )
+                .await?
+                {
+                    Some(first_open_page) => first_open_page,
+                    None => {
+                        // Uh oh, no open pages.
+                        // Something has gone wrong.
+                        // We should never get here.
+                        return Err(MapError::Corrupted {
+                            #[cfg(feature = "_test")]
+                            backtrace: std::backtrace::Backtrace::capture(),
+                        });
+                    }
+                };
 
-                partial_close_page(flash, flash_range.clone(), cache, first_open_page).await?;
+                partial_close_page(flash, flash_range.clone(), &mut cache, first_open_page).await?;
             }
         }
 
@@ -427,7 +482,7 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
 /// Items must also fit within a page (together with the bits of overhead added in the storage process).
 pub trait StorageItem {
     /// The key type of the key-value pair
-    type Key: Eq;
+    type Key: Eq + Clone;
     /// The error type for serialization and deserialization
     type Error;
 
@@ -529,7 +584,7 @@ impl<S: PartialEq, I: PartialEq> PartialEq for MapError<I, S> {
 async fn migrate_items<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
+    cache: &mut impl PrivateKeyCacheImpl<I::Key>,
     data_buffer: &mut [u8],
     source_page: usize,
     target_page: usize,
@@ -549,9 +604,14 @@ async fn migrate_items<I: StorageItem, S: NorFlash>(
         let (item_header, data_buffer) = item.destruct();
 
         // Search for the newest item with the key we found
-        let Some((_, found_address, _)) =
-            fetch_item_with_location::<I, S>(flash, flash_range.clone(), cache, data_buffer, key)
-                .await?
+        let Some((_, found_address, _)) = fetch_item_with_location::<I, S>(
+            flash,
+            flash_range.clone(),
+            cache,
+            data_buffer,
+            key.clone(),
+        )
+        .await?
         else {
             // We couldn't even find our own item?
             return Err(MapError::Corrupted {
@@ -567,6 +627,7 @@ async fn migrate_items<I: StorageItem, S: NorFlash>(
                 .read_item(flash, data_buffer, item_address, u32::MAX)
                 .await?
                 .unwrap()?;
+            cache.notice_key_location(key, next_page_write_address, true);
             item.write(flash, flash_range.clone(), cache, next_page_write_address)
                 .await?;
             next_page_write_address = item.header.next_item_address::<S>(next_page_write_address);
@@ -591,11 +652,9 @@ async fn migrate_items<I: StorageItem, S: NorFlash>(
 pub async fn try_repair<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    mut cache: impl CacheImpl,
+    mut cache: impl KeyCacheImpl<I::Key>,
     data_buffer: &mut [u8],
 ) -> Result<(), MapError<I::Error, S::Error>> {
-    let cache = cache.inner();
-
     cache.invalidate_cache_state();
     #[allow(dropping_references)]
     drop(cache);
@@ -606,7 +665,7 @@ pub async fn try_repair<I: StorageItem, S: NorFlash>(
     if let Some(partial_open_page) = find_first_page(
         flash,
         flash_range.clone(),
-        cache::NoCache::new().inner(),
+        &mut cache::NoCache::new(),
         0,
         PageState::PartialOpen,
     )
@@ -616,7 +675,7 @@ pub async fn try_repair<I: StorageItem, S: NorFlash>(
         if !get_page_state(
             flash,
             flash_range.clone(),
-            cache::NoCache::new().inner(),
+            &mut cache::NoCache::new(),
             buffer_page,
         )
         .await?
@@ -627,7 +686,7 @@ pub async fn try_repair<I: StorageItem, S: NorFlash>(
             open_page(
                 flash,
                 flash_range.clone(),
-                cache::NoCache::new().inner(),
+                &mut cache::NoCache::new(),
                 partial_open_page,
             )
             .await?;
@@ -636,7 +695,7 @@ pub async fn try_repair<I: StorageItem, S: NorFlash>(
             partial_close_page(
                 flash,
                 flash_range.clone(),
-                cache::NoCache::new().inner(),
+                &mut cache::NoCache::new(),
                 partial_open_page,
             )
             .await?;
@@ -644,7 +703,7 @@ pub async fn try_repair<I: StorageItem, S: NorFlash>(
             migrate_items::<I, _>(
                 flash,
                 flash_range.clone(),
-                cache::NoCache::new().inner(),
+                &mut cache::NoCache::new(),
                 data_buffer,
                 buffer_page,
                 partial_open_page,

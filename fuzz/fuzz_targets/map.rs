@@ -5,7 +5,7 @@ use libfuzzer_sys::arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use rand::SeedableRng;
 use sequential_storage::{
-    cache::{CacheImpl, NoCache, PagePointerCache, PageStateCache},
+    cache::{KeyCacheImpl, KeyPointerCache, NoCache, PagePointerCache, PageStateCache},
     map::{MapError, StorageItem},
     mock_flash::{MockFlashBase, MockFlashError, WriteCountCheck},
 };
@@ -19,6 +19,7 @@ fuzz_target!(|data: Input| match data.cache_type {
     CacheType::NoCache => fuzz(data, NoCache::new()),
     CacheType::PageStateCache => fuzz(data, PageStateCache::<PAGES>::new()),
     CacheType::PagePointerCache => fuzz(data, PagePointerCache::<PAGES>::new()),
+    CacheType::KeyPointerCache => fuzz(data, KeyPointerCache::<PAGES, u8, 64>::new()),
 });
 
 #[derive(Arbitrary, Debug, Clone)]
@@ -101,9 +102,10 @@ enum CacheType {
     NoCache,
     PageStateCache,
     PagePointerCache,
+    KeyPointerCache,
 }
 
-fn fuzz(ops: Input, mut cache: impl CacheImpl) {
+fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8>) {
     let mut flash = MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::new(
         WriteCountCheck::OnceOnly,
         Some(ops.fuel as u32),

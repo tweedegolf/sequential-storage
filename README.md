@@ -73,11 +73,12 @@ Instead, we can optionally store some state in ram.
 
 These numbers are taken from the test cases in the cache module:
 
-|             Name |     RAM bytes | Map # flash reads | Map flash bytes read | Queue # flash reads | Queue flash bytes read |
-| ---------------: | ------------: | ----------------: | -------------------: | ------------------: | ---------------------: |
-|          NoCache |             0 |              100% |                 100% |                100% |                   100% |
-|   PageStateCache | 1 * num pages |               77% |                  97% |                 51% |                    90% |
-| PagePointerCache | 9 * num pages |               69% |                  89% |                 35% |                    61% |
+|             Name |                                    RAM bytes | Map # flash reads | Map flash bytes read | Queue # flash reads | Queue flash bytes read |
+| ---------------: | -------------------------------------------: | ----------------: | -------------------: | ------------------: | ---------------------: |
+|          NoCache |                                            0 |              100% |                 100% |                100% |                   100% |
+|   PageStateCache |                                1 * num pages |               77% |                  97% |                 51% |                    90% |
+| PagePointerCache |                                9 * num pages |               69% |                  89% |                 35% |                    61% |
+|  KeyPointerCache | 9 * num pages + (sizeof(KEY) + 4) * num keys |              6.5% |                 8.5% |                   - |                      - |
 
 #### Takeaways
 
@@ -87,6 +88,10 @@ These numbers are taken from the test cases in the cache module:
 - PagePointerCache
   - Very efficient for the queue
   - Minimum cache level that makes a dent in the map
+- KeyPointerCache
+  - Awesome savings!
+  - Numbers are less good if there are more keys than the cache can store
+  - Same as PagePointerCache when used for queue
 
 ## Inner workings
 

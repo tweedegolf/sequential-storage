@@ -7,7 +7,7 @@
 // - flash erase size is quite big, aka, this is a paged flash
 // - flash write size is quite small, so it writes words and not full pages
 
-use cache::{Cache, PagePointersCache, PageStatesCache};
+use cache::PrivateCacheImpl;
 use core::{
     fmt::Debug,
     ops::{Deref, DerefMut, Range},
@@ -51,28 +51,14 @@ async fn try_general_repair<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
 ) -> Result<(), Error<S::Error>> {
-    use crate::cache::PrivateCacheImpl;
-
     // Loop through the pages and get their state. If one returns the corrupted error,
     // the page is likely half-erased. Fix for that is to re-erase again to hopefully finish the job.
     for page_index in get_pages::<S>(flash_range.clone(), 0) {
         if matches!(
-            get_page_state(
-                flash,
-                flash_range.clone(),
-                NoCache::new().inner(),
-                page_index
-            )
-            .await,
+            get_page_state(flash, flash_range.clone(), &mut NoCache::new(), page_index).await,
             Err(Error::Corrupted { .. })
         ) {
-            open_page(
-                flash,
-                flash_range.clone(),
-                NoCache::new().inner(),
-                page_index,
-            )
-            .await?;
+            open_page(flash, flash_range.clone(), &mut NoCache::new(), page_index).await?;
         }
     }
 
@@ -85,7 +71,7 @@ async fn try_general_repair<S: NorFlash>(
 async fn find_first_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
+    cache: &mut impl PrivateCacheImpl,
     starting_page_index: usize,
     page_state: PageState,
 ) -> Result<Option<usize>, Error<S::Error>> {
@@ -150,7 +136,7 @@ const MARKER: u8 = 0;
 async fn get_page_state<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
+    cache: &mut impl PrivateCacheImpl,
     page_index: usize,
 ) -> Result<PageState, Error<S::Error>> {
     if let Some(cached_page_state) = cache.get_page_state(page_index) {
@@ -218,7 +204,7 @@ async fn get_page_state<S: NorFlash>(
 async fn open_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
+    cache: &mut impl PrivateCacheImpl,
     page_index: usize,
 ) -> Result<(), Error<S::Error>> {
     cache.notice_page_state(page_index, PageState::Open, true);
@@ -242,7 +228,7 @@ async fn open_page<S: NorFlash>(
 async fn close_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
+    cache: &mut impl PrivateCacheImpl,
     page_index: usize,
 ) -> Result<(), Error<S::Error>> {
     let current_state =
@@ -275,7 +261,7 @@ async fn close_page<S: NorFlash>(
 async fn partial_close_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut Cache<impl PageStatesCache, impl PagePointersCache>,
+    cache: &mut impl PrivateCacheImpl,
     page_index: usize,
 ) -> Result<PageState, Error<S::Error>> {
     let current_state = get_page_state::<S>(flash, flash_range.clone(), cache, page_index).await?;
@@ -434,7 +420,6 @@ impl<S: NorFlash> NorFlashExt for S {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::PrivateCacheImpl;
     use futures_test::test;
 
     type MockFlash = mock_flash::MockFlashBase<4, 4, 64>;
@@ -481,7 +466,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x400,
-                cache::NoCache::new().inner(),
+                &mut cache::NoCache::new(),
                 0,
                 PageState::Open
             )
@@ -493,7 +478,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x400,
-                cache::NoCache::new().inner(),
+                &mut cache::NoCache::new(),
                 0,
                 PageState::PartialOpen
             )
@@ -505,7 +490,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x400,
-                cache::NoCache::new().inner(),
+                &mut cache::NoCache::new(),
                 1,
                 PageState::PartialOpen
             )
@@ -517,7 +502,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x400,
-                cache::NoCache::new().inner(),
+                &mut cache::NoCache::new(),
                 2,
                 PageState::PartialOpen
             )
@@ -529,7 +514,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x400,
-                cache::NoCache::new().inner(),
+                &mut cache::NoCache::new(),
                 3,
                 PageState::Open
             )
@@ -541,7 +526,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x200,
-                cache::NoCache::new().inner(),
+                &mut cache::NoCache::new(),
                 0,
                 PageState::PartialOpen
             )
@@ -554,7 +539,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x400,
-                cache::NoCache::new().inner(),
+                &mut cache::NoCache::new(),
                 0,
                 PageState::Closed
             )
@@ -566,7 +551,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x400,
-                cache::NoCache::new().inner(),
+                &mut cache::NoCache::new(),
                 1,
                 PageState::Closed
             )
@@ -578,7 +563,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x400,
-                cache::NoCache::new().inner(),
+                &mut cache::NoCache::new(),
                 2,
                 PageState::Closed
             )
@@ -590,7 +575,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x000..0x400,
-                cache::NoCache::new().inner(),
+                &mut cache::NoCache::new(),
                 3,
                 PageState::Closed
             )
@@ -602,7 +587,7 @@ mod tests {
             find_first_page(
                 &mut flash,
                 0x200..0x400,
-                cache::NoCache::new().inner(),
+                &mut cache::NoCache::new(),
                 0,
                 PageState::Closed
             )
