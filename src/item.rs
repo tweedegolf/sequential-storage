@@ -47,6 +47,9 @@ impl ItemHeader {
     const LENGTH_FIELD: Range<usize> = 4..6;
     const LENGTH_CRC_FIELD: Range<usize> = 6..8;
 
+    /// Read the header from the flash at the given address.
+    ///
+    /// If the item doesn't exist or doesn't fit between the address and the end address, none is returned.
     pub async fn read_new<S: NorFlash>(
         flash: &mut S,
         address: u32,
@@ -160,6 +163,7 @@ impl ItemHeader {
             })
     }
 
+    /// Erase this item by setting the crc to none and overwriting the header with it
     pub async fn erase_data<S: MultiwriteNorFlash>(
         mut self,
         flash: &mut S,
@@ -173,10 +177,12 @@ impl ItemHeader {
         Ok(self)
     }
 
+    /// Get the address of the start of the data for this item
     pub fn data_address<S: NorFlash>(address: u32) -> u32 {
         address + round_up_to_alignment::<S>(Self::LENGTH as u32)
     }
 
+    /// Get the location of the next item in flash
     pub fn next_item_address<S: NorFlash>(&self, address: u32) -> u32 {
         let data_address = ItemHeader::data_address::<S>(address);
         data_address + round_up_to_alignment::<S>(self.length as u32)
