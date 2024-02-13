@@ -115,9 +115,14 @@
 //! # });
 //! ```
 
+use embedded_storage_async::nor_flash::MultiwriteNorFlash;
+
 use crate::item::{find_next_free_item_spot, Item, ItemHeader, ItemIter};
 
-use self::cache::{KeyCacheImpl, PrivateKeyCacheImpl};
+use self::{
+    cache::{KeyCacheImpl, PrivateKeyCacheImpl},
+    item::ItemHeaderIter,
+};
 
 use super::*;
 
@@ -474,6 +479,87 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
         // If we get here, we just freshly partially closed a new page, so the next loop iteration should succeed.
         recursion_level += 1;
     }
+}
+
+/// Fully remove an item. Additional calls to fetch with the same key will return None until
+/// a new one is stored again.
+///
+/// <div class="warning">
+/// This is really slow!
+///
+/// All items in flash have to be read and deserialized to find the items with the key.
+/// This is unlikely to be cached well.
+/// </div>
+pub async fn remove_item<I: StorageItem, S: MultiwriteNorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+    mut cache: impl KeyCacheImpl<I::Key>,
+    data_buffer: &mut [u8],
+    search_key: I::Key,
+) -> Result<(), MapError<I::Error, S::Error>> {
+    cache.notice_key_erased(&search_key);
+
+    // Search for the last used page. We're gonna erase from the one after this first.
+    // If we get an early shutoff or cancellation, this will make it so that we don't return
+    // an old version of the key on the next fetch.
+    let last_used_page = find_first_page(
+        flash,
+        flash_range.clone(),
+        &mut cache,
+        0,
+        PageState::PartialOpen,
+    )
+    .await?
+    .unwrap_or_default();
+
+    // Go through all the pages
+    for page_index in get_pages::<S>(
+        flash_range.clone(),
+        next_page::<S>(flash_range.clone(), last_used_page),
+    ) {
+        if get_page_state(flash, flash_range.clone(), &mut cache, page_index)
+            .await?
+            .is_open()
+        {
+            // This page is open, we don't have to check it
+            continue;
+        }
+
+        let page_data_start_address =
+            calculate_page_address::<S>(flash_range.clone(), page_index) + S::WORD_SIZE as u32;
+        let page_data_end_address =
+            calculate_page_end_address::<S>(flash_range.clone(), page_index) - S::WORD_SIZE as u32;
+
+        // Go through all items on the page
+        let mut item_headers = ItemHeaderIter::new(page_data_start_address, page_data_end_address);
+
+        while let (Some(item_header), item_address) = item_headers.next(flash).await? {
+            let item = item_header
+                .read_item(flash, data_buffer, item_address, page_data_end_address)
+                .await?;
+
+            match item {
+                item::MaybeItem::Corrupted(_, _) => continue,
+                item::MaybeItem::Erased(_, _) => continue,
+                item::MaybeItem::Present(item) => {
+                    let item_key = I::deserialize_key_only(item.data()).map_err(MapError::Item)?;
+
+                    // If this item has the same key as the key we're trying to erase, then erase the item.
+                    // But keep going! We need to erase everything.
+                    if item_key == search_key {
+                        item.header
+                            .erase_data(flash, flash_range.clone(), &mut cache, item_address)
+                            .await?;
+                    }
+                }
+            }
+        }
+    }
+
+    // We're done, we now know the cache is in a good state
+    cache.unmark_dirty();
+
+    Ok(())
 }
 
 /// A way of serializing and deserializing items in the storage.
@@ -1132,6 +1218,89 @@ mod tests {
             println!("Fetched {item:?}");
 
             assert_eq!(item.value, vec![i as u8; LENGHT_PER_KEY[i]]);
+        }
+    }
+
+    #[test]
+    async fn remove_items() {
+        let mut flash = mock_flash::MockFlashBase::<4, 1, 4096>::new(
+            mock_flash::WriteCountCheck::Twice,
+            None,
+            true,
+        );
+        let mut data_buffer = AlignedBuf([0; 128]);
+        const FLASH_RANGE: Range<u32> = 0x0000..0x4000;
+
+        // Add some data to flash
+        for j in 0..10 {
+            for i in 0..24 {
+                let item = MockStorageItem {
+                    key: i as u8,
+                    value: vec![i as u8; j + 2],
+                };
+
+                store_item::<_, _>(
+                    &mut flash,
+                    FLASH_RANGE,
+                    cache::NoCache::new(),
+                    &mut data_buffer,
+                    &item,
+                )
+                .await
+                .unwrap();
+            }
+        }
+
+        for j in (0..24).rev() {
+            // Are all things still in flash that we expect?
+            for i in 0..=j {
+                assert!(fetch_item::<MockStorageItem, _>(
+                    &mut flash,
+                    FLASH_RANGE,
+                    cache::NoCache::new(),
+                    &mut data_buffer,
+                    i
+                )
+                .await
+                .unwrap()
+                .is_some());
+            }
+
+            // Remove the item
+            remove_item::<MockStorageItem, _>(
+                &mut flash,
+                FLASH_RANGE,
+                cache::NoCache::new(),
+                &mut data_buffer,
+                j,
+            )
+            .await
+            .unwrap();
+
+            // Are all things still in flash that we expect?
+            for i in 0..j {
+                assert!(fetch_item::<MockStorageItem, _>(
+                    &mut flash,
+                    FLASH_RANGE,
+                    cache::NoCache::new(),
+                    &mut data_buffer,
+                    i
+                )
+                .await
+                .unwrap()
+                .is_some());
+            }
+
+            assert!(fetch_item::<MockStorageItem, _>(
+                &mut flash,
+                FLASH_RANGE,
+                cache::NoCache::new(),
+                &mut data_buffer,
+                j
+            )
+            .await
+            .unwrap()
+            .is_none());
         }
     }
 }

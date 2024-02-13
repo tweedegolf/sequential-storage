@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+## 0.9.1 13-02-24
+
+- Added `remove_item` to map
+
 ## 0.9.0 11-02-24
 
 - *Breaking:* Storage item key must now also be clone
