@@ -481,6 +481,15 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
     }
 }
 
+/// Fully remove an item. Additional calls to fetch with the same key will return None until
+/// a new one is stored again.
+///
+/// <div class="warning">
+/// This is really slow!
+///
+/// All items in flash have to be read and deserialized to find the items with the key.
+/// This is unlikely to be cached well.
+/// </div>
 pub async fn remove_item<I: StorageItem, S: MultiwriteNorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
@@ -488,6 +497,8 @@ pub async fn remove_item<I: StorageItem, S: MultiwriteNorFlash>(
     data_buffer: &mut [u8],
     search_key: I::Key,
 ) -> Result<(), MapError<I::Error, S::Error>> {
+    cache.notice_key_erased(&search_key);
+
     // Search for the last used page. We're gonna erase from the one after this first.
     // If we get an early shutoff or cancellation, this will make it so that we don't return
     // an old version of the key on the next fetch.
@@ -544,6 +555,9 @@ pub async fn remove_item<I: StorageItem, S: MultiwriteNorFlash>(
             }
         }
     }
+
+    // We're done, we now know the cache is in a good state
+    cache.unmark_dirty();
 
     Ok(())
 }
@@ -1204,6 +1218,89 @@ mod tests {
             println!("Fetched {item:?}");
 
             assert_eq!(item.value, vec![i as u8; LENGHT_PER_KEY[i]]);
+        }
+    }
+
+    #[test]
+    async fn remove_items() {
+        let mut flash = mock_flash::MockFlashBase::<4, 1, 4096>::new(
+            mock_flash::WriteCountCheck::Twice,
+            None,
+            true,
+        );
+        let mut data_buffer = AlignedBuf([0; 128]);
+        const FLASH_RANGE: Range<u32> = 0x0000..0x4000;
+
+        // Add some data to flash
+        for j in 0..10 {
+            for i in 0..24 {
+                let item = MockStorageItem {
+                    key: i as u8,
+                    value: vec![i as u8; j + 2],
+                };
+
+                store_item::<_, _>(
+                    &mut flash,
+                    FLASH_RANGE,
+                    cache::NoCache::new(),
+                    &mut data_buffer,
+                    &item,
+                )
+                .await
+                .unwrap();
+            }
+        }
+
+        for j in (0..24).rev() {
+            // Are all things still in flash that we expect?
+            for i in 0..=j {
+                assert!(fetch_item::<MockStorageItem, _>(
+                    &mut flash,
+                    FLASH_RANGE,
+                    cache::NoCache::new(),
+                    &mut data_buffer,
+                    i
+                )
+                .await
+                .unwrap()
+                .is_some());
+            }
+
+            // Remove the item
+            remove_item::<MockStorageItem, _>(
+                &mut flash,
+                FLASH_RANGE,
+                cache::NoCache::new(),
+                &mut data_buffer,
+                j,
+            )
+            .await
+            .unwrap();
+
+            // Are all things still in flash that we expect?
+            for i in 0..j {
+                assert!(fetch_item::<MockStorageItem, _>(
+                    &mut flash,
+                    FLASH_RANGE,
+                    cache::NoCache::new(),
+                    &mut data_buffer,
+                    i
+                )
+                .await
+                .unwrap()
+                .is_some());
+            }
+
+            assert!(fetch_item::<MockStorageItem, _>(
+                &mut flash,
+                FLASH_RANGE,
+                cache::NoCache::new(),
+                &mut data_buffer,
+                j
+            )
+            .await
+            .unwrap()
+            .is_none());
         }
     }
 }
