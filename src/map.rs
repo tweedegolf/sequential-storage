@@ -564,7 +564,7 @@ pub async fn remove_item<I: StorageItem, S: MultiwriteNorFlash>(
 
 /// A way of serializing and deserializing items in the storage.
 ///
-/// Serialized items must not be 0 bytes and may not be longer than [u16::MAX].
+/// Serialized items may not be longer than [u16::MAX].
 /// Items must also fit within a page (together with the bits of overhead added in the storage process).
 pub trait StorageItem {
     /// The key type of the key-value pair
@@ -576,13 +576,15 @@ pub trait StorageItem {
     /// Returns the number of bytes the buffer was filled with or an error.
     ///
     /// The serialized data does not have to self-describe its length or do framing.
-    /// This crate already stores the length of any item in flash.
+    /// This crate already stores the length of any item in flash as a u16.
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, Self::Error>;
+
     /// Deserialize the key-value item from the given buffer. This buffer should be as long
     /// as what was serialized before.
     fn deserialize_from(buffer: &[u8]) -> Result<Self, Self::Error>
     where
         Self: Sized;
+
     /// Optimization for deserializing the key only. Can give a small performance boost if
     /// your key is easily extractable from the buffer.
     fn deserialize_key_only(buffer: &[u8]) -> Result<Self::Key, Self::Error>
