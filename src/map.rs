@@ -142,7 +142,7 @@ pub async fn fetch_item<I: StorageItem, S: NorFlash>(
     mut cache: impl KeyCacheImpl<I::Key>,
     data_buffer: &mut [u8],
     search_key: I::Key,
-) -> Result<Option<I>, MapError<I::Error, S::Error>> {
+) -> Result<Option<I>, Error<I::Error, S::Error>> {
     if cache.is_dirty() {
         cache.invalidate_cache_state();
     }
@@ -162,7 +162,7 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
     cache: &mut impl PrivateKeyCacheImpl<I::Key>,
     data_buffer: &mut [u8],
     search_key: I::Key,
-) -> Result<Option<(I, u32, ItemHeader)>, MapError<I::Error, S::Error>> {
+) -> Result<Option<(I, u32, ItemHeader)>, Error<I::Error, S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
     assert!(flash_range.end - flash_range.start >= S::ERASE_SIZE as u32 * 2);
@@ -204,7 +204,7 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
                 }
                 item::MaybeItem::Present(item) => {
                     return Ok(Some((
-                        I::deserialize_from(item.data()).map_err(MapError::Item)?,
+                        I::deserialize_from(item.data()).map_err(Error::Item)?,
                         cached_location,
                         item.header,
                     )));
@@ -239,7 +239,7 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
             // There are no open pages, so everything must be closed.
             // Something is up and this should never happen.
             // To recover, we will just erase all the flash.
-            return Err(MapError::Corrupted {
+            return Err(Error::Corrupted {
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
             });
@@ -262,9 +262,9 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
 
         let mut it = ItemIter::new(page_data_start_address, page_data_end_address);
         while let Some((item, address)) = it.next(flash, data_buffer).await? {
-            if I::deserialize_key_only(item.data()).map_err(MapError::Item)? == search_key {
+            if I::deserialize_key_only(item.data()).map_err(Error::Item)? == search_key {
                 newest_found_item = Some((
-                    I::deserialize_from(item.data()).map_err(MapError::Item)?,
+                    I::deserialize_from(item.data()).map_err(Error::Item)?,
                     address,
                     item.header,
                 ));
@@ -310,7 +310,7 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
     mut cache: impl KeyCacheImpl<I::Key>,
     data_buffer: &mut [u8],
     item: &I,
-) -> Result<(), MapError<I::Error, S::Error>> {
+) -> Result<(), Error<I::Error, S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
 
@@ -328,7 +328,7 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
         // Check if we're in an infinite recursion which happens when we don't have enough space to store the new data
         if recursion_level == get_pages::<S>(flash_range.clone(), 0).count() {
             cache.unmark_dirty();
-            return Err(MapError::FullStorage);
+            return Err(Error::FullStorage);
         }
 
         // If there is a partial open page, we try to write in that first if there is enough space
@@ -355,7 +355,7 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
                 // This likely happened because of an unexpected shutdown during data migration from the
                 // then new buffer page to the new partial open page.
                 // The repair function should be able to repair this.
-                return Err(MapError::Corrupted {
+                return Err(Error::Corrupted {
                     #[cfg(feature = "_test")]
                     backtrace: std::backtrace::Backtrace::capture(),
                 });
@@ -370,7 +370,7 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
                 calculate_page_end_address::<S>(flash_range.clone(), partial_open_page)
                     - S::WORD_SIZE as u32;
 
-            let item_data_length = item.serialize_into(data_buffer).map_err(MapError::Item)?;
+            let item_data_length = item.serialize_into(data_buffer).map_err(Error::Item)?;
 
             let free_spot_address = find_next_free_item_spot(
                 flash,
@@ -420,7 +420,7 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
 
                 if !next_page_state.is_open() {
                     // What was the previous buffer page was not open...
-                    return Err(MapError::Corrupted {
+                    return Err(Error::Corrupted {
                         #[cfg(feature = "_test")]
                         backtrace: std::backtrace::Backtrace::capture(),
                     });
@@ -465,7 +465,7 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
                         // Uh oh, no open pages.
                         // Something has gone wrong.
                         // We should never get here.
-                        return Err(MapError::Corrupted {
+                        return Err(Error::Corrupted {
                             #[cfg(feature = "_test")]
                             backtrace: std::backtrace::Backtrace::capture(),
                         });
@@ -496,7 +496,7 @@ pub async fn remove_item<I: StorageItem, S: MultiwriteNorFlash>(
     mut cache: impl KeyCacheImpl<I::Key>,
     data_buffer: &mut [u8],
     search_key: I::Key,
-) -> Result<(), MapError<I::Error, S::Error>> {
+) -> Result<(), Error<I::Error, S::Error>> {
     cache.notice_key_erased(&search_key);
 
     // Search for the last used page. We're gonna erase from the one after this first.
@@ -542,7 +542,7 @@ pub async fn remove_item<I: StorageItem, S: MultiwriteNorFlash>(
                 item::MaybeItem::Corrupted(_, _) => continue,
                 item::MaybeItem::Erased(_, _) => continue,
                 item::MaybeItem::Present(item) => {
-                    let item_key = I::deserialize_key_only(item.data()).map_err(MapError::Item)?;
+                    let item_key = I::deserialize_key_only(item.data()).map_err(Error::Item)?;
 
                     // If this item has the same key as the key we're trying to erase, then erase the item.
                     // But keep going! We need to erase everything.
@@ -599,76 +599,6 @@ pub trait StorageItem {
     fn key(&self) -> Self::Key;
 }
 
-/// The error type for map operations
-#[non_exhaustive]
-#[derive(Debug)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum MapError<I, S> {
-    /// A storage item error
-    Item(I),
-    /// An error in the storage (flash)
-    Storage {
-        /// The value of the error
-        value: S,
-        #[cfg(feature = "_test")]
-        /// Backtrace made at the construction of the error
-        backtrace: std::backtrace::Backtrace,
-    },
-    /// The item cannot be stored anymore because the storage is full.
-    /// If you get this error some data may be lost.
-    FullStorage,
-    /// It's been detected that the memory is likely corrupted.
-    /// You may want to erase the memory to recover.
-    Corrupted {
-        #[cfg(feature = "_test")]
-        /// Backtrace made at the construction of the error
-        backtrace: std::backtrace::Backtrace,
-    },
-    /// A provided buffer was to big to be used
-    BufferTooBig,
-    /// A provided buffer was to small to be used (usize is size needed)
-    BufferTooSmall(usize),
-}
-
-impl<S, I> From<super::Error<S>> for MapError<I, S> {
-    fn from(value: super::Error<S>) -> Self {
-        match value {
-            Error::Storage {
-                value,
-                #[cfg(feature = "_test")]
-                backtrace,
-            } => Self::Storage {
-                value,
-                #[cfg(feature = "_test")]
-                backtrace,
-            },
-            Error::FullStorage => Self::FullStorage,
-            Error::Corrupted {
-                #[cfg(feature = "_test")]
-                backtrace,
-            } => Self::Corrupted {
-                #[cfg(feature = "_test")]
-                backtrace,
-            },
-            Error::BufferTooBig => Self::BufferTooBig,
-            Error::BufferTooSmall(needed) => Self::BufferTooSmall(needed),
-        }
-    }
-}
-
-impl<S: PartialEq, I: PartialEq> PartialEq for MapError<I, S> {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Item(l0), Self::Item(r0)) => l0 == r0,
-            (Self::Storage { value: l_value, .. }, Self::Storage { value: r_value, .. }) => {
-                l_value == r_value
-            }
-            (Self::BufferTooSmall(l0), Self::BufferTooSmall(r0)) => l0 == r0,
-            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
-        }
-    }
-}
-
 async fn migrate_items<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
@@ -676,7 +606,7 @@ async fn migrate_items<I: StorageItem, S: NorFlash>(
     data_buffer: &mut [u8],
     source_page: usize,
     target_page: usize,
-) -> Result<(), MapError<I::Error, S::Error>> {
+) -> Result<(), Error<I::Error, S::Error>> {
     // We need to move the data from the next buffer page to the next_page_to_use, but only if that data
     // doesn't have a newer value somewhere else.
 
@@ -688,7 +618,7 @@ async fn migrate_items<I: StorageItem, S: NorFlash>(
         calculate_page_end_address::<S>(flash_range.clone(), source_page) - S::WORD_SIZE as u32,
     );
     while let Some((item, item_address)) = it.next(flash, data_buffer).await? {
-        let key = I::deserialize_key_only(item.data()).map_err(MapError::Item)?;
+        let key = I::deserialize_key_only(item.data()).map_err(Error::Item)?;
         let (item_header, data_buffer) = item.destruct();
 
         // Search for the newest item with the key we found
@@ -702,7 +632,7 @@ async fn migrate_items<I: StorageItem, S: NorFlash>(
         .await?
         else {
             // We couldn't even find our own item?
-            return Err(MapError::Corrupted {
+            return Err(Error::Corrupted {
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
             });
@@ -737,12 +667,12 @@ async fn migrate_items<I: StorageItem, S: NorFlash>(
 /// If this function or the function call after this crate returns [Error::Corrupted], then it's unlikely
 /// that the state can be recovered. To at least make everything function again at the cost of losing the data,
 /// erase the flash range.
-pub async fn try_repair<I: StorageItem, S: NorFlash>(
+async fn try_repair<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     mut cache: impl KeyCacheImpl<I::Key>,
     data_buffer: &mut [u8],
-) -> Result<(), MapError<I::Error, S::Error>> {
+) -> Result<(), Error<I::Error, S::Error>> {
     cache.invalidate_cache_state();
     #[allow(dropping_references)]
     drop(cache);
@@ -1098,7 +1028,7 @@ mod tests {
                 },
             )
             .await,
-            Err(MapError::FullStorage)
+            Err(Error::FullStorage)
         );
 
         for i in 0..UPPER_BOUND {
@@ -1156,7 +1086,7 @@ mod tests {
                 },
             )
             .await,
-            Err(MapError::FullStorage)
+            Err(Error::FullStorage)
         );
 
         for i in 0..UPPER_BOUND {
