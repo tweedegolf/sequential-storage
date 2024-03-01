@@ -4,11 +4,14 @@
 
 ## Unreleased
 
+## 1.0.0 01-03-24
+
 - *Breaking:* Corruption repair is automatic now! The repair functions have been made private.
 - *Breaking:* There's now only one error type. `MapError` has been retired and the main error type now carries
   the Item error as well. The queue uses `Infallable` as the item error type.
 - *Breaking:* The feature `defmt` has been renamed `defmt-03` to avoid a future breaking change.
 - Added `std` feature that implements the error trait for the error enum
+- This release is flash compatible downto version 0.7
 
 ## 0.9.1 13-02-24
 
@@ -36,7 +39,7 @@
   This increases the item header size from 6 to 8. The CRC was also moved to the front of the header to
   aid with shutdown/cancellation issues.
 - When the state is corrupted, many issues can now be repaired with the repair functions in the map and queue modules
-- Made changes to the entire to better survive shutoffs
+- Made changes to the entire crate to better survive shutoffs
 - *Breaking:* Convert API to async first supporting the traits from embedded-storage-async. Flash
   drivers supporting `sequential-storage` can be wrapped using
   [BlockingAsync](https://docs.embassy.dev/embassy-embedded-hal/git/default/adapter/struct.BlockingAsync.html), and a 
