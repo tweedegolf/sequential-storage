@@ -23,5 +23,6 @@ futures = { version = "0.3.30", features = ["executor"] }
 futures-test = "0.3.30"
 
 [features]
-defmt = ["dep:defmt"]
-_test = ["dep:futures", "dep:approx"]
+defmt-03 = ["dep:defmt"]
+std = []
+_test = ["dep:futures", "dep:approx", "std"]

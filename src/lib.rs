@@ -1,4 +1,4 @@
-#![cfg_attr(not(any(test, doctest, feature = "_test")), no_std)]
+#![cfg_attr(not(any(test, doctest, feature = "std")), no_std)]
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
@@ -335,7 +335,7 @@ impl PageState {
 
 #[non_exhaustive]
 #[derive(Debug)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
 enum BasicError<S> {
     /// An error in the storage (flash)
     Storage {
@@ -364,7 +364,7 @@ enum BasicError<S> {
 /// The main error type
 #[non_exhaustive]
 #[derive(Debug)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
 pub enum Error<I, S> {
     /// An error in the storage (flash)
     Storage {
@@ -429,6 +429,34 @@ impl<I, S> From<BasicError<S>> for Error<I, S> {
             BasicError::BufferTooSmall(needed) => Self::BufferTooSmall(needed),
         }
     }
+}
+
+impl<I, S> core::fmt::Display for Error<I, S>
+where
+    I: core::fmt::Display,
+    S: core::fmt::Display,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Error::Storage { value, .. } => write!(f, "Storage error: {value}"),
+            Error::FullStorage => write!(f, "Storage is full"),
+            Error::Corrupted { .. } => write!(f, "Storage is corrupted"),
+            Error::BufferTooBig => write!(f, "A provided buffer was to big to be used"),
+            Error::BufferTooSmall(needed) => write!(
+                f,
+                "A provided buffer was to small to be used. Needed was {needed}"
+            ),
+            Error::Item(value) => write!(f, "Item error: {value}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<I, S> std::error::Error for Error<I, S>
+where
+    I: std::error::Error,
+    S: std::error::Error,
+{
 }
 
 /// Round up the the given number to align with the wordsize of the flash.

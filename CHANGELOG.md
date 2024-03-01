@@ -5,6 +5,8 @@
 ## Unreleased
 
 - *Breaking:* Corruption repair is automatic now! The repair functions have been made private.
+- *Breaking:* The feature `defmt` has been renamed `defmt-03` to avoid a future breaking change.
+- Added `std` feature that implements the error trait for the error enum
 
 ## 0.9.1 13-02-24
 
