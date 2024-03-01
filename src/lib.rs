@@ -478,10 +478,10 @@ macro_rules! run_with_auto_repair {
     (function = $function:expr, repair = $repair_function:expr) => {
         match $function {
             Err(Error::Corrupted {
-                    #[cfg(feature = "_test")]
+                #[cfg(feature = "_test")]
                     backtrace: _backtrace,
-                    ..
-                }) => {
+                ..
+            }) => {
                 #[cfg(all(feature = "_test", fuzzing_repro))]
                 eprintln!(
                     "### Encountered curruption! Repairing now. Originated from:\n{_backtrace:#}"
