@@ -50,13 +50,13 @@ impl<const SIZE: usize> DerefMut for AlignedBuf<SIZE> {
 async fn try_general_repair<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-) -> Result<(), Error<S::Error>> {
+) -> Result<(), BasicError<S::Error>> {
     // Loop through the pages and get their state. If one returns the corrupted error,
     // the page is likely half-erased. Fix for that is to re-erase again to hopefully finish the job.
     for page_index in get_pages::<S>(flash_range.clone(), 0) {
         if matches!(
             get_page_state(flash, flash_range.clone(), &mut NoCache::new(), page_index).await,
-            Err(Error::Corrupted { .. })
+            Err(BasicError::Corrupted { .. })
         ) {
             open_page(flash, flash_range.clone(), &mut NoCache::new(), page_index).await?;
         }
@@ -74,7 +74,7 @@ async fn find_first_page<S: NorFlash>(
     cache: &mut impl PrivateCacheImpl,
     starting_page_index: usize,
     page_state: PageState,
-) -> Result<Option<usize>, Error<S::Error>> {
+) -> Result<Option<usize>, BasicError<S::Error>> {
     for page_index in get_pages::<S>(flash_range.clone(), starting_page_index) {
         if page_state == get_page_state::<S>(flash, flash_range.clone(), cache, page_index).await? {
             return Ok(Some(page_index));
@@ -138,7 +138,7 @@ async fn get_page_state<S: NorFlash>(
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
     page_index: usize,
-) -> Result<PageState, Error<S::Error>> {
+) -> Result<PageState, BasicError<S::Error>> {
     if let Some(cached_page_state) = cache.get_page_state(page_index) {
         return Ok(cached_page_state);
     }
@@ -153,7 +153,7 @@ async fn get_page_state<S: NorFlash>(
     flash
         .read(page_address, &mut buffer[..S::READ_SIZE])
         .await
-        .map_err(|e| Error::Storage {
+        .map_err(|e| BasicError::Storage {
             value: e,
             #[cfg(feature = "_test")]
             backtrace: std::backtrace::Backtrace::capture(),
@@ -170,7 +170,7 @@ async fn get_page_state<S: NorFlash>(
             &mut buffer[..S::READ_SIZE],
         )
         .await
-        .map_err(|e| Error::Storage {
+        .map_err(|e| BasicError::Storage {
             value: e,
             #[cfg(feature = "_test")]
             backtrace: std::backtrace::Backtrace::capture(),
@@ -186,7 +186,7 @@ async fn get_page_state<S: NorFlash>(
         (true, false) => PageState::PartialOpen,
         // Probably an interrupted erase
         (false, true) => {
-            return Err(Error::Corrupted {
+            return Err(BasicError::Corrupted {
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
             })
@@ -206,7 +206,7 @@ async fn open_page<S: NorFlash>(
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
     page_index: usize,
-) -> Result<(), Error<S::Error>> {
+) -> Result<(), BasicError<S::Error>> {
     cache.notice_page_state(page_index, PageState::Open, true);
 
     flash
@@ -215,7 +215,7 @@ async fn open_page<S: NorFlash>(
             calculate_page_end_address::<S>(flash_range.clone(), page_index),
         )
         .await
-        .map_err(|e| Error::Storage {
+        .map_err(|e| BasicError::Storage {
             value: e,
             #[cfg(feature = "_test")]
             backtrace: std::backtrace::Backtrace::capture(),
@@ -230,7 +230,7 @@ async fn close_page<S: NorFlash>(
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
     page_index: usize,
-) -> Result<(), Error<S::Error>> {
+) -> Result<(), BasicError<S::Error>> {
     let current_state =
         partial_close_page::<S>(flash, flash_range.clone(), cache, page_index).await?;
 
@@ -248,7 +248,7 @@ async fn close_page<S: NorFlash>(
             &buffer[..S::WORD_SIZE],
         )
         .await
-        .map_err(|e| Error::Storage {
+        .map_err(|e| BasicError::Storage {
             value: e,
             #[cfg(feature = "_test")]
             backtrace: std::backtrace::Backtrace::capture(),
@@ -263,7 +263,7 @@ async fn partial_close_page<S: NorFlash>(
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
     page_index: usize,
-) -> Result<PageState, Error<S::Error>> {
+) -> Result<PageState, BasicError<S::Error>> {
     let current_state = get_page_state::<S>(flash, flash_range.clone(), cache, page_index).await?;
 
     if current_state != PageState::Open {
@@ -286,7 +286,7 @@ async fn partial_close_page<S: NorFlash>(
             &buffer[..S::WORD_SIZE],
         )
         .await
-        .map_err(|e| Error::Storage {
+        .map_err(|e| BasicError::Storage {
             value: e,
             #[cfg(feature = "_test")]
             backtrace: std::backtrace::Backtrace::capture(),
@@ -333,11 +333,10 @@ impl PageState {
     }
 }
 
-/// The main error type
 #[non_exhaustive]
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum Error<S> {
+enum BasicError<S> {
     /// An error in the storage (flash)
     Storage {
         /// The error value
@@ -362,14 +361,72 @@ pub enum Error<S> {
     BufferTooSmall(usize),
 }
 
-impl<S: PartialEq> PartialEq for Error<S> {
+/// The main error type
+#[non_exhaustive]
+#[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Error<I, S> {
+    /// An error in the storage (flash)
+    Storage {
+        /// The error value
+        value: S,
+        #[cfg(feature = "_test")]
+        /// Backtrace made at the construction of the error
+        backtrace: std::backtrace::Backtrace,
+    },
+    /// The item cannot be stored anymore because the storage is full.
+    /// If you get this error some data may be lost.
+    FullStorage,
+    /// It's been detected that the memory is likely corrupted.
+    /// You may want to erase the memory to recover.
+    Corrupted {
+        #[cfg(feature = "_test")]
+        /// Backtrace made at the construction of the error
+        backtrace: std::backtrace::Backtrace,
+    },
+    /// A provided buffer was to big to be used
+    BufferTooBig,
+    /// A provided buffer was to small to be used (usize is size needed)
+    BufferTooSmall(usize),
+    /// A storage item error
+    Item(I),
+}
+
+impl<I: PartialEq, S: PartialEq> PartialEq for Error<I, S> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::Item(l0), Self::Item(r0)) => l0 == r0,
             (Self::Storage { value: l_value, .. }, Self::Storage { value: r_value, .. }) => {
                 l_value == r_value
             }
             (Self::BufferTooSmall(l0), Self::BufferTooSmall(r0)) => l0 == r0,
             _ => core::mem::discriminant(self) == core::mem::discriminant(other),
+        }
+    }
+}
+
+impl<I, S> From<BasicError<S>> for Error<I, S> {
+    fn from(value: BasicError<S>) -> Self {
+        match value {
+            BasicError::Storage {
+                value,
+                #[cfg(feature = "_test")]
+                backtrace,
+            } => Self::Storage {
+                value,
+                #[cfg(feature = "_test")]
+                backtrace,
+            },
+            BasicError::FullStorage => Self::FullStorage,
+            BasicError::Corrupted {
+                #[cfg(feature = "_test")]
+                backtrace,
+            } => Self::Corrupted {
+                #[cfg(feature = "_test")]
+                backtrace,
+            },
+            BasicError::BufferTooBig => Self::BufferTooBig,
+            BasicError::BufferTooSmall(needed) => Self::BufferTooSmall(needed),
         }
     }
 }
@@ -416,6 +473,28 @@ impl<S: NorFlash> NorFlashExt for S {
         Self::READ_SIZE
     };
 }
+
+macro_rules! run_with_auto_repair {
+    (function = $function:expr, repair = $repair_function:expr) => {
+        match $function {
+            Err(Error::Corrupted {
+                #[cfg(feature = "_test")]
+                    backtrace: _backtrace,
+                ..
+            }) => {
+                #[cfg(all(feature = "_test", fuzzing_repro))]
+                eprintln!(
+                    "### Encountered curruption! Repairing now. Originated from:\n{_backtrace:#}"
+                );
+                $repair_function;
+                $function
+            }
+            val => val,
+        }
+    };
+}
+
+pub(crate) use run_with_auto_repair;
 
 #[cfg(test)]
 mod tests {

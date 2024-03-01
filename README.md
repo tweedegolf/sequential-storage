@@ -64,12 +64,17 @@ A cache performance regression might be a bug though. Open an issue to discus yo
 If you're looking for an alternative with different tradeoffs, take a look at [ekv](https://github.com/embassy-rs/ekv).
 
 ***Note:** The crate uses futures for its operations. These futures write to flash. If a future is cancelled, this can lead*
-*to a corrupted flash state, so cancelling is at your own risc. This state then might have to be repaired first before operation can be continued. In any case, the thing you tried to store or erase might or might not have fully happened.*
+*to a corrupted flash state, so cancelling is at your own risc. If this happens, the state will be repaired.*
+*In any case, the thing you tried to store or erase might or might not have fully happened.*
 
 ### Corruption repair
 
-If for some reason an operation returns the corrupted error, then it might be repairable in many cases.
-See the repair functions in the map and queue modules for more info.
+When corruption is found while an operation is going on, the crate will automatically try to repair it.
+Some corruption leads to unrecoverable data and sadly that cannot be repaired.
+However, the repair will make sure that the flash state is recovered so any next operation should succeed.
+
+If any function still returns the corrupted error, that means that a repair wasn't able to fix the state.
+In that case please open an issue!
 
 ### Caching
 

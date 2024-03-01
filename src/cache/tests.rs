@@ -73,19 +73,19 @@ mod queue_tests {
                 .await
                 .unwrap();
             assert_eq!(
-                &peek(&mut flash, FLASH_RANGE, &mut cache, &mut data_buffer)
+                peek(&mut flash, FLASH_RANGE, &mut cache, &mut data_buffer)
                     .await
                     .unwrap()
-                    .unwrap()[..],
+                    .unwrap(),
                 &data,
                 "At {i}"
             );
             println!("POP");
             assert_eq!(
-                &pop(&mut flash, FLASH_RANGE, &mut cache, &mut data_buffer)
+                pop(&mut flash, FLASH_RANGE, &mut cache, &mut data_buffer)
                     .await
                     .unwrap()
-                    .unwrap()[..],
+                    .unwrap(),
                 &data,
                 "At {i}"
             );
