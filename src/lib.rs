@@ -474,9 +474,27 @@ impl<S: NorFlash> NorFlashExt for S {
     };
 }
 
-// pub(crate) fn run_with_auto_repair<R, I, S, E: Error<I, S>>(function: impl FnMut() -> Result<R, E>) {
+macro_rules! run_with_auto_repair {
+    (function = $function:expr, repair = $repair_function:expr) => {
+        match $function {
+            Err(Error::Corrupted {
+                    #[cfg(feature = "_test")]
+                    backtrace: _backtrace,
+                    ..
+                }) => {
+                #[cfg(all(feature = "_test", fuzzing_repro))]
+                eprintln!(
+                    "### Encountered curruption! Repairing now. Originated from:\n{_backtrace:#}"
+                );
+                $repair_function;
+                $function
+            }
+            val => val,
+        }
+    };
+}
 
-// }
+pub(crate) use run_with_auto_repair;
 
 #[cfg(test)]
 mod tests {

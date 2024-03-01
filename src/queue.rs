@@ -59,7 +59,7 @@ use core::convert::Infallible;
 
 use crate::item::{find_next_free_item_spot, is_page_empty, Item, ItemHeader, ItemHeaderIter};
 
-use self::cache::CacheImpl;
+use self::{cache::CacheImpl, item::ItemUnborrowed};
 
 use super::*;
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
@@ -73,6 +73,26 @@ use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 /// *Note: If a page is already used and you push more data than the remaining capacity of the page,
 /// the entire remaining capacity will go unused because the data is stored on the next page.*
 pub async fn push<S: NorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+    mut cache: impl CacheImpl,
+    data: &[u8],
+    allow_overwrite_old_data: bool,
+) -> Result<(), Error<Infallible, S::Error>> {
+    run_with_auto_repair!(
+        function = push_inner(
+            flash,
+            flash_range.clone(),
+            &mut cache,
+            data,
+            allow_overwrite_old_data
+        )
+        .await,
+        repair = try_repair(flash, flash_range.clone(), &mut cache).await?
+    )
+}
+
+async fn push_inner<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     mut cache: impl CacheImpl,
@@ -188,6 +208,7 @@ pub async fn peek_many<S: NorFlash, CI: CacheImpl>(
     flash_range: Range<u32>,
     cache: CI,
 ) -> Result<PeekIterator<'_, S, CI>, Error<Infallible, S::Error>> {
+    // Note: Corruption repair is done in these functions already
     Ok(PeekIterator {
         iter: QueueIterator::new(flash, flash_range, cache).await?,
     })
@@ -209,6 +230,7 @@ pub async fn peek<'d, S: NorFlash>(
     cache: impl CacheImpl,
     data_buffer: &'d mut [u8],
 ) -> Result<Option<&'d mut [u8]>, Error<Infallible, S::Error>> {
+    // Note: Corruption repair is done in these functions already
     peek_many(flash, flash_range, cache)
         .await?
         .next(data_buffer)
@@ -225,6 +247,7 @@ pub async fn pop_many<S: MultiwriteNorFlash, CI: CacheImpl>(
     flash_range: Range<u32>,
     cache: CI,
 ) -> Result<PopIterator<'_, S, CI>, Error<Infallible, S::Error>> {
+    // Note: Corruption repair is done in these functions already
     Ok(PopIterator {
         iter: QueueIterator::new(flash, flash_range, cache).await?,
     })
@@ -271,6 +294,23 @@ impl<'d, S: MultiwriteNorFlash, CI: CacheImpl> PopIterator<'d, S, CI> {
         &mut self,
         data_buffer: &'m mut [u8],
     ) -> Result<Option<&'m mut [u8]>, Error<Infallible, S::Error>> {
+        let value = run_with_auto_repair!(
+            function = self.next_inner(data_buffer).await,
+            repair = try_repair(
+                self.iter.flash,
+                self.iter.flash_range.clone(),
+                &mut self.iter.cache
+            )
+            .await?
+        )?;
+
+        Ok(value.map(|len| &mut data_buffer[..len]))
+    }
+
+    async fn next_inner(
+        &mut self,
+        data_buffer: &mut [u8],
+    ) -> Result<Option<usize>, Error<Infallible, S::Error>> {
         if self.iter.cache.is_dirty() {
             self.iter.cache.invalidate_cache_state();
         }
@@ -292,7 +332,7 @@ impl<'d, S: MultiwriteNorFlash, CI: CacheImpl> PopIterator<'d, S, CI> {
             {
                 Ok(_) => {
                     self.iter.cache.unmark_dirty();
-                    Ok(Some(ret))
+                    Ok(Some(ret.len()))
                 }
                 Err(e) => {
                     self.iter.recover_from_reset_point(reset_point);
@@ -325,6 +365,8 @@ impl<'d, S: NorFlash, CI: CacheImpl> PeekIterator<'d, S, CI> {
         &mut self,
         data_buffer: &'m mut [u8],
     ) -> Result<Option<&'m mut [u8]>, Error<Infallible, S::Error>> {
+        // Note: Corruption repair is done in these functions already
+
         if self.iter.cache.is_dirty() {
             self.iter.cache.invalidate_cache_state();
         }
@@ -363,7 +405,27 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIterator<'d, S, CI> {
         flash: &'d mut S,
         flash_range: Range<u32>,
         mut cache: CI,
-    ) -> Result<Self, BasicError<S::Error>> {
+    ) -> Result<Self, Error<Infallible, S::Error>> {
+        let start_address = run_with_auto_repair!(
+            function = Self::find_start_address(flash, flash_range.clone(), &mut cache)
+                .await
+                .map_err(|e| e.into()),
+            repair = try_repair(flash, flash_range.clone(), &mut cache).await?
+        )?;
+
+        Ok(Self {
+            flash,
+            flash_range,
+            cache,
+            current_address: start_address,
+        })
+    }
+
+    async fn find_start_address(
+        flash: &mut S,
+        flash_range: Range<u32>,
+        mut cache: &mut CI,
+    ) -> Result<CurrentAddress, BasicError<S::Error>> {
         assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
         assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
 
@@ -384,18 +446,25 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIterator<'d, S, CI> {
             }
         };
 
-        Ok(Self {
-            flash,
-            flash_range,
-            cache,
-            current_address: CurrentAddress::Address(current_address),
-        })
+        Ok(CurrentAddress::Address(current_address))
     }
 
     async fn next<'m>(
         &mut self,
         data_buffer: &'m mut [u8],
-    ) -> Result<Option<(Item<'m>, u32)>, BasicError<S::Error>> {
+    ) -> Result<Option<(Item<'m>, u32)>, Error<Infallible, S::Error>> {
+        let value = run_with_auto_repair!(
+            function = self.next_inner(data_buffer).await.map_err(|e| e.into()),
+            repair = try_repair(self.flash, self.flash_range.clone(), &mut self.cache).await?
+        );
+
+        value.map(|v| v.map(|(item, address)| (item.reborrow(data_buffer), address)))
+    }
+
+    async fn next_inner(
+        &mut self,
+        data_buffer: &mut [u8],
+    ) -> Result<Option<(ItemUnborrowed, u32)>, BasicError<S::Error>> {
         let mut data_buffer = Some(data_buffer);
 
         if self.cache.is_dirty() {
@@ -481,7 +550,7 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIterator<'d, S, CI> {
                         };
                         // Return the item we found
                         self.cache.unmark_dirty();
-                        return Ok(Some((item, found_item_address)));
+                        return Ok(Some((item.unborrow(), found_item_address)));
                     }
                 }
             } else {
@@ -508,6 +577,17 @@ struct QueueIteratorResetPoint(CurrentAddress);
 ///
 /// If there is no space left, `None` is returned.
 pub async fn find_max_fit<S: NorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+    mut cache: impl CacheImpl,
+) -> Result<Option<u32>, Error<Infallible, S::Error>> {
+    run_with_auto_repair!(
+        function = find_max_fit_inner(flash, flash_range.clone(), &mut cache).await,
+        repair = try_repair(flash, flash_range.clone(), &mut cache).await?
+    )
+}
+
+async fn find_max_fit_inner<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     mut cache: impl CacheImpl,
@@ -683,7 +763,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            &peek(
+            peek(
                 &mut flash,
                 flash_range.clone(),
                 cache::NoCache::new(),
@@ -691,7 +771,7 @@ mod tests {
             )
             .await
             .unwrap()
-            .unwrap()[..],
+            .unwrap(),
             &[0xAA; DATA_SIZE]
         );
         data_buffer[..DATA_SIZE].copy_from_slice(&[0xBB; DATA_SIZE]);
@@ -705,7 +785,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            &peek(
+            peek(
                 &mut flash,
                 flash_range.clone(),
                 cache::NoCache::new(),
@@ -713,7 +793,7 @@ mod tests {
             )
             .await
             .unwrap()
-            .unwrap()[..],
+            .unwrap(),
             &[0xAA; DATA_SIZE]
         );
 
@@ -741,7 +821,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            &peek(
+            peek(
                 &mut flash,
                 flash_range.clone(),
                 cache::NoCache::new(),
@@ -749,11 +829,11 @@ mod tests {
             )
             .await
             .unwrap()
-            .unwrap()[..],
+            .unwrap(),
             &[0xBB; DATA_SIZE]
         );
         assert_eq!(
-            &pop(
+            pop(
                 &mut flash,
                 flash_range.clone(),
                 cache::NoCache::new(),
@@ -761,12 +841,12 @@ mod tests {
             )
             .await
             .unwrap()
-            .unwrap()[..],
+            .unwrap(),
             &[0xBB; DATA_SIZE]
         );
 
         assert_eq!(
-            &peek(
+            peek(
                 &mut flash,
                 flash_range.clone(),
                 cache::NoCache::new(),
@@ -774,11 +854,11 @@ mod tests {
             )
             .await
             .unwrap()
-            .unwrap()[..],
+            .unwrap(),
             &[0xDD; DATA_SIZE]
         );
         assert_eq!(
-            &pop(
+            pop(
                 &mut flash,
                 flash_range.clone(),
                 cache::NoCache::new(),
@@ -786,7 +866,7 @@ mod tests {
             )
             .await
             .unwrap()
-            .unwrap()[..],
+            .unwrap(),
             &[0xDD; DATA_SIZE]
         );
 
@@ -834,7 +914,7 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(
-                &peek(
+                peek(
                     &mut flash,
                     flash_range.clone(),
                     cache::NoCache::new(),
@@ -842,12 +922,12 @@ mod tests {
                 )
                 .await
                 .unwrap()
-                .unwrap()[..],
+                .unwrap(),
                 &data,
                 "At {i}"
             );
             assert_eq!(
-                &pop(
+                pop(
                     &mut flash,
                     flash_range.clone(),
                     cache::NoCache::new(),
@@ -855,7 +935,7 @@ mod tests {
                 )
                 .await
                 .unwrap()
-                .unwrap()[..],
+                .unwrap(),
                 &data,
                 "At {i}"
             );
@@ -895,7 +975,7 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(
-                &peek(
+                peek(
                     &mut flash,
                     flash_range.clone(),
                     cache::NoCache::new(),
@@ -903,13 +983,13 @@ mod tests {
                 )
                 .await
                 .unwrap()
-                .unwrap()[..],
+                .unwrap(),
                 &data,
                 "At {i}"
             );
             println!("POP");
             assert_eq!(
-                &pop(
+                pop(
                     &mut flash,
                     flash_range.clone(),
                     cache::NoCache::new(),
@@ -917,7 +997,7 @@ mod tests {
                 )
                 .await
                 .unwrap()
-                .unwrap()[..],
+                .unwrap(),
                 &data,
                 "At {i}"
             );
@@ -974,7 +1054,7 @@ mod tests {
             peek_stats += start_snapshot.compare_to(peeker.iter.flash.stats_snapshot());
             for i in 0..5 {
                 let start_snapshot = peeker.iter.flash.stats_snapshot();
-                let mut data = vec![i as u8; 50];
+                let mut data = [i as u8; 50];
                 assert_eq!(
                     peeker.next(&mut data_buffer).await.unwrap(),
                     Some(&mut data[..]),
@@ -993,7 +1073,7 @@ mod tests {
                 let start_snapshot = popper.iter.flash.stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
-                    &popper.next(&mut data_buffer).await.unwrap().unwrap()[..],
+                    popper.next(&mut data_buffer).await.unwrap().unwrap(),
                     &data,
                     "At {i}"
                 );
@@ -1020,7 +1100,7 @@ mod tests {
                 let start_snapshot = peeker.iter.flash.stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
-                    &peeker.next(&mut data_buffer).await.unwrap().unwrap()[..],
+                    peeker.next(&mut data_buffer).await.unwrap().unwrap(),
                     &data,
                     "At {i}"
                 );
@@ -1037,7 +1117,7 @@ mod tests {
                 let start_snapshot = popper.iter.flash.stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
-                    &popper.next(&mut data_buffer).await.unwrap().unwrap()[..],
+                    popper.next(&mut data_buffer).await.unwrap().unwrap(),
                     &data,
                     "At {i}"
                 );
@@ -1113,7 +1193,7 @@ mod tests {
                 let start_snapshot = flash.stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
-                    &pop(
+                    pop(
                         &mut flash,
                         flash_range.clone(),
                         cache::NoCache::new(),
@@ -1121,7 +1201,7 @@ mod tests {
                     )
                     .await
                     .unwrap()
-                    .unwrap()[..],
+                    .unwrap(),
                     &data,
                     "At {i}"
                 );
@@ -1149,7 +1229,7 @@ mod tests {
                 let start_snapshot = flash.stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
-                    &pop(
+                    pop(
                         &mut flash,
                         flash_range.clone(),
                         cache::NoCache::new(),
@@ -1157,7 +1237,7 @@ mod tests {
                     )
                     .await
                     .unwrap()
-                    .unwrap()[..],
+                    .unwrap(),
                     &data,
                     "At {i}"
                 );
@@ -1219,7 +1299,7 @@ mod tests {
         // There's now an unused gap at the end of the first page
 
         assert_eq!(
-            &pop(
+            pop(
                 &mut flash,
                 flash_range.clone(),
                 cache::NoCache::new(),
@@ -1227,12 +1307,12 @@ mod tests {
             )
             .await
             .unwrap()
-            .unwrap()[..],
+            .unwrap(),
             &[0xAA; 20]
         );
 
         assert_eq!(
-            &pop(
+            pop(
                 &mut flash,
                 flash_range.clone(),
                 cache::NoCache::new(),
@@ -1240,7 +1320,7 @@ mod tests {
             )
             .await
             .unwrap()
-            .unwrap()[..],
+            .unwrap(),
             &[0xBB; 20]
         );
     }

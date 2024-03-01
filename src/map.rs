@@ -143,14 +143,23 @@ pub async fn fetch_item<I: StorageItem, S: NorFlash>(
     data_buffer: &mut [u8],
     search_key: I::Key,
 ) -> Result<Option<I>, Error<I::Error, S::Error>> {
-    if cache.is_dirty() {
-        cache.invalidate_cache_state();
-    }
+    run_with_auto_repair!(
+        function = {
+            if cache.is_dirty() {
+                cache.invalidate_cache_state();
+            }
 
-    Ok(
-        fetch_item_with_location(flash, flash_range, &mut cache, data_buffer, search_key)
-            .await?
-            .map(|(item, _, _)| item),
+            fetch_item_with_location(
+                flash,
+                flash_range.clone(),
+                &mut cache,
+                data_buffer,
+                search_key.clone(),
+            )
+            .await
+            .map(|value| value.map(|(item, _, _)| item))
+        },
+        repair = try_repair::<I, _>(flash, flash_range.clone(), &mut cache, data_buffer).await?
     )
 }
 
@@ -305,6 +314,20 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
 /// *Note: On a given flash range, make sure to use only the same type as [StorageItem] every time
 /// or types that serialize and deserialize the key in the same way.*
 pub async fn store_item<I: StorageItem, S: NorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+    mut cache: impl KeyCacheImpl<I::Key>,
+    data_buffer: &mut [u8],
+    item: &I,
+) -> Result<(), Error<I::Error, S::Error>> {
+    run_with_auto_repair!(
+        function =
+            store_item_inner(flash, flash_range.clone(), &mut cache, data_buffer, item).await,
+        repair = try_repair::<I, _>(flash, flash_range.clone(), &mut cache, data_buffer).await?
+    )
+}
+
+async fn store_item_inner<I: StorageItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     mut cache: impl KeyCacheImpl<I::Key>,
@@ -491,6 +514,26 @@ pub async fn store_item<I: StorageItem, S: NorFlash>(
 /// This is unlikely to be cached well.
 /// </div>
 pub async fn remove_item<I: StorageItem, S: MultiwriteNorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+    mut cache: impl KeyCacheImpl<I::Key>,
+    data_buffer: &mut [u8],
+    search_key: I::Key,
+) -> Result<(), Error<I::Error, S::Error>> {
+    run_with_auto_repair!(
+        function = remove_item_inner::<I, _>(
+            flash,
+            flash_range.clone(),
+            &mut cache,
+            data_buffer,
+            search_key.clone()
+        )
+        .await,
+        repair = try_repair::<I, _>(flash, flash_range.clone(), &mut cache, data_buffer).await?
+    )
+}
+
+async fn remove_item_inner<I: StorageItem, S: MultiwriteNorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     mut cache: impl KeyCacheImpl<I::Key>,
@@ -955,7 +998,7 @@ mod tests {
             .unwrap()
             .unwrap();
             assert_eq!(item.key, i);
-            assert_eq!(item.value, vec![(i % 10) as u8 * 2; (i % 10) as usize]);
+            assert_eq!(item.value, vec![(i % 10) * 2; (i % 10) as usize]);
         }
 
         for _ in 0..4000 {
@@ -985,7 +1028,7 @@ mod tests {
             .unwrap()
             .unwrap();
             assert_eq!(item.key, i);
-            assert_eq!(item.value, vec![(i % 10) as u8 * 2; (i % 10) as usize]);
+            assert_eq!(item.value, vec![(i % 10) * 2; (i % 10) as usize]);
         }
 
         println!("{:?}", start_snapshot.compare_to(flash.stats_snapshot()),);
@@ -1000,8 +1043,8 @@ mod tests {
 
         for i in 0..UPPER_BOUND {
             let item = MockStorageItem {
-                key: i as u8,
-                value: vec![i as u8; i as usize],
+                key: i,
+                value: vec![i; i as usize],
             };
             println!("Storing {item:?}");
 
@@ -1037,7 +1080,7 @@ mod tests {
                 0x00..0x40,
                 cache::NoCache::new(),
                 &mut data_buffer,
-                i as u8,
+                i,
             )
             .await
             .unwrap()
@@ -1045,7 +1088,7 @@ mod tests {
 
             println!("Fetched {item:?}");
 
-            assert_eq!(item.value, vec![i as u8; i as usize]);
+            assert_eq!(item.value, vec![i; i as usize]);
         }
     }
 
@@ -1058,8 +1101,8 @@ mod tests {
 
         for i in 0..UPPER_BOUND {
             let item = MockStorageItem {
-                key: i as u8,
-                value: vec![i as u8; i as usize],
+                key: i,
+                value: vec![i; i as usize],
             };
             println!("Storing {item:?}");
 
@@ -1095,7 +1138,7 @@ mod tests {
                 0x0000..0x1000,
                 cache::NoCache::new(),
                 &mut data_buffer,
-                i as u8,
+                i,
             )
             .await
             .unwrap()
@@ -1103,7 +1146,7 @@ mod tests {
 
             println!("Fetched {item:?}");
 
-            assert_eq!(item.value, vec![i as u8; i as usize]);
+            assert_eq!(item.value, vec![i; i as usize]);
         }
     }
 

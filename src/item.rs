@@ -293,6 +293,13 @@ impl<'d> Item<'d> {
         )
         .await
     }
+
+    pub fn unborrow(self) -> ItemUnborrowed {
+        ItemUnborrowed {
+            header: self.header,
+            data_buffer_len: self.data_buffer.len(),
+        }
+    }
 }
 
 impl<'d> core::fmt::Debug for Item<'d> {
@@ -304,6 +311,22 @@ impl<'d> core::fmt::Debug for Item<'d> {
                 &&self.data_buffer[..self.header.length as usize],
             )
             .finish()
+    }
+}
+
+/// A version of [Item] that does not borrow the data. This is to circumvent the borrowchecker in some places.
+pub struct ItemUnborrowed {
+    pub header: ItemHeader,
+    data_buffer_len: usize,
+}
+
+impl ItemUnborrowed {
+    /// Reborrows the data. Watch out! Make sure the data buffer hasn't changed since unborrowing!
+    pub fn reborrow(self, data_buffer: &mut [u8]) -> Item<'_> {
+        Item {
+            header: self.header,
+            data_buffer: &mut data_buffer[..self.data_buffer_len],
+        }
     }
 }
 

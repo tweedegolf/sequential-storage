@@ -6,10 +6,11 @@ use libfuzzer_sys::fuzz_target;
 use rand::SeedableRng;
 use sequential_storage::{
     cache::{KeyCacheImpl, KeyPointerCache, NoCache, PagePointerCache, PageStateCache},
-    map::{MapError, StorageItem},
+    map::StorageItem,
     mock_flash::{MockFlashBase, MockFlashError, WriteCountCheck},
+    Error,
 };
-use std::{collections::HashMap, ops::Range};
+use std::{collections::HashMap, fmt::Debug, ops::Range};
 
 const PAGES: usize = 4;
 const WORD_SIZE: usize = 4;
@@ -106,7 +107,7 @@ enum CacheType {
     KeyPointerCache,
 }
 
-fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8>) {
+fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
     let mut flash = MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::new(
         if ops.ops.iter().any(|op| matches!(op, Op::Remove(_))) {
             WriteCountCheck::Twice
@@ -129,180 +130,141 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8>) {
     eprintln!("\n=== START ===\n");
 
     for op in ops.ops.into_iter() {
-        let mut retry = true;
-        let mut corruption_repaired = false;
+        #[cfg(fuzzing_repro)]
+        eprintln!("{}", flash.print_items());
+        #[cfg(fuzzing_repro)]
+        eprintln!("{:?}", cache);
+        #[cfg(fuzzing_repro)]
+        eprintln!("=== OP: {op:?} ===");
 
-        while std::mem::replace(&mut retry, false) {
-            #[cfg(fuzzing_repro)]
-            eprintln!("{}", flash.print_items());
-            #[cfg(fuzzing_repro)]
-            eprintln!("=== OP: {op:?} ===");
-
-            match op.clone() {
-                Op::Store(op) => {
-                    let item = op.into_test_item(&mut rng);
-                    match block_on(sequential_storage::map::store_item(
-                        &mut flash,
-                        FLASH_RANGE,
-                        &mut cache,
-                        &mut buf.0,
-                        &item,
-                    )) {
-                        Ok(_) => {
-                            map.insert(item.key, item.value);
-                        }
-                        Err(MapError::FullStorage) => {}
-                        Err(MapError::Storage {
-                            value: MockFlashError::EarlyShutoff(_),
-                            backtrace: _backtrace,
-                        }) => {
-                            match block_on(sequential_storage::map::fetch_item::<TestItem, _>(
-                                &mut flash,
-                                FLASH_RANGE,
-                                &mut cache,
-                                &mut buf.0,
-                                item.key,
-                            )) {
-                                Ok(Some(check_item))
-                                    if check_item.key == item.key
-                                        && check_item.value == item.value =>
-                                {
-                                    #[cfg(fuzzing_repro)]
-                                    eprintln!("Early shutoff when storing {item:?}! (but it still stored fully). Originated from:\n{_backtrace:#}");
-                                    // Even though we got a shutoff, it still managed to store well
-                                    map.insert(item.key, item.value);
-                                }
-                                _ => {
-                                    // Could not fetch the item we stored...
-                                    #[cfg(fuzzing_repro)]
-                                    eprintln!("Early shutoff when storing {item:?}! Originated from:\n{_backtrace:#}");
-                                }
+        match op.clone() {
+            Op::Store(op) => {
+                let item = op.into_test_item(&mut rng);
+                match block_on(sequential_storage::map::store_item(
+                    &mut flash,
+                    FLASH_RANGE,
+                    &mut cache,
+                    &mut buf.0,
+                    &item,
+                )) {
+                    Ok(_) => {
+                        map.insert(item.key, item.value);
+                    }
+                    Err(Error::FullStorage) => {}
+                    Err(Error::Storage {
+                        value: MockFlashError::EarlyShutoff(_),
+                        backtrace: _backtrace,
+                    }) => {
+                        match block_on(sequential_storage::map::fetch_item::<TestItem, _>(
+                            &mut flash,
+                            FLASH_RANGE,
+                            &mut cache,
+                            &mut buf.0,
+                            item.key,
+                        )) {
+                            Ok(Some(check_item))
+                                if check_item.key == item.key && check_item.value == item.value =>
+                            {
+                                #[cfg(fuzzing_repro)]
+                                eprintln!("Early shutoff when storing {item:?}! (but it still stored fully). Originated from:\n{_backtrace:#}");
+                                // Even though we got a shutoff, it still managed to store well
+                                map.insert(item.key, item.value);
+                            }
+                            _ => {
+                                // Could not fetch the item we stored...
+                                #[cfg(fuzzing_repro)]
+                                eprintln!("Early shutoff when storing {item:?}! Originated from:\n{_backtrace:#}");
                             }
                         }
-                        Err(MapError::Corrupted {
-                            backtrace: _backtrace,
-                        }) if !corruption_repaired => {
-                            #[cfg(fuzzing_repro)]
-                            eprintln!(
-                                "### Encountered curruption while storing! Repairing now. Originated from:\n{_backtrace:#}"
-                            );
-
-                            block_on(sequential_storage::map::try_repair::<TestItem, _>(
-                                &mut flash,
-                                FLASH_RANGE,
-                                &mut cache,
-                                &mut buf.0,
-                            ))
-                            .unwrap();
-                            corruption_repaired = true;
-                            retry = true;
-                        }
-                        Err(e) => panic!("{e:?}"),
                     }
-                }
-                Op::Fetch(key) => {
-                    match block_on(sequential_storage::map::fetch_item::<TestItem, _>(
-                        &mut flash,
-                        FLASH_RANGE,
-                        &mut cache,
-                        &mut buf.0,
-                        key,
-                    )) {
-                        Ok(Some(fetch_result)) => {
-                            let map_value = map
-                                .get(&key)
-                                .expect(&format!("Map doesn't contain: {fetch_result:?}"));
-                            assert_eq!(key, fetch_result.key, "Mismatching keys");
-                            assert_eq!(map_value, &fetch_result.value, "Mismatching values");
-                        }
-                        Ok(None) => {
-                            assert_eq!(None, map.get(&key));
-                        }
-                        Err(MapError::Storage {
-                            value: MockFlashError::EarlyShutoff(_),
-                            backtrace: _backtrace,
-                        }) => {
-                            #[cfg(fuzzing_repro)]
-                            eprintln!(
-                                "Early shutoff when fetching! Originated from:\n{_backtrace:#}"
-                            );
-                        }
-                        Err(MapError::Corrupted {
-                            backtrace: _backtrace,
-                        }) if !corruption_repaired => {
-                            #[cfg(fuzzing_repro)]
-                            eprintln!(
-                                "### Encountered curruption while fetching! Repairing now. Originated from:\n{_backtrace:#}"
-                            );
-
-                            block_on(sequential_storage::map::try_repair::<TestItem, _>(
-                                &mut flash,
-                                FLASH_RANGE,
-                                &mut cache,
-                                &mut buf.0,
-                            ))
-                            .unwrap();
-                            corruption_repaired = true;
-                            retry = true;
-                        }
-                        Err(e) => panic!("{e:?}"),
+                    Err(Error::Corrupted {
+                        backtrace: _backtrace,
+                    }) => {
+                        #[cfg(fuzzing_repro)]
+                        eprintln!("Corrupted when storing! Originated from:\n{_backtrace:#}");
+                        panic!("Corrupted!");
                     }
+                    Err(e) => panic!("{e:?}"),
                 }
-                Op::Remove(key) => {
-                    match block_on(sequential_storage::map::remove_item::<TestItem, _>(
-                        &mut flash,
-                        FLASH_RANGE,
-                        &mut cache,
-                        &mut buf.0,
-                        key,
-                    )) {
-                        Ok(()) => {
-                            map.remove(&key);
-                        }
-                        Err(MapError::Storage {
-                            value: MockFlashError::EarlyShutoff(_),
-                            backtrace: _backtrace,
-                        }) => {
-                            match block_on(sequential_storage::map::fetch_item::<TestItem, _>(
-                                &mut flash,
-                                FLASH_RANGE,
-                                &mut cache,
-                                &mut buf.0,
-                                key,
-                            )) {
-                                Ok(Some(_)) => {
-                                    #[cfg(fuzzing_repro)]
-                                    eprintln!("Early shutoff when removing item {key}! Originated from:\n{_backtrace:#}");
-                                }
-                                _ => {
-                                    // Could not fetch the item we stored...
-                                    #[cfg(fuzzing_repro)]
-                                    eprintln!("Early shutoff when removing item {key}! (but it still removed fully). Originated from:\n{_backtrace:#}");
-                                    // Even though we got a shutoff, it still managed to store well
-                                    map.remove(&key);
-                                }
+            }
+            Op::Fetch(key) => {
+                match block_on(sequential_storage::map::fetch_item::<TestItem, _>(
+                    &mut flash,
+                    FLASH_RANGE,
+                    &mut cache,
+                    &mut buf.0,
+                    key,
+                )) {
+                    Ok(Some(fetch_result)) => {
+                        let map_value = map
+                            .get(&key)
+                            .expect(&format!("Map doesn't contain: {fetch_result:?}"));
+                        assert_eq!(key, fetch_result.key, "Mismatching keys");
+                        assert_eq!(map_value, &fetch_result.value, "Mismatching values");
+                    }
+                    Ok(None) => {
+                        assert_eq!(None, map.get(&key));
+                    }
+                    Err(Error::Storage {
+                        value: MockFlashError::EarlyShutoff(_),
+                        backtrace: _backtrace,
+                    }) => {
+                        #[cfg(fuzzing_repro)]
+                        eprintln!("Early shutoff when fetching! Originated from:\n{_backtrace:#}");
+                    }
+                    Err(Error::Corrupted {
+                        backtrace: _backtrace,
+                    }) => {
+                        #[cfg(fuzzing_repro)]
+                        eprintln!("Corrupted when fetching! Originated from:\n{_backtrace:#}");
+                        panic!("Corrupted!");
+                    }
+                    Err(e) => panic!("{e:#?}"),
+                }
+            }
+            Op::Remove(key) => {
+                match block_on(sequential_storage::map::remove_item::<TestItem, _>(
+                    &mut flash,
+                    FLASH_RANGE,
+                    &mut cache,
+                    &mut buf.0,
+                    key,
+                )) {
+                    Ok(()) => {
+                        map.remove(&key);
+                    }
+                    Err(Error::Storage {
+                        value: MockFlashError::EarlyShutoff(_),
+                        backtrace: _backtrace,
+                    }) => {
+                        match block_on(sequential_storage::map::fetch_item::<TestItem, _>(
+                            &mut flash,
+                            FLASH_RANGE,
+                            &mut cache,
+                            &mut buf.0,
+                            key,
+                        )) {
+                            Ok(Some(_)) => {
+                                #[cfg(fuzzing_repro)]
+                                eprintln!("Early shutoff when removing item {key}! Originated from:\n{_backtrace:#}");
+                            }
+                            _ => {
+                                // Could not fetch the item we stored...
+                                #[cfg(fuzzing_repro)]
+                                eprintln!("Early shutoff when removing item {key}! (but it still removed fully). Originated from:\n{_backtrace:#}");
+                                // Even though we got a shutoff, it still managed to store well
+                                map.remove(&key);
                             }
                         }
-                        Err(MapError::Corrupted {
-                            backtrace: _backtrace,
-                        }) if !corruption_repaired => {
-                            #[cfg(fuzzing_repro)]
-                            eprintln!(
-                                "### Encountered curruption while fetching! Repairing now. Originated from:\n{_backtrace:#}"
-                            );
-
-                            block_on(sequential_storage::map::try_repair::<TestItem, _>(
-                                &mut flash,
-                                FLASH_RANGE,
-                                &mut cache,
-                                &mut buf.0,
-                            ))
-                            .unwrap();
-                            corruption_repaired = true;
-                            retry = true;
-                        }
-                        Err(e) => panic!("{e:?}"),
                     }
+                    Err(Error::Corrupted {
+                        backtrace: _backtrace,
+                    }) => {
+                        #[cfg(fuzzing_repro)]
+                        eprintln!("Corrupted when removing! Originated from:\n{_backtrace:#}");
+                        panic!("Corrupted!");
+                    }
+                    Err(e) => panic!("{e:?}"),
                 }
             }
         }
