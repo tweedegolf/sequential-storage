@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- *Breaking:* Corruption repair is automatic now! The repair functions have been made private.
+
 ## 0.9.1 13-02-24
 
 - Added `remove_item` to map
