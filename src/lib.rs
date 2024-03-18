@@ -14,8 +14,6 @@ use core::{
 };
 use embedded_storage_async::nor_flash::NorFlash;
 
-use crate::cache::NoCache;
-
 pub mod cache;
 mod item;
 pub mod map;
@@ -50,15 +48,16 @@ impl<const SIZE: usize> DerefMut for AlignedBuf<SIZE> {
 async fn try_general_repair<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
+    cache: &mut impl PrivateCacheImpl,
 ) -> Result<(), BasicError<S::Error>> {
     // Loop through the pages and get their state. If one returns the corrupted error,
     // the page is likely half-erased. Fix for that is to re-erase again to hopefully finish the job.
     for page_index in get_pages::<S>(flash_range.clone(), 0) {
         if matches!(
-            get_page_state(flash, flash_range.clone(), &mut NoCache::new(), page_index).await,
+            get_page_state(flash, flash_range.clone(), cache, page_index).await,
             Err(BasicError::Corrupted { .. })
         ) {
-            open_page(flash, flash_range.clone(), &mut NoCache::new(), page_index).await?;
+            open_page(flash, flash_range.clone(), cache, page_index).await?;
         }
     }
 

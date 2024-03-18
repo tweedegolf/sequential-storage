@@ -56,7 +56,7 @@ mod queue_tests {
         );
     }
 
-    async fn run_test(mut cache: impl CacheImpl) -> FlashStatsResult {
+    async fn run_test(cache: &mut impl CacheImpl) -> FlashStatsResult {
         let mut flash =
             mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true);
         const FLASH_RANGE: Range<u32> = 0x00..0x400;
@@ -69,11 +69,11 @@ mod queue_tests {
             let data = vec![i as u8; i % 20 + 1];
 
             println!("PUSH");
-            push(&mut flash, FLASH_RANGE, &mut cache, &data, true)
+            push(&mut flash, FLASH_RANGE, cache, &data, true)
                 .await
                 .unwrap();
             assert_eq!(
-                peek(&mut flash, FLASH_RANGE, &mut cache, &mut data_buffer)
+                peek(&mut flash, FLASH_RANGE, cache, &mut data_buffer)
                     .await
                     .unwrap()
                     .unwrap(),
@@ -82,7 +82,7 @@ mod queue_tests {
             );
             println!("POP");
             assert_eq!(
-                pop(&mut flash, FLASH_RANGE, &mut cache, &mut data_buffer)
+                pop(&mut flash, FLASH_RANGE, cache, &mut data_buffer)
                     .await
                     .unwrap()
                     .unwrap(),
@@ -91,7 +91,7 @@ mod queue_tests {
             );
             println!("PEEK");
             assert_eq!(
-                peek(&mut flash, FLASH_RANGE, &mut cache, &mut data_buffer)
+                peek(&mut flash, FLASH_RANGE, cache, &mut data_buffer)
                     .await
                     .unwrap(),
                 None,
@@ -257,7 +257,7 @@ mod map_tests {
         }
     }
 
-    async fn run_test(mut cache: impl KeyCacheImpl<u8>) -> FlashStatsResult {
+    async fn run_test(cache: &mut impl KeyCacheImpl<u8>) -> FlashStatsResult {
         let mut flash =
             mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true);
         const FLASH_RANGE: Range<u32> = 0x00..0x400;
@@ -276,7 +276,7 @@ mod map_tests {
                     value: vec![i as u8; LENGHT_PER_KEY[i]],
                 };
 
-                store_item::<_, _>(&mut flash, FLASH_RANGE, &mut cache, &mut data_buffer, &item)
+                store_item::<_, _>(&mut flash, FLASH_RANGE, cache, &mut data_buffer, &item)
                     .await
                     .unwrap();
             }
@@ -285,7 +285,7 @@ mod map_tests {
                 let item = fetch_item::<MockStorageItem, _>(
                     &mut flash,
                     FLASH_RANGE,
-                    &mut cache,
+                    cache,
                     &mut data_buffer,
                     i as u8,
                 )

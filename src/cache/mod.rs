@@ -23,11 +23,10 @@ pub(crate) use page_states::PageStatesCache;
 /// Trait implemented by all cache types
 #[allow(private_bounds)]
 pub trait CacheImpl: PrivateCacheImpl {}
-impl<T: CacheImpl> CacheImpl for &mut T {}
+
 /// Trait implemented by all cache types that know about keys
 #[allow(private_bounds)]
 pub trait KeyCacheImpl<KEY: Eq>: CacheImpl + PrivateKeyCacheImpl<KEY> {}
-impl<KEY: Eq, T: KeyCacheImpl<KEY>> KeyCacheImpl<KEY> for &mut T {}
 
 pub(crate) trait Invalidate {
     fn invalidate_cache_state(&mut self);
