@@ -115,6 +115,8 @@
 //! # });
 //! ```
 
+use core::convert::Infallible;
+
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 
 use crate::item::{find_next_free_item_spot, Item, ItemHeader, ItemIter};
@@ -165,13 +167,13 @@ pub async fn fetch_item<I: StorageItem, S: NorFlash>(
 
 /// Fetch the item, but with the address and header
 #[allow(clippy::type_complexity)]
-async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
+async fn fetch_item_with_location<'d, K: Key, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut impl PrivateKeyCacheImpl<I::Key>,
-    data_buffer: &mut [u8],
-    search_key: I::Key,
-) -> Result<Option<(I, u32, ItemHeader)>, Error<I::Error, S::Error>> {
+    cache: &mut impl PrivateKeyCacheImpl<K>,
+    data_buffer: &'d mut [u8],
+    search_key: K,
+) -> Result<Option<(Item<'d>, u32)>, Error<Infallible, S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
     assert!(flash_range.end - flash_range.start >= S::ERASE_SIZE as u32 * 2);
@@ -212,11 +214,7 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
                     break 'cache;
                 }
                 item::MaybeItem::Present(item) => {
-                    return Ok(Some((
-                        I::deserialize_from(item.data()).map_err(Error::Item)?,
-                        cached_location,
-                        item.header,
-                    )));
+                    return Ok(Some((item, cached_location)));
                 }
             }
         }
@@ -259,7 +257,7 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
     // If we don't find it in the current page, then we check again in the previous page if that page is closed.
 
     let mut current_page_to_check = last_used_page.unwrap();
-    let mut newest_found_item = None;
+    let mut newest_found_item_address = None;
 
     loop {
         let page_data_start_address =
@@ -271,18 +269,14 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
 
         let mut it = ItemIter::new(page_data_start_address, page_data_end_address);
         while let Some((item, address)) = it.next(flash, data_buffer).await? {
-            if I::deserialize_key_only(item.data()).map_err(Error::Item)? == search_key {
-                newest_found_item = Some((
-                    I::deserialize_from(item.data()).map_err(Error::Item)?,
-                    address,
-                    item.header,
-                ));
+            if K::deserialize_from(item.data())?.0 == search_key {
+                newest_found_item_address = Some(address);
             }
         }
 
         // We've found the item! We can stop searching
-        if let Some(newest_found_item) = newest_found_item.as_ref() {
-            cache.notice_key_location(search_key, newest_found_item.1, false);
+        if let Some(newest_found_item_address) = newest_found_item_address.as_ref() {
+            cache.notice_key_location(search_key, *newest_found_item_address, false);
 
             break;
         }
@@ -302,7 +296,26 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
     }
 
     cache.unmark_dirty();
-    Ok(newest_found_item)
+
+    // We now need to reread the item because we lost all its data other than its address
+
+    if let Some(newest_found_item_address) = newest_found_item_address {
+        let item = ItemHeader::read_new(flash, newest_found_item_address, u32::MAX)
+            .await?
+            .ok_or_else(|| {
+                // How come there's no item header here!? We just found it!
+                Error::Corrupted {
+                    #[cfg(feature = "_test")]
+                    backtrace: std::backtrace::Backtrace::capture(),
+                }
+            })?
+            .read_item(flash, data_buffer, newest_found_item_address, u32::MAX)
+            .await?;
+
+        Ok(Some((item.unwrap()?, newest_found_item_address)))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Store an item into flash memory.
@@ -313,24 +326,34 @@ async fn fetch_item_with_location<I: StorageItem, S: NorFlash>(
 ///
 /// *Note: On a given flash range, make sure to use only the same type as [StorageItem] every time
 /// or types that serialize and deserialize the key in the same way.*
-pub async fn store_item<I: StorageItem, S: NorFlash>(
+pub async fn store_item<K: Key, I: MapItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<I::Key>,
     data_buffer: &mut [u8],
+    key: K,
     item: &I,
 ) -> Result<(), Error<I::Error, S::Error>> {
     run_with_auto_repair!(
-        function = store_item_inner(flash, flash_range.clone(), cache, data_buffer, item).await,
+        function = store_item_inner(
+            flash,
+            flash_range.clone(),
+            cache,
+            data_buffer,
+            key.clone(),
+            item
+        )
+        .await,
         repair = try_repair::<I, _>(flash, flash_range.clone(), cache, data_buffer).await?
     )
 }
 
-async fn store_item_inner<I: StorageItem, S: NorFlash>(
+async fn store_item_inner<K: Key, I: MapItem, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<I::Key>,
     data_buffer: &mut [u8],
+    key: K,
     item: &I,
 ) -> Result<(), Error<I::Error, S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
@@ -386,6 +409,7 @@ async fn store_item_inner<I: StorageItem, S: NorFlash>(
                 calculate_page_end_address::<S>(flash_range.clone(), partial_open_page)
                     - S::WORD_SIZE as u32;
 
+            todo!("Serialize key into the buffer here too!");
             let item_data_length = item.serialize_into(data_buffer).map_err(Error::Item)?;
 
             let free_spot_address = find_next_free_item_spot(
@@ -451,7 +475,7 @@ async fn store_item_inner<I: StorageItem, S: NorFlash>(
                     get_page_state(flash, flash_range.clone(), cache, next_buffer_page).await?;
 
                 if !next_buffer_page_state.is_open() {
-                    migrate_items::<I, _>(
+                    migrate_items::<K, _>(
                         flash,
                         flash_range.clone(),
                         cache,
@@ -498,15 +522,15 @@ async fn store_item_inner<I: StorageItem, S: NorFlash>(
 /// All items in flash have to be read and deserialized to find the items with the key.
 /// This is unlikely to be cached well.
 /// </div>
-pub async fn remove_item<I: StorageItem, S: MultiwriteNorFlash>(
+pub async fn remove_item<K: Key, S: MultiwriteNorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut impl KeyCacheImpl<I::Key>,
+    cache: &mut impl KeyCacheImpl<K>,
     data_buffer: &mut [u8],
-    search_key: I::Key,
-) -> Result<(), Error<I::Error, S::Error>> {
+    search_key: K,
+) -> Result<(), Error<Infallible, S::Error>> {
     run_with_auto_repair!(
-        function = remove_item_inner::<I, _>(
+        function = remove_item_inner::<K, _>(
             flash,
             flash_range.clone(),
             cache,
@@ -514,17 +538,17 @@ pub async fn remove_item<I: StorageItem, S: MultiwriteNorFlash>(
             search_key.clone()
         )
         .await,
-        repair = try_repair::<I, _>(flash, flash_range.clone(), cache, data_buffer).await?
+        repair = try_repair::<K, _>(flash, flash_range.clone(), cache, data_buffer).await?
     )
 }
 
-async fn remove_item_inner<I: StorageItem, S: MultiwriteNorFlash>(
+async fn remove_item_inner<K: Key, S: MultiwriteNorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut impl KeyCacheImpl<I::Key>,
+    cache: &mut impl KeyCacheImpl<K>,
     data_buffer: &mut [u8],
-    search_key: I::Key,
-) -> Result<(), Error<I::Error, S::Error>> {
+    search_key: K,
+) -> Result<(), Error<Infallible, S::Error>> {
     cache.notice_key_erased(&search_key);
 
     // Search for the last used page. We're gonna erase from the one after this first.
@@ -565,7 +589,7 @@ async fn remove_item_inner<I: StorageItem, S: MultiwriteNorFlash>(
                 item::MaybeItem::Corrupted(_, _) => continue,
                 item::MaybeItem::Erased(_, _) => continue,
                 item::MaybeItem::Present(item) => {
-                    let item_key = I::deserialize_key_only(item.data()).map_err(Error::Item)?;
+                    let (item_key, _) = K::deserialize_from(item.data())?;
 
                     // If this item has the same key as the key we're trying to erase, then erase the item.
                     // But keep going! We need to erase everything.
@@ -585,51 +609,35 @@ async fn remove_item_inner<I: StorageItem, S: MultiwriteNorFlash>(
     Ok(())
 }
 
-/// A way of serializing and deserializing items in the storage.
-///
-/// Serialized items may not be longer than [u16::MAX].
-/// Items must also fit within a page (together with the bits of overhead added in the storage process).
-pub trait StorageItem {
-    /// The key type of the key-value pair
-    type Key: Eq + Clone;
+pub trait Key: Eq + Clone + Sized {
+    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, KeyError>;
+    fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), KeyError>;
+}
+
+pub trait MapItem: Sized {
     /// The error type for serialization and deserialization
     type Error;
 
-    /// Serialize the key-value item into the given buffer.
-    /// Returns the number of bytes the buffer was filled with or an error.
-    ///
-    /// The serialized data does not have to self-describe its length or do framing.
-    /// This crate already stores the length of any item in flash as a u16.
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, Self::Error>;
-
-    /// Deserialize the key-value item from the given buffer. This buffer should be as long
-    /// as what was serialized before.
-    fn deserialize_from(buffer: &[u8]) -> Result<Self, Self::Error>
-    where
-        Self: Sized;
-
-    /// Optimization for deserializing the key only. Can give a small performance boost if
-    /// your key is easily extractable from the buffer.
-    fn deserialize_key_only(buffer: &[u8]) -> Result<Self::Key, Self::Error>
-    where
-        Self: Sized,
-    {
-        // This works for any impl, but could be overridden by the user
-        Ok(Self::deserialize_from(buffer)?.key())
-    }
-
-    /// The key of the key-value item. It is used by the storage to know what the key of this item is.
-    fn key(&self) -> Self::Key;
+    fn deserialize_from(buffer: &[u8]) -> Result<Self, Self::Error>;
 }
 
-async fn migrate_items<I: StorageItem, S: NorFlash>(
+#[non_exhaustive]
+#[derive(Debug)]
+#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+pub enum KeyError {
+    BufferTooSmall,
+    InvalidFormat,
+}
+
+async fn migrate_items<K: Key, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut impl PrivateKeyCacheImpl<I::Key>,
+    cache: &mut impl PrivateKeyCacheImpl<K>,
     data_buffer: &mut [u8],
     source_page: usize,
     target_page: usize,
-) -> Result<(), Error<I::Error, S::Error>> {
+) -> Result<(), Error<Infallible, S::Error>> {
     // We need to move the data from the next buffer page to the next_page_to_use, but only if that data
     // doesn't have a newer value somewhere else.
 
@@ -641,11 +649,11 @@ async fn migrate_items<I: StorageItem, S: NorFlash>(
         calculate_page_end_address::<S>(flash_range.clone(), source_page) - S::WORD_SIZE as u32,
     );
     while let Some((item, item_address)) = it.next(flash, data_buffer).await? {
-        let key = I::deserialize_key_only(item.data()).map_err(Error::Item)?;
-        let (item_header, data_buffer) = item.destruct();
+        let (key, _) = K::deserialize_from(item.data())?;
+        let (_, data_buffer) = item.destruct();
 
         // Search for the newest item with the key we found
-        let Some((_, found_address, _)) = fetch_item_with_location::<I, S>(
+        let Some((found_item, found_address)) = fetch_item_with_location::<K, S>(
             flash,
             flash_range.clone(),
             cache,
@@ -662,16 +670,13 @@ async fn migrate_items<I: StorageItem, S: NorFlash>(
         };
 
         if found_address == item_address {
-            // The newest item with this key is the item we're about to erase
-            // This means we need to copy it over to the next_page_to_use
-            let item = item_header
-                .read_item(flash, data_buffer, item_address, u32::MAX)
-                .await?
-                .unwrap()?;
             cache.notice_key_location(key, next_page_write_address, true);
-            item.write(flash, flash_range.clone(), cache, next_page_write_address)
+            found_item
+                .write(flash, flash_range.clone(), cache, next_page_write_address)
                 .await?;
-            next_page_write_address = item.header.next_item_address::<S>(next_page_write_address);
+            next_page_write_address = found_item
+                .header
+                .next_item_address::<S>(next_page_write_address);
         }
     }
 
@@ -690,12 +695,12 @@ async fn migrate_items<I: StorageItem, S: NorFlash>(
 /// If this function or the function call after this crate returns [Error::Corrupted], then it's unlikely
 /// that the state can be recovered. To at least make everything function again at the cost of losing the data,
 /// erase the flash range.
-async fn try_repair<I: StorageItem, S: NorFlash>(
+async fn try_repair<K: Key, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
-    cache: &mut impl KeyCacheImpl<I::Key>,
+    cache: &mut impl KeyCacheImpl<K>,
     data_buffer: &mut [u8],
-) -> Result<(), Error<I::Error, S::Error>> {
+) -> Result<(), Error<Infallible, S::Error>> {
     cache.invalidate_cache_state();
 
     crate::try_general_repair(flash, flash_range.clone(), cache).await?;
@@ -716,7 +721,7 @@ async fn try_repair<I: StorageItem, S: NorFlash>(
             // Then partially close it again
             partial_close_page(flash, flash_range.clone(), cache, partial_open_page).await?;
 
-            migrate_items::<I, _>(
+            migrate_items::<K, _>(
                 flash,
                 flash_range.clone(),
                 cache,

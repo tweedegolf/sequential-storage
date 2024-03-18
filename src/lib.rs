@@ -1,5 +1,5 @@
 #![cfg_attr(not(any(test, doctest, feature = "std")), no_std)]
-#![deny(missing_docs)]
+// #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
 // Assumptions made in this crate:
@@ -8,6 +8,7 @@
 // - flash write size is quite small, so it writes words and not full pages
 
 use cache::PrivateCacheImpl;
+use map::KeyError;
 use core::{
     fmt::Debug,
     ops::{Deref, DerefMut, Range},
@@ -389,6 +390,13 @@ pub enum Error<I, S> {
     BufferTooSmall(usize),
     /// A storage item error
     Item(I),
+    KeyError(KeyError),
+}
+
+impl<I, S> From<KeyError> for Error<I, S> {
+    fn from(v: KeyError) -> Self {
+        Self::KeyError(v)
+    }
 }
 
 impl<I: PartialEq, S: PartialEq> PartialEq for Error<I, S> {
@@ -446,6 +454,7 @@ where
                 "A provided buffer was to small to be used. Needed was {needed}"
             ),
             Error::Item(value) => write!(f, "Item error: {value}"),
+            Error::KeyError(value) => write!(f, "Key error: {value:?}"),
         }
     }
 }
