@@ -21,8 +21,8 @@
 //! and has some other modifications to make corruption less likely to happen.
 //!
 
-use core::ops::Range;
 use core::num::NonZeroU32;
+use core::ops::Range;
 
 use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
 
@@ -54,7 +54,7 @@ impl ItemHeader {
         flash: &mut S,
         address: u32,
         end_address: u32,
-    ) -> Result<Option<Self>, Error< S::Error>> {
+    ) -> Result<Option<Self>, Error<S::Error>> {
         let mut buffer = [0; MAX_WORD_SIZE];
         let header_slice = &mut buffer[..round_up_to_alignment_usize::<S>(Self::LENGTH)];
 
@@ -104,7 +104,7 @@ impl ItemHeader {
         data_buffer: &'d mut [u8],
         address: u32,
         end_address: u32,
-    ) -> Result<MaybeItem<'d>, Error< S::Error>> {
+    ) -> Result<MaybeItem<'d>, Error<S::Error>> {
         match self.crc {
             None => Ok(MaybeItem::Erased(self, data_buffer)),
             Some(header_crc) => {
@@ -141,11 +141,7 @@ impl ItemHeader {
         }
     }
 
-    async fn write<S: NorFlash>(
-        &self,
-        flash: &mut S,
-        address: u32,
-    ) -> Result<(), Error< S::Error>> {
+    async fn write<S: NorFlash>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
         let mut buffer = AlignedBuf([0xFF; MAX_WORD_SIZE]);
 
         buffer[Self::DATA_CRC_FIELD]
@@ -174,7 +170,7 @@ impl ItemHeader {
         flash_range: Range<u32>,
         cache: &mut impl PrivateCacheImpl,
         address: u32,
-    ) -> Result<Self, Error< S::Error>> {
+    ) -> Result<Self, Error<S::Error>> {
         self.crc = None;
         cache.notice_item_erased::<S>(flash_range.clone(), address, &self);
         self.write(flash, address).await?;
@@ -223,7 +219,7 @@ impl<'d> Item<'d> {
         cache: &mut impl PrivateCacheImpl,
         address: u32,
         data: &'d [u8],
-    ) -> Result<ItemHeader, Error< S::Error>> {
+    ) -> Result<ItemHeader, Error<S::Error>> {
         let header = ItemHeader {
             length: data.len() as u16,
             crc: Some(adapted_crc32(data)),
@@ -241,7 +237,7 @@ impl<'d> Item<'d> {
         header: &ItemHeader,
         data: &[u8],
         address: u32,
-    ) -> Result<(), Error< S::Error>> {
+    ) -> Result<(), Error<S::Error>> {
         cache.notice_item_written::<S>(flash_range, address, header);
         header.write(flash, address).await?;
 
@@ -282,7 +278,7 @@ impl<'d> Item<'d> {
         flash_range: Range<u32>,
         cache: &mut impl PrivateCacheImpl,
         address: u32,
-    ) -> Result<(), Error< S::Error>> {
+    ) -> Result<(), Error<S::Error>> {
         Self::write_raw(
             flash,
             flash_range,
@@ -340,7 +336,7 @@ pub async fn find_next_free_item_spot<S: NorFlash>(
     start_address: u32,
     end_address: u32,
     data_length: u32,
-) -> Result<Option<u32>, Error< S::Error>> {
+) -> Result<Option<u32>, Error<S::Error>> {
     let page_index = calculate_page_index::<S>(flash_range, start_address);
 
     let free_item_address = match cache.first_item_after_written(page_index) {
@@ -392,7 +388,7 @@ impl<'d> core::fmt::Debug for MaybeItem<'d> {
 }
 
 impl<'d> MaybeItem<'d> {
-    pub fn unwrap<E>(self) -> Result<Item<'d>, Error< E>> {
+    pub fn unwrap<E>(self) -> Result<Item<'d>, Error<E>> {
         match self {
             MaybeItem::Corrupted(_, _) => Err(Error::Corrupted {
                 #[cfg(feature = "_test")]
@@ -476,7 +472,7 @@ pub async fn is_page_empty<S: NorFlash>(
     cache: &mut impl PrivateCacheImpl,
     page_index: usize,
     page_state: Option<PageState>,
-) -> Result<bool, Error< S::Error>> {
+) -> Result<bool, Error<S::Error>> {
     let page_state = match page_state {
         Some(page_state) => page_state,
         None => get_page_state::<S>(flash, flash_range.clone(), cache, page_index).await?,
@@ -521,7 +517,7 @@ impl ItemIter {
         &mut self,
         flash: &mut S,
         data_buffer: &'m mut [u8],
-    ) -> Result<Option<(Item<'m>, u32)>, Error< S::Error>> {
+    ) -> Result<Option<(Item<'m>, u32)>, Error<S::Error>> {
         let mut data_buffer = Some(data_buffer);
         while let (Some(header), address) = self.header.next(flash).await? {
             let buffer = data_buffer.take().unwrap();
@@ -558,7 +554,7 @@ impl ItemHeaderIter {
     pub async fn next<S: NorFlash>(
         &mut self,
         flash: &mut S,
-    ) -> Result<(Option<ItemHeader>, u32), Error< S::Error>> {
+    ) -> Result<(Option<ItemHeader>, u32), Error<S::Error>> {
         self.traverse(flash, |_, _| false).await
     }
 
@@ -570,7 +566,7 @@ impl ItemHeaderIter {
         &mut self,
         flash: &mut S,
         callback: impl Fn(&ItemHeader, u32) -> bool,
-    ) -> Result<(Option<ItemHeader>, u32), Error< S::Error>> {
+    ) -> Result<(Option<ItemHeader>, u32), Error<S::Error>> {
         loop {
             match ItemHeader::read_new(flash, self.current_address, self.end_address).await {
                 Ok(Some(header)) => {

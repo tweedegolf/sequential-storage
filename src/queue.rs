@@ -76,7 +76,7 @@ pub async fn push<S: NorFlash>(
     cache: &mut impl CacheImpl,
     data: &[u8],
     allow_overwrite_old_data: bool,
-) -> Result<(), Error< S::Error>> {
+) -> Result<(), Error<S::Error>> {
     run_with_auto_repair!(
         function = push_inner(
             flash,
@@ -96,7 +96,7 @@ async fn push_inner<S: NorFlash>(
     cache: &mut impl CacheImpl,
     data: &[u8],
     allow_overwrite_old_data: bool,
-) -> Result<(), Error< S::Error>> {
+) -> Result<(), Error<S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
 
@@ -199,7 +199,7 @@ pub async fn peek_many<'d, S: NorFlash, CI: CacheImpl>(
     flash: &'d mut S,
     flash_range: Range<u32>,
     cache: &'d mut CI,
-) -> Result<PeekIterator<'d, S, CI>, Error< S::Error>> {
+) -> Result<PeekIterator<'d, S, CI>, Error<S::Error>> {
     // Note: Corruption repair is done in these functions already
     Ok(PeekIterator {
         iter: QueueIterator::new(flash, flash_range, cache).await?,
@@ -221,7 +221,7 @@ pub async fn peek<'d, S: NorFlash>(
     flash_range: Range<u32>,
     cache: &mut impl CacheImpl,
     data_buffer: &'d mut [u8],
-) -> Result<Option<&'d mut [u8]>, Error< S::Error>> {
+) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
     // Note: Corruption repair is done in these functions already
     peek_many(flash, flash_range, cache)
         .await?
@@ -238,7 +238,7 @@ pub async fn pop_many<'d, S: MultiwriteNorFlash, CI: CacheImpl>(
     flash: &'d mut S,
     flash_range: Range<u32>,
     cache: &'d mut CI,
-) -> Result<PopIterator<'d, S, CI>, Error< S::Error>> {
+) -> Result<PopIterator<'d, S, CI>, Error<S::Error>> {
     // Note: Corruption repair is done in these functions already
     Ok(PopIterator {
         iter: QueueIterator::new(flash, flash_range, cache).await?,
@@ -260,7 +260,7 @@ pub async fn pop<'d, S: MultiwriteNorFlash>(
     flash_range: Range<u32>,
     cache: &mut impl CacheImpl,
     data_buffer: &'d mut [u8],
-) -> Result<Option<&'d mut [u8]>, Error< S::Error>> {
+) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
     pop_many(flash, flash_range, cache)
         .await?
         .next(data_buffer)
@@ -285,7 +285,7 @@ impl<'d, S: MultiwriteNorFlash, CI: CacheImpl> PopIterator<'d, S, CI> {
     pub async fn next<'m>(
         &mut self,
         data_buffer: &'m mut [u8],
-    ) -> Result<Option<&'m mut [u8]>, Error< S::Error>> {
+    ) -> Result<Option<&'m mut [u8]>, Error<S::Error>> {
         let value = run_with_auto_repair!(
             function = self.next_inner(data_buffer).await,
             repair = try_repair(
@@ -302,7 +302,7 @@ impl<'d, S: MultiwriteNorFlash, CI: CacheImpl> PopIterator<'d, S, CI> {
     async fn next_inner(
         &mut self,
         data_buffer: &mut [u8],
-    ) -> Result<Option<usize>, Error< S::Error>> {
+    ) -> Result<Option<usize>, Error<S::Error>> {
         if self.iter.cache.is_dirty() {
             self.iter.cache.invalidate_cache_state();
         }
@@ -356,7 +356,7 @@ impl<'d, S: NorFlash, CI: CacheImpl> PeekIterator<'d, S, CI> {
     pub async fn next<'m>(
         &mut self,
         data_buffer: &'m mut [u8],
-    ) -> Result<Option<&'m mut [u8]>, Error< S::Error>> {
+    ) -> Result<Option<&'m mut [u8]>, Error<S::Error>> {
         // Note: Corruption repair is done in these functions already
 
         if self.iter.cache.is_dirty() {
@@ -397,7 +397,7 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIterator<'d, S, CI> {
         flash: &'d mut S,
         flash_range: Range<u32>,
         cache: &'d mut CI,
-    ) -> Result<Self, Error< S::Error>> {
+    ) -> Result<Self, Error<S::Error>> {
         let start_address = run_with_auto_repair!(
             function = Self::find_start_address(flash, flash_range.clone(), cache).await,
             repair = try_repair(flash, flash_range.clone(), cache).await?
@@ -415,7 +415,7 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIterator<'d, S, CI> {
         flash: &mut S,
         flash_range: Range<u32>,
         cache: &mut CI,
-    ) -> Result<CurrentAddress, Error< S::Error>> {
+    ) -> Result<CurrentAddress, Error<S::Error>> {
         assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
         assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
 
@@ -442,7 +442,7 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIterator<'d, S, CI> {
     async fn next<'m>(
         &mut self,
         data_buffer: &'m mut [u8],
-    ) -> Result<Option<(Item<'m>, u32)>, Error< S::Error>> {
+    ) -> Result<Option<(Item<'m>, u32)>, Error<S::Error>> {
         let value = run_with_auto_repair!(
             function = self.next_inner(data_buffer).await,
             repair = try_repair(self.flash, self.flash_range.clone(), self.cache).await?
@@ -454,7 +454,7 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIterator<'d, S, CI> {
     async fn next_inner(
         &mut self,
         data_buffer: &mut [u8],
-    ) -> Result<Option<(ItemUnborrowed, u32)>, Error< S::Error>> {
+    ) -> Result<Option<(ItemUnborrowed, u32)>, Error<S::Error>> {
         let mut data_buffer = Some(data_buffer);
 
         if self.cache.is_dirty() {
@@ -570,7 +570,7 @@ pub async fn find_max_fit<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl CacheImpl,
-) -> Result<Option<u32>, Error< S::Error>> {
+) -> Result<Option<u32>, Error<S::Error>> {
     run_with_auto_repair!(
         function = find_max_fit_inner(flash, flash_range.clone(), cache).await,
         repair = try_repair(flash, flash_range.clone(), cache).await?
@@ -581,7 +581,7 @@ async fn find_max_fit_inner<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl CacheImpl,
-) -> Result<Option<u32>, Error< S::Error>> {
+) -> Result<Option<u32>, Error<S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
 
@@ -647,7 +647,7 @@ async fn find_youngest_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
-) -> Result<usize, Error< S::Error>> {
+) -> Result<usize, Error<S::Error>> {
     let last_used_page =
         find_first_page(flash, flash_range.clone(), cache, 0, PageState::PartialOpen).await?;
 
@@ -673,7 +673,7 @@ async fn find_oldest_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
-) -> Result<usize, Error< S::Error>> {
+) -> Result<usize, Error<S::Error>> {
     let youngest_page = find_youngest_page(flash, flash_range.clone(), cache).await?;
 
     // The oldest page is the first non-open page after the youngest page
@@ -697,7 +697,7 @@ async fn try_repair<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl CacheImpl,
-) -> Result<(), Error< S::Error>> {
+) -> Result<(), Error<S::Error>> {
     cache.invalidate_cache_state();
 
     crate::try_general_repair(flash, flash_range.clone(), cache).await?;

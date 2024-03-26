@@ -125,9 +125,9 @@ mod map_tests {
             run_test(&mut NoCache::new()).await,
             FlashStatsResult {
                 erases: 198,
-                reads: 224161,
+                reads: 233786,
                 writes: 5201,
-                bytes_read: 1770974,
+                bytes_read: 1837101,
                 bytes_written: 50401
             }
         );
@@ -139,9 +139,9 @@ mod map_tests {
             run_test(&mut PageStateCache::<NUM_PAGES>::new()).await,
             FlashStatsResult {
                 erases: 198,
-                reads: 171543,
+                reads: 181162,
                 writes: 5201,
-                bytes_read: 1718356,
+                bytes_read: 1784477,
                 bytes_written: 50401
             }
         );
@@ -153,9 +153,9 @@ mod map_tests {
             run_test(&mut PagePointerCache::<NUM_PAGES>::new()).await,
             FlashStatsResult {
                 erases: 198,
-                reads: 153667,
+                reads: 163273,
                 writes: 5201,
-                bytes_read: 1575348,
+                bytes_read: 1641365,
                 bytes_written: 50401
             }
         );
@@ -164,12 +164,12 @@ mod map_tests {
     #[test]
     async fn key_pointer_cache_half() {
         assert_eq!(
-            run_test(&mut KeyPointerCache::<NUM_PAGES, u8, 12>::new()).await,
+            run_test(&mut KeyPointerCache::<NUM_PAGES, u16, 12>::new()).await,
             FlashStatsResult {
                 erases: 198,
-                reads: 130523,
+                reads: 131503,
                 writes: 5201,
-                bytes_read: 1318479,
+                bytes_read: 1299275,
                 bytes_written: 50401
             }
         );
@@ -178,18 +178,18 @@ mod map_tests {
     #[test]
     async fn key_pointer_cache_full() {
         assert_eq!(
-            run_test(&mut KeyPointerCache::<NUM_PAGES, u8, 24>::new()).await,
+            run_test(&mut KeyPointerCache::<NUM_PAGES, u16, 24>::new()).await,
             FlashStatsResult {
                 erases: 198,
-                reads: 14506,
+                reads: 14510,
                 writes: 5201,
-                bytes_read: 150566,
+                bytes_read: 150592,
                 bytes_written: 50401
             }
         );
     }
 
-    async fn run_test(cache: &mut impl KeyCacheImpl<u8>) -> FlashStatsResult {
+    async fn run_test(cache: &mut impl KeyCacheImpl<u16>) -> FlashStatsResult {
         let mut flash =
             mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true);
         const FLASH_RANGE: Range<u32> = 0x00..0x400;
@@ -202,19 +202,36 @@ mod map_tests {
         let start_snapshot = flash.stats_snapshot();
 
         for _ in 0..100 {
-            for i in 0..24 {
-                store_item(&mut flash, FLASH_RANGE, cache, &mut data_buffer, i as u8, &vec![i as u8; LENGHT_PER_KEY[i]].as_slice())
-                    .await
-                    .unwrap();
-            }
+            const WRITE_ORDER: [usize; 24] = [
+                15, 0, 4, 22, 18, 11, 19, 8, 14, 23, 5, 1, 16, 10, 6, 12, 20, 17, 3, 9, 7, 13, 21,
+                2,
+            ];
 
-            for i in 0..24 {
-                let item = fetch_item::<u8, &[u8], _>(
+            for i in WRITE_ORDER {
+                store_item(
                     &mut flash,
                     FLASH_RANGE,
                     cache,
                     &mut data_buffer,
-                    i as u8,
+                    i as u16,
+                    &vec![i as u8; LENGHT_PER_KEY[i]].as_slice(),
+                )
+                .await
+                .unwrap();
+            }
+
+            const READ_ORDER: [usize; 24] = [
+                8, 22, 21, 11, 16, 23, 13, 15, 19, 7, 6, 2, 12, 1, 17, 4, 20, 14, 10, 5, 9, 3, 18,
+                0,
+            ];
+
+            for i in READ_ORDER {
+                let item = fetch_item::<u16, &[u8], _>(
+                    &mut flash,
+                    FLASH_RANGE,
+                    cache,
+                    &mut data_buffer,
+                    i as u16,
                 )
                 .await
                 .unwrap()

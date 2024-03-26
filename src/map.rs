@@ -736,6 +736,9 @@ async fn migrate_items<K: Key, S: NorFlash>(
         let key = K::deserialize_from(&item.data()[..K::LEN]);
         let (_, data_buffer) = item.destruct();
 
+        // We're in a decent state here
+        cache.unmark_dirty();
+
         // Search for the newest item with the key we found
         let Some((found_item, found_address)) = fetch_item_with_location::<K, S>(
             flash,

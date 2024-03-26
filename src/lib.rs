@@ -50,7 +50,7 @@ async fn try_general_repair<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
-) -> Result<(), Error< S::Error>> {
+) -> Result<(), Error<S::Error>> {
     // Loop through the pages and get their state. If one returns the corrupted error,
     // the page is likely half-erased. Fix for that is to re-erase again to hopefully finish the job.
     for page_index in get_pages::<S>(flash_range.clone(), 0) {
@@ -74,7 +74,7 @@ async fn find_first_page<S: NorFlash>(
     cache: &mut impl PrivateCacheImpl,
     starting_page_index: usize,
     page_state: PageState,
-) -> Result<Option<usize>, Error< S::Error>> {
+) -> Result<Option<usize>, Error<S::Error>> {
     for page_index in get_pages::<S>(flash_range.clone(), starting_page_index) {
         if page_state == get_page_state::<S>(flash, flash_range.clone(), cache, page_index).await? {
             return Ok(Some(page_index));
@@ -138,7 +138,7 @@ async fn get_page_state<S: NorFlash>(
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
     page_index: usize,
-) -> Result<PageState, Error< S::Error>> {
+) -> Result<PageState, Error<S::Error>> {
     if let Some(cached_page_state) = cache.get_page_state(page_index) {
         return Ok(cached_page_state);
     }
@@ -206,7 +206,7 @@ async fn open_page<S: NorFlash>(
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
     page_index: usize,
-) -> Result<(), Error< S::Error>> {
+) -> Result<(), Error<S::Error>> {
     cache.notice_page_state(page_index, PageState::Open, true);
 
     flash
@@ -230,7 +230,7 @@ async fn close_page<S: NorFlash>(
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
     page_index: usize,
-) -> Result<(), Error< S::Error>> {
+) -> Result<(), Error<S::Error>> {
     let current_state =
         partial_close_page::<S>(flash, flash_range.clone(), cache, page_index).await?;
 
@@ -263,7 +263,7 @@ async fn partial_close_page<S: NorFlash>(
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
     page_index: usize,
-) -> Result<PageState, Error< S::Error>> {
+) -> Result<PageState, Error<S::Error>> {
     let current_state = get_page_state::<S>(flash, flash_range.clone(), cache, page_index).await?;
 
     if current_state != PageState::Open {

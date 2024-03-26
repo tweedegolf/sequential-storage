@@ -215,6 +215,12 @@ impl NoCache {
     }
 }
 
+impl Default for NoCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PrivateCacheImpl for NoCache {
     type PSC = UncachedPageStates;
     type PPC = UncachedPagePointers;
@@ -276,6 +282,12 @@ impl<const PAGE_COUNT: usize> PageStateCache<PAGE_COUNT> {
             page_pointers: UncachedPagePointers,
             key_pointers: UncachedKeyPointers,
         }
+    }
+}
+
+impl<const PAGE_COUNT: usize> Default for PageStateCache<PAGE_COUNT> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -343,6 +355,12 @@ impl<const PAGE_COUNT: usize> PagePointerCache<PAGE_COUNT> {
             page_pointers: CachedPagePointers::new(),
             key_pointers: UncachedKeyPointers,
         }
+    }
+}
+
+impl<const PAGE_COUNT: usize> Default for PagePointerCache<PAGE_COUNT> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -415,6 +433,12 @@ impl<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> KeyPointerCache<PAGE_C
             page_pointers: CachedPagePointers::new(),
             key_pointers: CachedKeyPointers::new(),
         }
+    }
+}
+
+impl<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> Default for KeyPointerCache<PAGE_COUNT, KEY, KEYS> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
