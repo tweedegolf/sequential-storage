@@ -436,7 +436,9 @@ impl<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> KeyPointerCache<PAGE_C
     }
 }
 
-impl<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> Default for KeyPointerCache<PAGE_COUNT, KEY, KEYS> {
+impl<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> Default
+    for KeyPointerCache<PAGE_COUNT, KEY, KEYS>
+{
     fn default() -> Self {
         Self::new()
     }
