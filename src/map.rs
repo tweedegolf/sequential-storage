@@ -80,23 +80,24 @@ use self::{
 
 use super::*;
 
-/// Get a storage item from the flash.
-/// Only the last stored item of the given key is returned.
-///
-/// If no value with the key is found, None is returned.
-///
-/// The data buffer must be long enough to hold the longest serialized data of your [StorageItem] type,
-/// rounded up to flash word alignment.
-///
-/// *Note: On a given flash range, make sure to use only the same type as [StorageItem] every time
-/// or types that serialize and deserialize the key in the same way.*
-pub async fn fetch_item<'d, K: Key, I: MapItem<'d>, S: NorFlash>(
+// TODO revise
+// /// Get a storage item from the flash.
+// /// Only the last stored item of the given key is returned.
+// ///
+// /// If no value with the key is found, None is returned.
+// ///
+// /// The data buffer must be long enough to hold the longest serialized data of your [StorageItem] type,
+// /// rounded up to flash word alignment.
+// ///
+// /// *Note: On a given flash range, make sure to use only the same type as [StorageItem] every time
+// /// or types that serialize and deserialize the key in the same way.*
+pub async fn fetch_item<'d, K: Key, V: Value<'d>, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,
     data_buffer: &'d mut [u8],
     search_key: K,
-) -> Result<Option<I>, Error<S::Error>> {
+) -> Result<Option<V>, Error<S::Error>> {
     let result = run_with_auto_repair!(
         function = {
             fetch_item_with_location(
@@ -120,7 +121,7 @@ pub async fn fetch_item<'d, K: Key, I: MapItem<'d>, S: NorFlash>(
     let data_len = item.data().len();
 
     Ok(Some(
-        I::deserialize_from(&item.destruct().1[K::LEN..][..data_len - K::LEN])
+        V::deserialize_from(&item.destruct().1[K::LEN..][..data_len - K::LEN])
             .map_err(Error::Item)?,
     ))
 }
@@ -282,21 +283,22 @@ async fn fetch_item_with_location<'d, K: Key, S: NorFlash>(
     }
 }
 
-/// Store an item into flash memory.
-/// It will overwrite the last value that has the same key.
-/// The flash needs to be at least 2 pages long.
-///
-/// The data buffer must be long enough to hold the longest serialized data of your [StorageItem] type.
-///
-/// *Note: On a given flash range, make sure to use only the same type as [StorageItem] every time
-/// or types that serialize and deserialize the key in the same way.*
-pub async fn store_item<'d, K: Key, I: MapItem<'d>, S: NorFlash>(
+// TODO revise
+// /// Store an item into flash memory.
+// /// It will overwrite the last value that has the same key.
+// /// The flash needs to be at least 2 pages long.
+// ///
+// /// The data buffer must be long enough to hold the longest serialized data of your [StorageItem] type.
+// ///
+// /// *Note: On a given flash range, make sure to use only the same type as [StorageItem] every time
+// /// or types that serialize and deserialize the key in the same way.*
+pub async fn store_item<'d, K: Key, V: Value<'d>, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,
     data_buffer: &mut [u8],
     key: K,
-    item: &I,
+    item: &V,
 ) -> Result<(), Error<S::Error>> {
     run_with_auto_repair!(
         function = store_item_inner(
@@ -318,7 +320,7 @@ async fn store_item_inner<'d, K: Key, S: NorFlash>(
     cache: &mut impl KeyCacheImpl<K>,
     data_buffer: &mut [u8],
     key: K,
-    item: &dyn MapItem<'d>,
+    item: &dyn Value<'d>,
 ) -> Result<(), Error<S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
@@ -622,14 +624,14 @@ impl<const N: usize> Key for [u8; N] {
     }
 }
 
-pub trait MapItem<'a> {
+pub trait Value<'a> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, MapItemError>;
     fn deserialize_from(buffer: &'a [u8]) -> Result<Self, MapItemError>
     where
         Self: Sized;
 }
 
-impl<'a> MapItem<'a> for &'a [u8] {
+impl<'a> Value<'a> for &'a [u8] {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, MapItemError> {
         if buffer.len() < self.len() {
             return Err(MapItemError::BufferTooSmall);
@@ -647,7 +649,7 @@ impl<'a> MapItem<'a> for &'a [u8] {
     }
 }
 
-impl<'a, const N: usize> MapItem<'a> for [u8; N] {
+impl<'a, const N: usize> Value<'a> for [u8; N] {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, MapItemError> {
         if buffer.len() < self.len() {
             return Err(MapItemError::BufferTooSmall);
@@ -667,7 +669,7 @@ impl<'a, const N: usize> MapItem<'a> for [u8; N] {
 
 macro_rules! impl_map_item_num {
     ($int:ty) => {
-        impl<'a> MapItem<'a> for $int {
+        impl<'a> Value<'a> for $int {
             fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, MapItemError> {
                 buffer[..core::mem::size_of::<Self>()].copy_from_slice(&self.to_le_bytes());
                 Ok(core::mem::size_of::<Self>())
