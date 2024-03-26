@@ -396,12 +396,7 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<I, S> std::error::Error for Error<I, S>
-where
-    I: std::error::Error,
-    S: std::error::Error,
-{
-}
+impl<S> std::error::Error for Error<S> where S: std::error::Error {}
 
 /// Round up the the given number to align with the wordsize of the flash.
 /// If the number is already aligned, it is not changed.

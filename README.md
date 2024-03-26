@@ -88,8 +88,8 @@ These numbers are taken from the test cases in the cache module:
 | ---------------: | -------------------------------------------: | ----------------: | -------------------: | ------------------: | ---------------------: |
 |          NoCache |                                            0 |              100% |                 100% |                100% |                   100% |
 |   PageStateCache |                                1 * num pages |               77% |                  97% |                 51% |                    90% |
-| PagePointerCache |                                9 * num pages |               69% |                  89% |                 35% |                    61% |
-|  KeyPointerCache | 9 * num pages + (sizeof(KEY) + 4) * num keys |              6.5% |                 8.5% |                   - |                      - |
+| PagePointerCache |                                9 * num pages |               70% |                  89% |                 35% |                    61% |
+|  KeyPointerCache | 9 * num pages + (sizeof(KEY) + 4) * num keys |              6.2% |                 8.2% |                   - |                      - |
 
 #### Takeaways
 
