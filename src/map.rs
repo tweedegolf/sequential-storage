@@ -694,6 +694,9 @@ pub trait Value<'a> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, MapValueError>;
     /// Deserialize the value from the buffer. Because of the added lifetime, the implementation can borrow from the
     /// buffer which opens up some zero-copy possibilities.
+    ///
+    /// The buffer will be the same length as the serialize function returned for this value. Though note that the length
+    /// is written from flash, so bitflips can affect that (though the length is separately crc-protected).
     fn deserialize_from(buffer: &'a [u8]) -> Result<Self, MapValueError>
     where
         Self: Sized;
@@ -776,6 +779,8 @@ impl_map_item_num!(f64);
 pub enum MapValueError {
     /// The provided buffer was too small.
     BufferTooSmall,
+    /// The serialization could not succeed because the data was not in order. (e.g. too big to fit)
+    InvalidData,
     /// The deserialization could not succeed because the bytes are in an invalid format.
     InvalidFormat,
     /// An implementation defined error that might contain more information than the other predefined
@@ -787,6 +792,7 @@ impl core::fmt::Display for MapValueError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             MapValueError::BufferTooSmall => write!(f, "Buffer too small"),
+            MapValueError::InvalidData => write!(f, "Invalid data"),
             MapValueError::InvalidFormat => write!(f, "Invalid format"),
             MapValueError::Custom(val) => write!(f, "Custom error: {val}"),
         }
