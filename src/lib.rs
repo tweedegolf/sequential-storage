@@ -13,7 +13,7 @@ use core::{
     ops::{Deref, DerefMut, Range},
 };
 use embedded_storage_async::nor_flash::NorFlash;
-use map::MapItemError;
+use map::MapValueError;
 
 pub mod cache;
 mod item;
@@ -360,8 +360,8 @@ pub enum Error<S> {
     BufferTooBig,
     /// A provided buffer was to small to be used (usize is size needed)
     BufferTooSmall(usize),
-    /// A storage item error
-    Item(MapItemError),
+    /// A map value error
+    MapValueError(MapValueError),
 }
 
 impl<S: PartialEq> PartialEq for Error<S> {
@@ -390,7 +390,7 @@ where
                 f,
                 "A provided buffer was to small to be used. Needed was {needed}"
             ),
-            Error::Item(value) => write!(f, "Item error: {value}"),
+            Error::MapValueError(value) => write!(f, "Map value error: {value}"),
         }
     }
 }

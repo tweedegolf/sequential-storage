@@ -25,11 +25,11 @@
 //! let flash_range = 0x1000..0x3000;
 //! // We need to give the crate a buffer to work with.
 //! // It must be big enough to serialize the biggest value of your storage type in,
-//! // rounded up to to word alignment of the flash. Some kinds of flash may require
+//! // rounded up to to word alignment of the flash. Some kinds of internal flash may require
 //! // this buffer to be aligned in RAM as well.
 //! let mut data_buffer = [0; 128];
 //!
-//! // We can fetch an item from the flash.
+//! // We can fetch an item from the flash. We're using `u8` as our key type and `u32` as our value type.
 //! // Nothing is stored in it yet, so it will return None.
 //!
 //! assert_eq!(
@@ -43,7 +43,9 @@
 //!     None
 //! );
 //!
-//! // Now we store an item the flash with key 42
+//! // Now we store an item the flash with key 42.
+//! // Again we make sure we pass the correct key and value types, u8 and u32.
+//! // It is important to do this consistently.
 //!
 //! store_item(
 //!     &mut flash,
@@ -68,6 +70,32 @@
 //! );
 //! # });
 //! ```
+//!
+//! ## Key and value traits
+//!
+//! In the previous example we saw we used one key and one value type.
+//! It is ***crucial*** we use the same key type every time on the same range of flash.
+//! This is because the internal items are serialized as `[key|value]`. A different key type
+//! will have a different length and will make all data nonsense.
+//!
+//! However, if we have special knowledge about what we store for each key,
+//! we are allowed to use different value types.
+//!
+//! For example, we can do the following:
+//!
+//! 1. Store a u32 with key 0
+//! 2. Store a custom type 'Foo' with key 1
+//! 3. Fetch a u32 with key 0
+//! 4. Fetch a custom type 'Foo' with key 1
+//!
+//! It is up to the user to make sure this is done correctly.
+//! If done incorrectly, the deserialize function of requested value type will see
+//! data it doesn't expect. In the best case it'll return an error, in a bad case it'll
+//! give bad invalid data and in the worst case the deserialization code panics.
+//! So be careful.
+//!
+//! For your convenience there are premade implementations for the [Key] and [Value] traits.
+//!
 
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 
@@ -80,17 +108,20 @@ use self::{
 
 use super::*;
 
-// TODO revise
-// /// Get a storage item from the flash.
-// /// Only the last stored item of the given key is returned.
-// ///
-// /// If no value with the key is found, None is returned.
-// ///
-// /// The data buffer must be long enough to hold the longest serialized data of your [StorageItem] type,
-// /// rounded up to flash word alignment.
-// ///
-// /// *Note: On a given flash range, make sure to use only the same type as [StorageItem] every time
-// /// or types that serialize and deserialize the key in the same way.*
+/// Get the last stored value from the flash that is associated with the given key.
+/// If no value with the key is found, None is returned.
+///
+/// The data buffer must be long enough to hold the longest serialized data of your [Key] + [Value] types combined,
+/// rounded up to flash word alignment.
+///
+/// <div class="warning">
+///
+/// *You are required to, on a given flash range, use the same [Key] type every time. You are allowed to use*
+/// *multiple [Value] types. See the module-level docs for more information about this.*
+///
+/// Also watch out for using integers. This function will take any integer and it's easy to pass the wrong type.
+///
+/// </div>
 pub async fn fetch_item<'d, K: Key, V: Value<'d>, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
@@ -122,7 +153,7 @@ pub async fn fetch_item<'d, K: Key, V: Value<'d>, S: NorFlash>(
 
     Ok(Some(
         V::deserialize_from(&item.destruct().1[K::LEN..][..data_len - K::LEN])
-            .map_err(Error::Item)?,
+            .map_err(Error::MapValueError)?,
     ))
 }
 
@@ -283,15 +314,21 @@ async fn fetch_item_with_location<'d, K: Key, S: NorFlash>(
     }
 }
 
-// TODO revise
-// /// Store an item into flash memory.
-// /// It will overwrite the last value that has the same key.
-// /// The flash needs to be at least 2 pages long.
-// ///
-// /// The data buffer must be long enough to hold the longest serialized data of your [StorageItem] type.
-// ///
-// /// *Note: On a given flash range, make sure to use only the same type as [StorageItem] every time
-// /// or types that serialize and deserialize the key in the same way.*
+/// Store a key-value pair into flash memory.
+/// It will overwrite the last value that has the same key.
+/// The flash needs to be at least 2 pages long.
+///
+/// The data buffer must be long enough to hold the longest serialized data of your [Key] + [Value] types combined,
+/// rounded up to flash word alignment.
+///
+/// <div class="warning">
+///
+/// *You are required to, on a given flash range, use the same [Key] type every time. You are allowed to use*
+/// *multiple [Value] types. See the module-level docs for more information about this.*
+///
+/// Also watch out for using integers. This function will take any integer and it's easy to pass the wrong type.
+///
+/// </div>
 pub async fn store_item<'d, K: Key, V: Value<'d>, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
@@ -379,7 +416,7 @@ async fn store_item_inner<'d, K: Key, S: NorFlash>(
             let item_data_length = K::LEN
                 + item
                     .serialize_into(&mut data_buffer[K::LEN..])
-                    .map_err(Error::Item)?;
+                    .map_err(Error::MapValueError)?;
 
             let free_spot_address = find_next_free_item_spot(
                 flash,
@@ -491,6 +528,15 @@ async fn store_item_inner<'d, K: Key, S: NorFlash>(
 /// All items in flash have to be read and deserialized to find the items with the key.
 /// This is unlikely to be cached well.
 /// </div>
+///
+/// <div class="warning">
+///
+/// *You are required to, on a given flash range, use the same [Key] type every time. You are allowed to use*
+/// *multiple [Value] types. See the module-level docs for more information about this.*
+///
+/// Also watch out for using integers. This function will take any integer and it's easy to pass the wrong type.
+///
+/// </div>
 pub async fn remove_item<K: Key, S: MultiwriteNorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
@@ -578,10 +624,24 @@ async fn remove_item_inner<K: Key, S: MultiwriteNorFlash>(
     Ok(())
 }
 
+/// Anything implementing this trait can be used as a key in the map functions.
+///
+/// It provides a way to serialize and deserialize the key as well as provide a
+/// constant for the serialized length.
+///
+/// The functions don't return a result. Keys should be simple and trivial.
+///
+/// The `Eq` bound is used because we need to be able to compare keys and the
+/// `Clone` bound helps us pass the key around.
 pub trait Key: Eq + Clone + Sized {
+    /// The serialized length of the key
     const LEN: usize;
 
+    /// Serialize the key into the given buffer.
+    /// The buffer is always of the same length as the [Self::LEN] constant.
     fn serialize_into(&self, buffer: &mut [u8]);
+    /// Deserialize the key from the given buffer.
+    /// The buffer is always of the same length as the [Self::LEN] constant.
     fn deserialize_from(buffer: &[u8]) -> Self;
 }
 
@@ -624,24 +684,32 @@ impl<const N: usize> Key for [u8; N] {
     }
 }
 
+/// The trait that defines how map values are serialized and deserialized.
+///
+/// It also carries a lifetime so that zero-copy deserialization is supported.
+/// Zero-copy serialization is not supported due to technical restrictions.
 pub trait Value<'a> {
-    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, MapItemError>;
-    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, MapItemError>
+    /// Serialize the value into the given buffer. If everything went ok, this function returns the length
+    /// of the used part of the buffer.
+    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, MapValueError>;
+    /// Deserialize the value from the buffer. Because of the added lifetime, the implementation can borrow from the
+    /// buffer which opens up some zero-copy possibilities.
+    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, MapValueError>
     where
         Self: Sized;
 }
 
 impl<'a> Value<'a> for &'a [u8] {
-    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, MapItemError> {
+    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, MapValueError> {
         if buffer.len() < self.len() {
-            return Err(MapItemError::BufferTooSmall);
+            return Err(MapValueError::BufferTooSmall);
         }
 
         buffer[..self.len()].copy_from_slice(self);
         Ok(self.len())
     }
 
-    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, MapItemError>
+    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, MapValueError>
     where
         Self: Sized,
     {
@@ -650,36 +718,36 @@ impl<'a> Value<'a> for &'a [u8] {
 }
 
 impl<'a, const N: usize> Value<'a> for [u8; N] {
-    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, MapItemError> {
+    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, MapValueError> {
         if buffer.len() < self.len() {
-            return Err(MapItemError::BufferTooSmall);
+            return Err(MapValueError::BufferTooSmall);
         }
 
         buffer[..self.len()].copy_from_slice(self);
         Ok(self.len())
     }
 
-    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, MapItemError>
+    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, MapValueError>
     where
         Self: Sized,
     {
-        buffer.try_into().map_err(|_| MapItemError::BufferTooSmall)
+        buffer.try_into().map_err(|_| MapValueError::BufferTooSmall)
     }
 }
 
 macro_rules! impl_map_item_num {
     ($int:ty) => {
         impl<'a> Value<'a> for $int {
-            fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, MapItemError> {
+            fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, MapValueError> {
                 buffer[..core::mem::size_of::<Self>()].copy_from_slice(&self.to_le_bytes());
                 Ok(core::mem::size_of::<Self>())
             }
 
-            fn deserialize_from(buffer: &[u8]) -> Result<Self, MapItemError> {
+            fn deserialize_from(buffer: &[u8]) -> Result<Self, MapValueError> {
                 Ok(Self::from_le_bytes(
                     buffer[..core::mem::size_of::<Self>()]
                         .try_into()
-                        .map_err(|_| MapItemError::BufferTooSmall)?,
+                        .map_err(|_| MapValueError::BufferTooSmall)?,
                 ))
             }
         }
@@ -699,19 +767,28 @@ impl_map_item_num!(i128);
 impl_map_item_num!(f32);
 impl_map_item_num!(f64);
 
+/// Error for map value (de)serialization.
+///
+/// This error type is predefined (in contrast to using generics) to save many kilobytes of binary size.
 #[non_exhaustive]
 #[derive(Debug, PartialEq, Eq, Clone)]
 #[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
-pub enum MapItemError {
+pub enum MapValueError {
+    /// The provided buffer was too small.
     BufferTooSmall,
+    /// The deserialization could not succeed because the bytes are in an invalid format.
     InvalidFormat,
+    /// An implementation defined error that might contain more information than the other predefined
+    /// error variants.
+    Custom(i32),
 }
 
-impl core::fmt::Display for MapItemError {
+impl core::fmt::Display for MapValueError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            MapItemError::BufferTooSmall => write!(f, "Buffer too small"),
-            MapItemError::InvalidFormat => write!(f, "Invalid format"),
+            MapValueError::BufferTooSmall => write!(f, "Buffer too small"),
+            MapValueError::InvalidFormat => write!(f, "Invalid format"),
+            MapValueError::Custom(val) => write!(f, "Custom error: {val}"),
         }
     }
 }
