@@ -30,6 +30,23 @@ pub mod mock_flash;
 /// Many flashes have 4-byte or 1-byte words.
 const MAX_WORD_SIZE: usize = 32;
 
+/// Resets the flash in the entire given flash range.
+///
+/// This is just a helper function as it just calls the flashes erase function.
+pub async fn erase_all<S: NorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+) -> Result<(), Error<S::Error>> {
+    flash
+        .erase(flash_range.start, flash_range.end)
+        .await
+        .map_err(|e| Error::Storage {
+            value: e,
+            #[cfg(feature = "_test")]
+            backtrace: std::backtrace::Backtrace::capture(),
+        })
+}
+
 // Type representing buffer aligned to 4 byte boundary.
 #[repr(align(4))]
 pub(crate) struct AlignedBuf<const SIZE: usize>(pub(crate) [u8; SIZE]);
