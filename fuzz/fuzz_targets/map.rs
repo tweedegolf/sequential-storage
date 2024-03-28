@@ -6,7 +6,6 @@ use libfuzzer_sys::fuzz_target;
 use rand::SeedableRng;
 use sequential_storage::{
     cache::{KeyCacheImpl, KeyPointerCache, NoCache, PagePointerCache, PageStateCache},
-    map::StorageItem,
     mock_flash::{MockFlashBase, MockFlashError, WriteCountCheck},
     Error,
 };
@@ -45,57 +44,13 @@ struct StoreOp {
 }
 
 impl StoreOp {
-    fn into_test_item(self, rng: &mut impl rand::Rng) -> TestItem {
-        TestItem {
-            key: self.key,
-            value: (0..(self.value_len % 8) as usize)
+    fn into_test_item(self, rng: &mut impl rand::Rng) -> (u8, Vec<u8>) {
+        (
+            self.key,
+            (0..(self.value_len % 8) as usize)
                 .map(|_| rng.gen())
                 .collect(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TestItem {
-    key: u8,
-    value: Vec<u8>,
-}
-
-impl StorageItem for TestItem {
-    type Key = u8;
-
-    type Error = ();
-
-    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
-        if buffer.len() < 1 + self.value.len() {
-            return Err(());
-        }
-
-        buffer[0] = self.key;
-        buffer[1..][..self.value.len()].copy_from_slice(&self.value);
-
-        Ok(1 + self.value.len())
-    }
-
-    fn deserialize_from(buffer: &[u8]) -> Result<Self, Self::Error>
-    where
-        Self: Sized,
-    {
-        Ok(Self {
-            key: buffer[0],
-            value: buffer[1..].to_vec(),
-        })
-    }
-
-    fn key(&self) -> Self::Key {
-        self.key
-    }
-
-    fn deserialize_key_only(buffer: &[u8]) -> Result<Self::Key, Self::Error>
-    where
-        Self: Sized,
-    {
-        Ok(buffer[0])
+        )
     }
 }
 
@@ -139,36 +94,35 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
 
         match op.clone() {
             Op::Store(op) => {
-                let item = op.into_test_item(&mut rng);
+                let (key, value) = op.into_test_item(&mut rng);
                 match block_on(sequential_storage::map::store_item(
                     &mut flash,
                     FLASH_RANGE,
                     &mut cache,
                     &mut buf.0,
-                    &item,
+                    key,
+                    &value.as_slice(),
                 )) {
                     Ok(_) => {
-                        map.insert(item.key, item.value);
+                        map.insert(key, value);
                     }
                     Err(Error::FullStorage) => {}
                     Err(Error::Storage {
                         value: MockFlashError::EarlyShutoff(_),
                         backtrace: _backtrace,
                     }) => {
-                        match block_on(sequential_storage::map::fetch_item::<TestItem, _>(
+                        match block_on(sequential_storage::map::fetch_item::<u8, &[u8], _>(
                             &mut flash,
                             FLASH_RANGE,
                             &mut cache,
                             &mut buf.0,
-                            item.key,
+                            key,
                         )) {
-                            Ok(Some(check_item))
-                                if check_item.key == item.key && check_item.value == item.value =>
-                            {
+                            Ok(Some(check_item)) if check_item == value => {
                                 #[cfg(fuzzing_repro)]
                                 eprintln!("Early shutoff when storing {item:?}! (but it still stored fully). Originated from:\n{_backtrace:#}");
                                 // Even though we got a shutoff, it still managed to store well
-                                map.insert(item.key, item.value);
+                                map.insert(key, value);
                             }
                             _ => {
                                 // Could not fetch the item we stored...
@@ -188,7 +142,7 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                 }
             }
             Op::Fetch(key) => {
-                match block_on(sequential_storage::map::fetch_item::<TestItem, _>(
+                match block_on(sequential_storage::map::fetch_item::<u8, &[u8], _>(
                     &mut flash,
                     FLASH_RANGE,
                     &mut cache,
@@ -199,8 +153,7 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                         let map_value = map
                             .get(&key)
                             .expect(&format!("Map doesn't contain: {fetch_result:?}"));
-                        assert_eq!(key, fetch_result.key, "Mismatching keys");
-                        assert_eq!(map_value, &fetch_result.value, "Mismatching values");
+                        assert_eq!(map_value, &fetch_result, "Mismatching values");
                     }
                     Ok(None) => {
                         assert_eq!(None, map.get(&key));
@@ -223,7 +176,7 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                 }
             }
             Op::Remove(key) => {
-                match block_on(sequential_storage::map::remove_item::<TestItem, _>(
+                match block_on(sequential_storage::map::remove_item::<u8, _>(
                     &mut flash,
                     FLASH_RANGE,
                     &mut cache,
@@ -237,7 +190,7 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                         value: MockFlashError::EarlyShutoff(_),
                         backtrace: _backtrace,
                     }) => {
-                        match block_on(sequential_storage::map::fetch_item::<TestItem, _>(
+                        match block_on(sequential_storage::map::fetch_item::<u8, &[u8], _>(
                             &mut flash,
                             FLASH_RANGE,
                             &mut cache,

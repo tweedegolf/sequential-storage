@@ -25,8 +25,8 @@ The in-flash representation is not (yet?) stable. This too follows semver.
 
 - A breaking change to the in-flash representation will lead to a major version bump
 - A feature addition will lead to a minor version bump
-  - This is always backward-compatible. So data created by e.g. `0.8.0` can be used by `0.8.1`.
-  - This may not be forward-compatible. So data created by e.g. `0.8.1` may not be usable by `0.8.0`.
+  - This is always backward-compatible. So data created by e.g. `1.0.0` can be used by `1.1.0`.
+  - This may not be forward-compatible. So data created by e.g. `1.0.1` may not be usable by `1.0.0`.
 - After 1.0, patch releases only fix bugs and don't change the in-flash representation
 
 For any update, consult the changelog to see what changed. Any externally noticable changes are recorded there.
@@ -88,8 +88,8 @@ These numbers are taken from the test cases in the cache module:
 | ---------------: | -------------------------------------------: | ----------------: | -------------------: | ------------------: | ---------------------: |
 |          NoCache |                                            0 |              100% |                 100% |                100% |                   100% |
 |   PageStateCache |                                1 * num pages |               77% |                  97% |                 51% |                    90% |
-| PagePointerCache |                                9 * num pages |               69% |                  89% |                 35% |                    61% |
-|  KeyPointerCache | 9 * num pages + (sizeof(KEY) + 4) * num keys |              6.5% |                 8.5% |                   - |                      - |
+| PagePointerCache |                                9 * num pages |               70% |                  89% |                 35% |                    61% |
+|  KeyPointerCache | 9 * num pages + (sizeof(KEY) + 4) * num keys |              6.2% |                 8.2% |                   - |                      - |
 
 #### Takeaways
 

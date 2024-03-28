@@ -29,8 +29,8 @@ use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
 use crate::{
     cache::PrivateCacheImpl, calculate_page_address, calculate_page_end_address,
     calculate_page_index, get_page_state, round_down_to_alignment, round_down_to_alignment_usize,
-    round_up_to_alignment, round_up_to_alignment_usize, AlignedBuf, BasicError, NorFlashExt,
-    PageState, MAX_WORD_SIZE,
+    round_up_to_alignment, round_up_to_alignment_usize, AlignedBuf, Error, NorFlashExt, PageState,
+    MAX_WORD_SIZE,
 };
 
 #[derive(Debug)]
@@ -54,7 +54,7 @@ impl ItemHeader {
         flash: &mut S,
         address: u32,
         end_address: u32,
-    ) -> Result<Option<Self>, BasicError<S::Error>> {
+    ) -> Result<Option<Self>, Error<S::Error>> {
         let mut buffer = [0; MAX_WORD_SIZE];
         let header_slice = &mut buffer[..round_up_to_alignment_usize::<S>(Self::LENGTH)];
 
@@ -65,7 +65,7 @@ impl ItemHeader {
         flash
             .read(address, header_slice)
             .await
-            .map_err(|e| BasicError::Storage {
+            .map_err(|e| Error::Storage {
                 value: e,
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
@@ -81,7 +81,7 @@ impl ItemHeader {
         let calculated_length_crc = crc16(&header_slice[Self::LENGTH_FIELD]);
 
         if calculated_length_crc != length_crc {
-            return Err(BasicError::Corrupted {
+            return Err(Error::Corrupted {
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
             });
@@ -104,14 +104,14 @@ impl ItemHeader {
         data_buffer: &'d mut [u8],
         address: u32,
         end_address: u32,
-    ) -> Result<MaybeItem<'d>, BasicError<S::Error>> {
+    ) -> Result<MaybeItem<'d>, Error<S::Error>> {
         match self.crc {
             None => Ok(MaybeItem::Erased(self, data_buffer)),
             Some(header_crc) => {
                 let data_address = ItemHeader::data_address::<S>(address);
                 let read_len = round_up_to_alignment_usize::<S>(self.length as usize);
                 if data_buffer.len() < read_len {
-                    return Err(BasicError::BufferTooSmall(read_len));
+                    return Err(Error::BufferTooSmall(read_len));
                 }
                 if data_address + read_len as u32 > end_address {
                     return Ok(MaybeItem::Corrupted(self, data_buffer));
@@ -120,7 +120,7 @@ impl ItemHeader {
                 flash
                     .read(data_address, &mut data_buffer[..read_len])
                     .await
-                    .map_err(|e| BasicError::Storage {
+                    .map_err(|e| Error::Storage {
                         value: e,
                         #[cfg(feature = "_test")]
                         backtrace: std::backtrace::Backtrace::capture(),
@@ -141,11 +141,7 @@ impl ItemHeader {
         }
     }
 
-    async fn write<S: NorFlash>(
-        &self,
-        flash: &mut S,
-        address: u32,
-    ) -> Result<(), BasicError<S::Error>> {
+    async fn write<S: NorFlash>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
         let mut buffer = AlignedBuf([0xFF; MAX_WORD_SIZE]);
 
         buffer[Self::DATA_CRC_FIELD]
@@ -160,7 +156,7 @@ impl ItemHeader {
                 &buffer[..round_up_to_alignment_usize::<S>(Self::LENGTH)],
             )
             .await
-            .map_err(|e| BasicError::Storage {
+            .map_err(|e| Error::Storage {
                 value: e,
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
@@ -174,7 +170,7 @@ impl ItemHeader {
         flash_range: Range<u32>,
         cache: &mut impl PrivateCacheImpl,
         address: u32,
-    ) -> Result<Self, BasicError<S::Error>> {
+    ) -> Result<Self, Error<S::Error>> {
         self.crc = None;
         cache.notice_item_erased::<S>(flash_range.clone(), address, &self);
         self.write(flash, address).await?;
@@ -223,7 +219,7 @@ impl<'d> Item<'d> {
         cache: &mut impl PrivateCacheImpl,
         address: u32,
         data: &'d [u8],
-    ) -> Result<ItemHeader, BasicError<S::Error>> {
+    ) -> Result<ItemHeader, Error<S::Error>> {
         let header = ItemHeader {
             length: data.len() as u16,
             crc: Some(adapted_crc32(data)),
@@ -241,7 +237,7 @@ impl<'d> Item<'d> {
         header: &ItemHeader,
         data: &[u8],
         address: u32,
-    ) -> Result<(), BasicError<S::Error>> {
+    ) -> Result<(), Error<S::Error>> {
         cache.notice_item_written::<S>(flash_range, address, header);
         header.write(flash, address).await?;
 
@@ -251,7 +247,7 @@ impl<'d> Item<'d> {
         flash
             .write(data_address, data_block)
             .await
-            .map_err(|e| BasicError::Storage {
+            .map_err(|e| Error::Storage {
                 value: e,
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
@@ -266,7 +262,7 @@ impl<'d> Item<'d> {
                     &buffer[..round_up_to_alignment_usize::<S>(data_left.len())],
                 )
                 .await
-                .map_err(|e| BasicError::Storage {
+                .map_err(|e| Error::Storage {
                     value: e,
                     #[cfg(feature = "_test")]
                     backtrace: std::backtrace::Backtrace::capture(),
@@ -282,7 +278,7 @@ impl<'d> Item<'d> {
         flash_range: Range<u32>,
         cache: &mut impl PrivateCacheImpl,
         address: u32,
-    ) -> Result<(), BasicError<S::Error>> {
+    ) -> Result<(), Error<S::Error>> {
         Self::write_raw(
             flash,
             flash_range,
@@ -340,7 +336,7 @@ pub async fn find_next_free_item_spot<S: NorFlash>(
     start_address: u32,
     end_address: u32,
     data_length: u32,
-) -> Result<Option<u32>, BasicError<S::Error>> {
+) -> Result<Option<u32>, Error<S::Error>> {
     let page_index = calculate_page_index::<S>(flash_range, start_address);
 
     let free_item_address = match cache.first_item_after_written(page_index) {
@@ -392,9 +388,9 @@ impl<'d> core::fmt::Debug for MaybeItem<'d> {
 }
 
 impl<'d> MaybeItem<'d> {
-    pub fn unwrap<E>(self) -> Result<Item<'d>, BasicError<E>> {
+    pub fn unwrap<E>(self) -> Result<Item<'d>, Error<E>> {
         match self {
-            MaybeItem::Corrupted(_, _) => Err(BasicError::Corrupted {
+            MaybeItem::Corrupted(_, _) => Err(Error::Corrupted {
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
             }),
@@ -476,7 +472,7 @@ pub async fn is_page_empty<S: NorFlash>(
     cache: &mut impl PrivateCacheImpl,
     page_index: usize,
     page_state: Option<PageState>,
-) -> Result<bool, BasicError<S::Error>> {
+) -> Result<bool, Error<S::Error>> {
     let page_state = match page_state {
         Some(page_state) => page_state,
         None => get_page_state::<S>(flash, flash_range.clone(), cache, page_index).await?,
@@ -521,7 +517,7 @@ impl ItemIter {
         &mut self,
         flash: &mut S,
         data_buffer: &'m mut [u8],
-    ) -> Result<Option<(Item<'m>, u32)>, BasicError<S::Error>> {
+    ) -> Result<Option<(Item<'m>, u32)>, Error<S::Error>> {
         let mut data_buffer = Some(data_buffer);
         while let (Some(header), address) = self.header.next(flash).await? {
             let buffer = data_buffer.take().unwrap();
@@ -558,7 +554,7 @@ impl ItemHeaderIter {
     pub async fn next<S: NorFlash>(
         &mut self,
         flash: &mut S,
-    ) -> Result<(Option<ItemHeader>, u32), BasicError<S::Error>> {
+    ) -> Result<(Option<ItemHeader>, u32), Error<S::Error>> {
         self.traverse(flash, |_, _| false).await
     }
 
@@ -570,7 +566,7 @@ impl ItemHeaderIter {
         &mut self,
         flash: &mut S,
         callback: impl Fn(&ItemHeader, u32) -> bool,
-    ) -> Result<(Option<ItemHeader>, u32), BasicError<S::Error>> {
+    ) -> Result<(Option<ItemHeader>, u32), Error<S::Error>> {
         loop {
             match ItemHeader::read_new(flash, self.current_address, self.end_address).await {
                 Ok(Some(header)) => {
@@ -586,7 +582,7 @@ impl ItemHeaderIter {
                 Ok(None) => {
                     return Ok((None, self.current_address));
                 }
-                Err(BasicError::Corrupted { .. }) => {
+                Err(Error::Corrupted { .. }) => {
                     self.current_address = ItemHeader::data_address::<S>(self.current_address);
                 }
                 Err(e) => return Err(e),

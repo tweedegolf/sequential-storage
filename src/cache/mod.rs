@@ -23,11 +23,10 @@ pub(crate) use page_states::PageStatesCache;
 /// Trait implemented by all cache types
 #[allow(private_bounds)]
 pub trait CacheImpl: PrivateCacheImpl {}
-impl<T: CacheImpl> CacheImpl for &mut T {}
+
 /// Trait implemented by all cache types that know about keys
 #[allow(private_bounds)]
 pub trait KeyCacheImpl<KEY: Eq>: CacheImpl + PrivateKeyCacheImpl<KEY> {}
-impl<KEY: Eq, T: KeyCacheImpl<KEY>> KeyCacheImpl<KEY> for &mut T {}
 
 pub(crate) trait Invalidate {
     fn invalidate_cache_state(&mut self);
@@ -216,6 +215,12 @@ impl NoCache {
     }
 }
 
+impl Default for NoCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PrivateCacheImpl for NoCache {
     type PSC = UncachedPageStates;
     type PPC = UncachedPagePointers;
@@ -277,6 +282,12 @@ impl<const PAGE_COUNT: usize> PageStateCache<PAGE_COUNT> {
             page_pointers: UncachedPagePointers,
             key_pointers: UncachedKeyPointers,
         }
+    }
+}
+
+impl<const PAGE_COUNT: usize> Default for PageStateCache<PAGE_COUNT> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -344,6 +355,12 @@ impl<const PAGE_COUNT: usize> PagePointerCache<PAGE_COUNT> {
             page_pointers: CachedPagePointers::new(),
             key_pointers: UncachedKeyPointers,
         }
+    }
+}
+
+impl<const PAGE_COUNT: usize> Default for PagePointerCache<PAGE_COUNT> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -416,6 +433,14 @@ impl<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> KeyPointerCache<PAGE_C
             page_pointers: CachedPagePointers::new(),
             key_pointers: CachedKeyPointers::new(),
         }
+    }
+}
+
+impl<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> Default
+    for KeyPointerCache<PAGE_COUNT, KEY, KEYS>
+{
+    fn default() -> Self {
+        Self::new()
     }
 }
 

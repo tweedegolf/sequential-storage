@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- *Breaking:* Made the cache API a bit more strict. Caches now always have to be passed as a mutable reference.
+  The API before would lead to a lot of extra unncesessary binary size.
+- *Breaking:* Removed the `StorageItem` trait in favor of two separate `Key` and `Value` traits. This helps cut
+  binary size and is closer to what users of the map APIs were expecting.
+- *Breaking:* The error type is no longer generic over the Item error. That error variant has been renamed `MapValueError`
+  and carries a predefined error subtype.
+
 ## 1.0.0 01-03-24
 
 - *Breaking:* Corruption repair is automatic now! The repair functions have been made private.
