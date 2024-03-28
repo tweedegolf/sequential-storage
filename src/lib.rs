@@ -32,7 +32,7 @@ const MAX_WORD_SIZE: usize = 32;
 
 /// Resets the flash in the entire given flash range.
 ///
-/// This is just a helper function as it just calls the flashes erase function.
+/// This is just a thin helper function as it just calls the flash's erase function.
 pub async fn erase_all<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
