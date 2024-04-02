@@ -10,6 +10,7 @@
   binary size and is closer to what users of the map APIs were expecting.
 - *Breaking:* The error type is no longer generic over the Item error. That error variant has been renamed `MapValueError`
   and carries a predefined error subtype.
+- Added `erase_all` function as a helper to erase the flash in a region.
 
 ## 1.0.0 01-03-24
 
