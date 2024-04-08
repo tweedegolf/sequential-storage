@@ -1,0 +1,28 @@
+[package]
+name = "example"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "029636e", features = ["task-arena-size-32768", "arch-cortex-m", "executor-thread", "defmt"] }
+embassy-nrf = { git = "https://github.com/embassy-rs/embassy.git", rev = "029636e", features = ["defmt", "nrf52840"] }
+embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", rev = "029636e", default-features = false }
+
+defmt = "0.3"
+defmt-rtt = "0.4"
+
+cortex-m = { version = "0.7.6", features = ["inline-asm", "critical-section-single-core"] }
+cortex-m-rt = "0.7.0"
+panic-probe = { version = "0.3", features = ["print-defmt"] }
+embedded-storage = "0.3.1"
+embedded-storage-async = "0.4.1"
+
+sequential-storage = { path = "../", features = ["defmt-03"] }
+
+[profile.release]
+lto = true
+debug = true
+opt-level = "z"
+panic = "abort"
+codegen-units = 1
+incremental = false
