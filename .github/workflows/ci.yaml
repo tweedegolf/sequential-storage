@@ -62,18 +62,20 @@ jobs:
 
       - name: Calculate binary size
         working-directory: ./example
-        run: cargo size --release -- -A > ../binsize_new.txt
+        run: |
+          mkdir ../binsizes
+          cargo size --release -- -A > ../binsizes/binsize_new.txt
 
       - name: Rename binsize artifact
         if: github.ref_name == 'master'
-        run: cp binsize_new.txt binsize_master.txt
+        run: mv ./binsizes/binsize_new.txt ./binsizes/binsize_master.txt
 
       - name: Store binsize artifact
         if: github.ref_name == 'master'
         uses: actions/upload-artifact@v4
         with:
           name: master-binsize
-          path: binsize_master.txt
+          path: ./binsizes/*
           overwrite: true
 
       - name: Retrieve master binsize artifact
@@ -81,13 +83,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: master-binsize
-          path: binsize_master.txt
+          path: ./binsizes
   
       - name: Run diff
         if: github.ref_name != 'master'
         uses: LouisBrunner/diff-action@v2.0.0
         with:
-          old: binsize_master.txt
-          new: binsize_new.txt
+          old: ./binsizes/binsize_master.txt
+          new: ./binsizes/binsize_new.txt
           token: $GITHUB_TOKEN
           notify_issue: true
