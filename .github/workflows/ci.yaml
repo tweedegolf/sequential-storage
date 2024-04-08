@@ -8,44 +8,44 @@ on:
   pull_request:
 
 jobs:
-  # fmt:
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #   - uses: actions/checkout@v3
-  #   - uses: dtolnay/rust-toolchain@stable
-  #   - run: cargo fmt --all -- --check
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: dtolnay/rust-toolchain@stable
+    - run: cargo fmt --all -- --check
 
-  # test:
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #   - uses: actions/checkout@v3
-  #   - uses: dtolnay/rust-toolchain@stable
-  #   - run: cargo test
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: dtolnay/rust-toolchain@stable
+    - run: cargo test
 
-  # clippy:
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #   - uses: actions/checkout@v3
-  #   - uses: dtolnay/rust-toolchain@stable
-  #   - run: cargo clippy -- -D warnings
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: dtolnay/rust-toolchain@stable
+    - run: cargo clippy -- -D warnings
 
-  # fuzz:
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v3
-  #     - uses: dtolnay/rust-toolchain@stable
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
 
-  #     - name: Install cargo fuzz
-  #       uses: taiki-e/install-action@v2
-  #       with:
-  #         tool: cargo-fuzz
+      - name: Install cargo fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
 
-  #     - name: Smoke-test fuzz targets
-  #       run: |
-  #         cargo fuzz build --sanitizer none
-  #         for target in $(cargo fuzz list) ; do
-  #           cargo fuzz run --sanitizer none $target -- -max_total_time=10
-  #         done
+      - name: Smoke-test fuzz targets
+        run: |
+          cargo fuzz build --sanitizer none
+          for target in $(cargo fuzz list) ; do
+            cargo fuzz run --sanitizer none $target -- -max_total_time=10
+          done
     
   binary-size:
     runs-on: ubuntu-latest
