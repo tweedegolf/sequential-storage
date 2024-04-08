@@ -49,6 +49,9 @@ jobs:
     
   binary-size:
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@nightly
@@ -84,7 +87,8 @@ jobs:
         with:
           name: master-binsize
           path: ./binsizes
-          github-token: $GITHUB_TOKEN
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: "8599189897"
   
       - name: Run diff
         if: github.ref_name != 'master'
@@ -92,5 +96,5 @@ jobs:
         with:
           old: ./binsizes/binsize_master.txt
           new: ./binsizes/binsize_new.txt
-          token: $GITHUB_TOKEN
+          token: ${{ secrets.GITHUB_TOKEN }}
           notify_issue: true
