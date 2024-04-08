@@ -375,19 +375,19 @@ struct QueueIterator<'d, S: NorFlash, CI: CacheImpl> {
     flash: &'d mut S,
     flash_range: Range<u32>,
     cache: &'d mut CI,
-    current_address: CurrentAddress,
+    next_address: NextAddress,
 }
 
 impl<'d, S: NorFlash, CI: CacheImpl> Debug for QueueIterator<'d, S, CI> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("QueueIterator")
-            .field("current_address", &self.current_address)
+            .field("current_address", &self.next_address)
             .finish_non_exhaustive()
     }
 }
 
 #[derive(Debug, Clone)]
-enum CurrentAddress {
+enum NextAddress {
     Address(u32),
     PageAfter(usize),
 }
@@ -407,7 +407,7 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIterator<'d, S, CI> {
             flash,
             flash_range,
             cache,
-            current_address: start_address,
+            next_address: start_address,
         })
     }
 
@@ -415,7 +415,7 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIterator<'d, S, CI> {
         flash: &mut S,
         flash_range: Range<u32>,
         cache: &mut CI,
-    ) -> Result<CurrentAddress, Error<S::Error>> {
+    ) -> Result<NextAddress, Error<S::Error>> {
         assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
         assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
 
@@ -436,19 +436,24 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIterator<'d, S, CI> {
             }
         };
 
-        Ok(CurrentAddress::Address(current_address))
+        Ok(NextAddress::Address(current_address))
     }
 
-    async fn next<'m>(
+    pub async fn next<'m>(
         &mut self,
         data_buffer: &'m mut [u8],
-    ) -> Result<Option<(Item<'m>, u32)>, Error<S::Error>> {
+    ) -> Result<Option<QueueIteratorEntry<'m>>, Error<S::Error>> {
         let value = run_with_auto_repair!(
             function = self.next_inner(data_buffer).await,
             repair = try_repair(self.flash, self.flash_range.clone(), self.cache).await?
         );
 
-        value.map(|v| v.map(|(item, address)| (item.reborrow(data_buffer), address)))
+        value.map(|v| {
+            v.map(|(item, address)| QueueIteratorEntry {
+                item: item.reborrow(data_buffer),
+                address,
+            })
+        })
     }
 
     async fn next_inner(
@@ -463,8 +468,8 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIterator<'d, S, CI> {
 
         loop {
             // Get the current page and address based on what was stored
-            let (current_page, current_address) = match self.current_address {
-                CurrentAddress::PageAfter(previous_page) => {
+            let (current_page, current_address) = match self.next_address {
+                NextAddress::PageAfter(previous_page) => {
                     let next_page = next_page::<S>(self.flash_range.clone(), previous_page);
                     if get_page_state(
                         self.flash,
@@ -490,11 +495,11 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIterator<'d, S, CI> {
                         calculate_page_address::<S>(self.flash_range.clone(), next_page)
                             + S::WORD_SIZE as u32;
 
-                    self.current_address = CurrentAddress::Address(current_address);
+                    self.next_address = NextAddress::Address(current_address);
 
                     (next_page, current_address)
                 }
-                CurrentAddress::Address(address) => (
+                NextAddress::Address(address) => (
                     calculate_page_index::<S>(self.flash_range.clone(), address),
                     address,
                 ),
@@ -523,20 +528,20 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIterator<'d, S, CI> {
                 match maybe_item {
                     item::MaybeItem::Corrupted(header, db) => {
                         let next_address = header.next_item_address::<S>(found_item_address);
-                        self.current_address = if next_address >= page_data_end_address {
-                            CurrentAddress::PageAfter(current_page)
+                        self.next_address = if next_address >= page_data_end_address {
+                            NextAddress::PageAfter(current_page)
                         } else {
-                            CurrentAddress::Address(next_address)
+                            NextAddress::Address(next_address)
                         };
                         data_buffer.replace(db);
                     }
                     item::MaybeItem::Erased(_, _) => unreachable!("Item is already erased"),
                     item::MaybeItem::Present(item) => {
                         let next_address = item.header.next_item_address::<S>(found_item_address);
-                        self.current_address = if next_address >= page_data_end_address {
-                            CurrentAddress::PageAfter(current_page)
+                        self.next_address = if next_address >= page_data_end_address {
+                            NextAddress::PageAfter(current_page)
                         } else {
-                            CurrentAddress::Address(next_address)
+                            NextAddress::Address(next_address)
                         };
                         // Return the item we found
                         self.cache.unmark_dirty();
@@ -544,21 +549,44 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIterator<'d, S, CI> {
                     }
                 }
             } else {
-                self.current_address = CurrentAddress::PageAfter(current_page);
+                self.next_address = NextAddress::PageAfter(current_page);
             }
         }
     }
 
     fn create_reset_point(&self) -> QueueIteratorResetPoint {
-        QueueIteratorResetPoint(self.current_address.clone())
+        QueueIteratorResetPoint(self.next_address.clone())
     }
 
     fn recover_from_reset_point(&mut self, reset_point: QueueIteratorResetPoint) {
-        self.current_address = reset_point.0;
+        self.next_address = reset_point.0;
     }
 }
 
-struct QueueIteratorResetPoint(CurrentAddress);
+struct QueueIteratorResetPoint(NextAddress);
+
+pub struct QueueIteratorEntry<'m> {
+    address: u32,
+    item: Item<'m>,
+}
+
+impl<'m> Deref for QueueIteratorEntry<'m> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.item.data()
+    }
+}
+
+impl<'m> QueueIteratorEntry<'m> {
+    pub fn data<'s: 'm>(&'s mut self) -> &'m mut [u8] {
+        self.item.data_mut()
+    }
+
+    pub fn pop(self) -> &'m mut [u8] {
+        todo!()
+    }
+}
 
 /// Find the largest size of data that can be stored.
 ///

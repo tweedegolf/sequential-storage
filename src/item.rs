@@ -33,7 +33,7 @@ use crate::{
     MAX_WORD_SIZE,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ItemHeader {
     /// Length of the item payload (so not including the header and not including word alignment)
     pub length: u16,
@@ -204,8 +204,12 @@ pub struct Item<'d> {
 }
 
 impl<'d> Item<'d> {
-    pub fn data(&'d self) -> &'d [u8] {
+    pub fn data<'s: 'd>(&'s self) -> &'d [u8] {
         &self.data_buffer[..self.header.length as usize]
+    }
+
+    pub fn data_mut<'s: 'd>(&'s mut self) -> &'d mut [u8] {
+        &mut self.data_buffer[..self.header.length as usize]
     }
 
     /// Destruct the item to get back the full data buffer

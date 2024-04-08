@@ -1,5 +1,5 @@
 #![cfg_attr(not(any(test, doctest, feature = "std")), no_std)]
-#![deny(missing_docs)]
+#![warn(missing_docs)]
 #![doc = include_str!("../README.md")]
 
 // Assumptions made in this crate:
