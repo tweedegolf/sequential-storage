@@ -53,7 +53,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@nightly
       - run: rustup target add thumbv7em-none-eabihf
-      - run: rustup component add llvm-tools
+      - run: rustup component add llvm-tools rust-src
       - name: Install cargo binutils
         uses: taiki-e/cache-cargo-install-action@v1
         with:
