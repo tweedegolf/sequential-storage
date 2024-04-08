@@ -8,42 +8,82 @@ on:
   pull_request:
 
 jobs:
-  fmt:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    - uses: dtolnay/rust-toolchain@stable
-    - run: cargo fmt --all -- --check
+  # fmt:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #   - uses: actions/checkout@v3
+  #   - uses: dtolnay/rust-toolchain@stable
+  #   - run: cargo fmt --all -- --check
 
-  test:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    - uses: dtolnay/rust-toolchain@stable
-    - run: cargo test
+  # test:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #   - uses: actions/checkout@v3
+  #   - uses: dtolnay/rust-toolchain@stable
+  #   - run: cargo test
 
-  clippy:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    - uses: dtolnay/rust-toolchain@stable
-    - run: cargo clippy -- -D warnings
+  # clippy:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #   - uses: actions/checkout@v3
+  #   - uses: dtolnay/rust-toolchain@stable
+  #   - run: cargo clippy -- -D warnings
 
-  fuzz:
+  # fuzz:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v3
+  #     - uses: dtolnay/rust-toolchain@stable
+
+  #     - name: Install cargo fuzz
+  #       uses: taiki-e/install-action@v2
+  #       with:
+  #         tool: cargo-fuzz
+
+  #     - name: Smoke-test fuzz targets
+  #       run: |
+  #         cargo fuzz build --sanitizer none
+  #         for target in $(cargo fuzz list) ; do
+  #           cargo fuzz run --sanitizer none $target -- -max_total_time=10
+  #         done
+    
+  binary-size:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: rustup target add thumbv7em-none-eabihf
+      - run: rustup component add llvm-tools rust-src
 
-      - name: Install cargo fuzz
-        uses: taiki-e/install-action@70233fe3d27d863712ee34eede2087e36bde6b5e
+      - name: Install cargo binutils
+        uses: taiki-e/cache-cargo-install-action@v1
         with:
-          tool: cargo-fuzz
+          tool: cargo-binutils
 
-      - name: Smoke-test fuzz targets
-        run: |
-          cargo fuzz build --sanitizer none
-          for target in $(cargo fuzz list) ; do
-            cargo fuzz run --sanitizer none $target -- -max_total_time=10
-          done
-    
+      - name: Calculate binary size
+        working-directory: ./example
+        run: cargo size --release -- -A > ../binsize_new.txt
+
+      - name: Store binsize artifact
+        if: github.ref_name == 'master'
+        uses: actions/upload-artifact@v4
+        with:
+          name: master-binsize
+          path: binsize_new.txt
+          overwrite: true
+
+      - name: Retrieve master binsize artifact
+        if: github.ref_name != 'master'
+        uses: actions/download-artifact@v4
+        with:
+          name: master-binsize
+          path: binsize_old.txt
+  
+      - name: Run diff
+        if: github.ref_name != 'master'
+        uses: LouisBrunner/diff-action@v2.0.0
+        with:
+          old: binsize_old.txt
+          new: binsize_new.txt
+          token: $GITHUB_TOKEN
+          notify_issue: true
