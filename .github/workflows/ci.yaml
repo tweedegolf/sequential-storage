@@ -49,45 +49,57 @@ jobs:
     
   binary-size:
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      pull-requests: write
     steps:
-      - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@nightly
       - run: rustup target add thumbv7em-none-eabihf
-      - run: rustup component add llvm-tools rust-src
+      - run: rustup component add rust-src
 
-      - name: Install cargo binutils
-        uses: taiki-e/cache-cargo-install-action@v1
+      - name: Check out the repo with the full git history
+        uses: actions/checkout@v3
         with:
-          tool: cargo-binutils
-
-      - name: Calculate binary size
+          fetch-depth: '0'
+      - uses: actions/cache@v3
+        id: cache-cargo
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ./example/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build new binary
         working-directory: ./example
-        run: cargo size --release -- -A > ../binsize_new.txt
-
-      - name: Rename binsize artifact
-        if: github.ref_name == 'master'
-        run: cp binsize_new.txt binsize_master.txt
-
-      - name: Store binsize artifact
-        if: github.ref_name == 'master'
-        uses: actions/upload-artifact@v4
+        run: cargo build --release
+      - name: Save binary
+        run: |
+          mv ./example/target/thumbv7em-none-eabihf/release/example ./example/target/thumbv7em-none-eabihf/release/original.elf
+      - name: If it's a PR checkout the base commit
+        if: ${{ github.event.pull_request }}
+        run: git checkout ${{ github.event.pull_request.base.sha }}
+      - name: Rebuild with the base commit
+        if: ${{ github.event.pull_request }}
+        working-directory: ./example
+        run: cargo build --release
+      - name: Run Bloaty to compare both output files
+        if: ${{ github.event.pull_request }}
+        id: bloaty-comparison
+        uses: carlosperate/bloaty-action@v1
         with:
-          name: master-binsize
-          path: binsize_master.txt
-          overwrite: true
-
-      - name: Retrieve master binsize artifact
-        if: github.ref_name != 'master'
-        uses: actions/download-artifact@v4
+          bloaty-args: ./example/target/thumbv7em-none-eabihf/release/original.elf -- ./example/target/thumbv7em-none-eabihf/release/example
+          output-to-summary: true
+      - name: Add a PR comment with the bloaty diff
+        if: ${{ github.event.pull_request }}
+        continue-on-error: true
+        uses: actions/github-script@v6
         with:
-          name: master-binsize
-          path: binsize_master.txt
-  
-      - name: Run diff
-        if: github.ref_name != 'master'
-        uses: LouisBrunner/diff-action@v2.0.0
-        with:
-          old: binsize_master.txt
-          new: binsize_new.txt
-          token: $GITHUB_TOKEN
-          notify_issue: true
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '## PR build size diff\n```\n${{ steps.bloaty-comparison.outputs.bloaty-output-encoded }}```\n'
+            })
