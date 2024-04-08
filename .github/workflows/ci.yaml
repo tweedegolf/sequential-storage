@@ -84,6 +84,7 @@ jobs:
         with:
           name: master-binsize
           path: ./binsizes
+          github-token: $GITHUB_TOKEN
   
       - name: Run diff
         if: github.ref_name != 'master'
