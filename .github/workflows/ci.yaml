@@ -51,7 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
       - run: rustup target add thumbv7em-none-eabihf
       - run: rustup component add llvm-tools
       - name: Install cargo binutils
