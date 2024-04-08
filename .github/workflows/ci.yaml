@@ -36,7 +36,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo fuzz
-        uses: taiki-e/install-action@70233fe3d27d863712ee34eede2087e36bde6b5e
+        uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
 
@@ -47,3 +47,17 @@ jobs:
             cargo fuzz run --sanitizer none $target -- -max_total_time=10
           done
     
+  binary-size:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup target add thumbv7em-none-eabihf
+      - run: rustup component add llvm-tools
+      - name: Install cargo binutils
+        uses: taiki-e/cache-cargo-install-action@v1
+        with:
+          tool: cargo-binutils
+      - name: Calculate binary size
+        working-directory: ./example
+        run: cargo size --release -- -A
