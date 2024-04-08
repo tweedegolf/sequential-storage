@@ -20,7 +20,7 @@ async fn main(_spawner: Spawner) {
     const MAP_FLASH_RANGE: Range<u32> = 0xFC000..0x100000;
 
     run_queue(&mut flash, QUEUE_FLASH_RANGE).await;
-    run_map(&mut flash, MAP_FLASH_RANGE).await;
+    // run_map(&mut flash, MAP_FLASH_RANGE).await;
 
     defmt::info!("All went ok!");
     cortex_m::asm::bkpt();
