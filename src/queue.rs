@@ -209,10 +209,10 @@ pub async fn iter<'s, S: NorFlash, CI: CacheImpl>(
 /// You should not depend on that data.
 ///
 /// If the data buffer is not big enough an error is returned.
-pub async fn peek<'d, 's: 'd, S: NorFlash>(
-    flash: &'s mut S,
+pub async fn peek<'d, S: NorFlash>(
+    flash: &mut S,
     flash_range: Range<u32>,
-    cache: &'s mut impl CacheImpl,
+    cache: &mut impl CacheImpl,
     data_buffer: &'d mut [u8],
 ) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
     // Note: Corruption repair is done in these functions already
