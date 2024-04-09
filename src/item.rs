@@ -204,11 +204,11 @@ pub struct Item<'d> {
 }
 
 impl<'d> Item<'d> {
-    pub fn data<'s: 'd>(&'s self) -> &'d [u8] {
+    pub fn data(&self) -> &[u8] {
         &self.data_buffer[..self.header.length as usize]
     }
 
-    pub fn data_mut<'s: 'd>(&'s mut self) -> &'d mut [u8] {
+    pub fn data_mut(&mut self) -> &mut [u8] {
         &mut self.data_buffer[..self.header.length as usize]
     }
 

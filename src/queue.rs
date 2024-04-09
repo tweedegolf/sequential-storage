@@ -466,12 +466,12 @@ impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> Deref for QueueIteratorEntry<'s, 'd
 
 impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'s, 'd, 'q, S, CI> {
     /// Get a mutable reference to the data of this entry
-    pub fn data_mut<'t: 'd>(&'t mut self) -> &'d mut [u8] {
+    pub fn data_mut(&mut self) -> &mut [u8] {
         self.item.data_mut()
     }
 
     /// Get a reference to the data of this entry
-    pub fn data<'t: 'd>(&'t self) -> &'d [u8] {
+    pub fn data(&self) -> &[u8] {
         self.item.data()
     }
 
