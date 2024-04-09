@@ -196,7 +196,7 @@ pub async fn iter<'s, S: NorFlash, CI: CacheImpl>(
     cache: &'s mut CI,
 ) -> Result<QueueIterator<'s, S, CI>, Error<S::Error>> {
     // Note: Corruption repair is done in these functions already
-    Ok(QueueIterator::new(flash, flash_range, cache).await?)
+    QueueIterator::new(flash, flash_range, cache).await
 }
 
 /// Peek at the oldest data.
@@ -253,7 +253,7 @@ pub async fn pop<'d, S: MultiwriteNorFlash>(
 }
 
 /// An iterator-like interface for peeking into data stored in flash.
-struct QueueIterator<'s, S: NorFlash, CI: CacheImpl> {
+pub struct QueueIterator<'s, S: NorFlash, CI: CacheImpl> {
     flash: &'s mut S,
     flash_range: Range<u32>,
     cache: &'s mut CI,
