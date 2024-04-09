@@ -227,7 +227,7 @@ pub async fn peek<'d, S: NorFlash>(
     let next_value = iterator.next(data_buffer).await?;
 
     match next_value {
-        Some(entry) => Ok(Some(entry.into_data())),
+        Some(entry) => Ok(Some(entry.into_buf())),
         None => Ok(None),
     }
 }
@@ -464,20 +464,16 @@ impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> Deref for QueueIteratorEntry<'s, 'd
     }
 }
 
-impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'s, 'd, 'q, S, CI> {
-    /// Get a mutable reference to the data of this entry
-    pub fn data_mut(&mut self) -> &mut [u8] {
+impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> DerefMut for QueueIteratorEntry<'s, 'd, 'q, S, CI> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
         self.item.data_mut()
     }
+}
 
-    /// Get a reference to the data of this entry
-    pub fn data(&self) -> &[u8] {
-        self.item.data()
-    }
-
+impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'s, 'd, 'q, S, CI> {
     /// Get a mutable reference to the data of this entry, but consume the entry too.
-    /// This function has some relaxed lifetime constraints compared to [Self::data_mut].
-    pub fn into_data(self) -> &'d mut [u8] {
+    /// This function has some relaxed lifetime constraints compared to the deref impls.
+    pub fn into_buf(self) -> &'d mut [u8] {
         let (header, data) = self.item.destruct();
         &mut data[..header.length as usize]
     }
@@ -987,7 +983,7 @@ mod tests {
                         .await
                         .unwrap()
                         .unwrap()
-                        .data(),
+                        .deref(),
                     &data[..],
                     "At {i}"
                 );
@@ -1043,7 +1039,7 @@ mod tests {
                         .await
                         .unwrap()
                         .unwrap()
-                        .data(),
+                        .deref(),
                     &data,
                     "At {i}"
                 );
