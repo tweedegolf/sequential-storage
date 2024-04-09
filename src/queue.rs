@@ -190,6 +190,12 @@ async fn push_inner<S: NorFlash>(
     Ok(())
 }
 
+/// Get an iterator-like interface to iterate over the items stored in the queue.
+/// This goes from oldest to newest.
+///
+/// The iteration happens non-destructively, or in other words it peeks at every item.
+/// The returned entry has a [QueueIteratorEntry::pop] function with which you can decide to pop the item
+/// after you've seen the contents.
 pub async fn iter<'s, S: NorFlash, CI: CacheImpl>(
     flash: &'s mut S,
     flash_range: Range<u32>,
@@ -252,7 +258,7 @@ pub async fn pop<'d, S: MultiwriteNorFlash>(
     }
 }
 
-/// An iterator-like interface for peeking into data stored in flash.
+/// An iterator-like interface for peeking into data stored in flash with the option to pop it.
 pub struct QueueIterator<'s, S: NorFlash, CI: CacheImpl> {
     flash: &'s mut S,
     flash_range: Range<u32>,
@@ -321,6 +327,11 @@ impl<'s, S: NorFlash, CI: CacheImpl> QueueIterator<'s, S, CI> {
         Ok(NextAddress::Address(current_address))
     }
 
+    /// Get the next entry.
+    ///
+    /// If there are no more entries, None is returned.
+    ///
+    /// The `data_buffer` has to be large enough to be able to hold the largest item in flash.
     pub async fn next<'d, 'q>(
         &'q mut self,
         data_buffer: &'d mut [u8],
@@ -438,7 +449,7 @@ impl<'s, S: NorFlash, CI: CacheImpl> QueueIterator<'s, S, CI> {
     }
 }
 
-#[derive(Debug)]
+/// An entry in the iteration over the queue flash
 pub struct QueueIteratorEntry<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> {
     iter: &'q mut QueueIterator<'s, S, CI>,
     address: u32,
@@ -454,19 +465,25 @@ impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> Deref for QueueIteratorEntry<'s, 'd
 }
 
 impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'s, 'd, 'q, S, CI> {
+    /// Get a mutable reference to the data of this entry
     pub fn data_mut<'t: 'd>(&'t mut self) -> &'d mut [u8] {
         self.item.data_mut()
     }
 
+    /// Get a reference to the data of this entry
     pub fn data<'t: 'd>(&'t self) -> &'d [u8] {
         self.item.data()
     }
 
+    /// Get a mutable reference to the data of this entry, but consume the entry too.
+    /// This function has some relaxed lifetime constraints compared to [Self::data_mut].
     pub fn into_data(self) -> &'d mut [u8] {
         let (header, data) = self.item.destruct();
         &mut data[..header.length as usize]
     }
 
+    /// Pop the data in flash that corresponds to this entry. This makes it so
+    /// future peeks won't find this data anymore.
     pub async fn pop(self) -> Result<&'d mut [u8], Error<S::Error>>
     where
         S: MultiwriteNorFlash,
