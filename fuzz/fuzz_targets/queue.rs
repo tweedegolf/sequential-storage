@@ -33,8 +33,7 @@ struct Input {
 #[derive(Arbitrary, Debug, Clone)]
 enum Op {
     Push(PushOp),
-    PopMany(u8),
-    PeekMany(u8),
+    Iterate(Vec<bool>),
     Peek,
     Pop,
 }
@@ -190,66 +189,6 @@ fn fuzz(ops: Input, mut cache: impl CacheImpl + Debug) {
                     Err(e) => panic!("Error popping (single) from queue: {e:?}"),
                 }
             }
-            Op::PopMany(n) => {
-                let mut popper = match block_on(sequential_storage::queue::pop_many(
-                    &mut flash,
-                    FLASH_RANGE,
-                    &mut cache,
-                )) {
-                    Ok(val) => val,
-                    Err(Error::Corrupted {
-                        backtrace: _backtrace,
-                    }) => {
-                        #[cfg(fuzzing_repro)]
-                        eprintln!(
-                            "Corrupted when creating popper! Originated from:\n{_backtrace:#}"
-                        );
-                        panic!("Corrupted!");
-                    }
-                    Err(e) => panic!("Error while creating popper: {e:?}"),
-                };
-
-                for i in 0..*n {
-                    match block_on(popper.next(&mut buf.0)) {
-                        Ok(value) => {
-                            assert_eq!(
-                                value,
-                                order
-                                    .pop_front()
-                                    .as_mut()
-                                    .map(|target| target.as_mut_slice())
-                            );
-                        }
-                        Err(Error::Storage {
-                            value: MockFlashError::EarlyShutoff(address),
-                            backtrace: _backtrace,
-                        }) => {
-                            #[cfg(fuzzing_repro)]
-                            eprintln!(
-                                    "Early shutoff when popping (many)! Originated from:\n{_backtrace:#}"
-                                );
-
-                            if !matches!(flash.get_item_presence(address), Some(true)) {
-                                // The item is no longer readable here
-                                order.pop_front();
-                            }
-
-                            *n -= i;
-                            break;
-                        }
-                        Err(Error::Corrupted {
-                            backtrace: _backtrace,
-                        }) => {
-                            #[cfg(fuzzing_repro)]
-                            eprintln!(
-                                "Corrupted when popping many! Originated from:\n{_backtrace:#}"
-                            );
-                            panic!("Corrupted!");
-                        }
-                        Err(e) => panic!("Error popping (many) from queue: {e:?}"),
-                    }
-                }
-            }
             Op::Peek => {
                 match block_on(sequential_storage::queue::peek(
                     &mut flash,
@@ -275,8 +214,8 @@ fn fuzz(ops: Input, mut cache: impl CacheImpl + Debug) {
                     Err(e) => panic!("Error popping (single) from queue: {e:?}"),
                 }
             }
-            Op::PeekMany(n) => {
-                let mut peeker = match block_on(sequential_storage::queue::peek_many(
+            Op::Iterate(pop_sequence) => {
+                let mut iterator = match block_on(sequential_storage::queue::iter(
                     &mut flash,
                     FLASH_RANGE,
                     &mut cache,
@@ -287,34 +226,80 @@ fn fuzz(ops: Input, mut cache: impl CacheImpl + Debug) {
                     }) => {
                         #[cfg(fuzzing_repro)]
                         eprintln!(
-                            "Corrupted when creating peeker! Originated from:\n{_backtrace:#}"
+                            "Corrupted when creating iterator! Originated from:\n{_backtrace:#}"
                         );
                         panic!("Corrupted!");
                     }
-                    Err(e) => panic!("Error while creating peeker: {e:?}"),
+                    Err(e) => panic!("Error while creating iterator: {e:?}"),
                 };
 
-                for i in 0..*n {
-                    match block_on(peeker.next(&mut buf.0)) {
-                        Ok(value) => {
+                let mut popped_items = 0;
+                for (i, do_pop) in pop_sequence.iter().enumerate() {
+                    match block_on(iterator.next(&mut buf.0)) {
+                        Ok(Some(value)) => {
                             assert_eq!(
-                                value.map(|b| &b[..]),
-                                order
-                                    .get(i as usize)
-                                    .as_ref()
-                                    .map(|target| target.as_slice())
+                                &*value,
+                                order.get(i as usize - popped_items).unwrap().as_slice()
                             );
+
+                            if *do_pop {
+                                let popped = block_on(value.pop());
+
+                                match popped {
+                                    Ok(value) => {
+                                        assert_eq!(
+                                            value,
+                                            order
+                                                .get(i as usize - popped_items)
+                                                .unwrap()
+                                                .as_slice()
+                                        );
+
+                                        order.remove(i - popped_items).unwrap();
+                                        popped_items += 1;
+                                    }
+                                    Err(Error::Corrupted {
+                                        backtrace: _backtrace,
+                                    }) => {
+                                        #[cfg(fuzzing_repro)]
+                                        eprintln!(
+                                            "Corrupted when popping interator entry! Originated from:\n{_backtrace:#}"
+                                        );
+                                        panic!("Corrupted!");
+                                    }
+                                    Err(Error::Storage {
+                                        value: MockFlashError::EarlyShutoff(address),
+                                        backtrace: _backtrace,
+                                    }) => {
+                                        #[cfg(fuzzing_repro)]
+                                        eprintln!(
+                                            "Early shutoff when popping iterator entry! Originated from:\n{_backtrace:#}"
+                                        );
+
+                                        if !matches!(flash.get_item_presence(address), Some(true)) {
+                                            // The item is no longer readable here
+                                            order.remove(i - popped_items).unwrap();
+                                        }
+
+                                        break;
+                                    }
+                                    Err(e) => panic!("Error popping iterator entry: {e:?}"),
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            assert_eq!(None, order.get(i as usize - popped_items));
                         }
                         Err(Error::Corrupted {
                             backtrace: _backtrace,
                         }) => {
                             #[cfg(fuzzing_repro)]
                             eprintln!(
-                                "Corrupted when peeking many! Originated from:\n{_backtrace:#}"
+                                "Corrupted when interating! Originated from:\n{_backtrace:#}"
                             );
                             panic!("Corrupted!");
                         }
-                        Err(e) => panic!("Error peeking (many) from queue: {e:?}"),
+                        Err(e) => panic!("Error iterating queue: {e:?}"),
                     }
                 }
             }

@@ -11,6 +11,7 @@
 - *Breaking:* The error type is no longer generic over the Item error. That error variant has been renamed `MapValueError`
   and carries a predefined error subtype.
 - Added `erase_all` function as a helper to erase the flash in a region.
+- *Breaking:* Changed the way that queue iteration works. Now there's an `iter` function instead of two separate `peek_many` and `pop_many` functions. The new iter returns an entry from which you can get the data that was just peeked. If you want to pop it, then call the pop function on the entry.
 
 ## 1.0.0 01-03-24
 
