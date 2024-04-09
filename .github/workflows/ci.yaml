@@ -54,13 +54,6 @@ jobs:
       pull-requests: write
     steps:
       - uses: dtolnay/rust-toolchain@nightly
-      - run: rustup target add thumbv7em-none-eabihf
-      - run: rustup component add rust-src
-
-      - name: Check out the repo with the full git history
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: '0'
       - uses: actions/cache@v3
         id: cache-cargo
         with:
@@ -71,9 +64,23 @@ jobs:
             ~/.cargo/git/db/
             ./example/target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - run: rustup target add thumbv7em-none-eabihf
+      - run: rustup component add rust-src llvm-tools
+      - if: steps.cache-cargo.outputs.cache-hit != 'true'
+        run: cargo install cargo-binutils
+
+      - name: Check out the repo with the full git history
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: '0'
       - name: Build new binary
         working-directory: ./example
-        run: cargo build --release
+        run: |
+          echo 'RESULT<<EOF' >> $GITHUB_OUTPUT
+          cargo size --release >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
+        id: new-size
       - name: Save binary
         run: |
           mv ./example/target/thumbv7em-none-eabihf/release/example ./example/target/thumbv7em-none-eabihf/release/original.elf
@@ -94,12 +101,12 @@ jobs:
       - name: Add a PR comment with the bloaty diff
         if: ${{ github.event.pull_request }}
         continue-on-error: true
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           script: |
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: '## PR build size diff\n```\n${{ steps.bloaty-comparison.outputs.bloaty-output-encoded }}```\n'
+              body: `## PR build size\n \`\`\`\n${{ join(steps.new-size.outputs.*, '\n') }}\n\`\`\`\n ### Diff\n\`\`\`\n${{ steps.bloaty-comparison.outputs.bloaty-output-encoded }}\`\`\`\n`
             })
