@@ -1,4 +1,5 @@
 {
+    "rust-analyzer.cargo.allTargets": false,
     "rust-analyzer.linkedProjects": [
         "Cargo.toml",
         "fuzz/Cargo.toml",
