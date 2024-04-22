@@ -634,14 +634,15 @@ async fn remove_item_inner<K: Key, S: MultiwriteNorFlash>(
                 item::MaybeItem::Corrupted(_, _) => continue,
                 item::MaybeItem::Erased(_, _) => continue,
                 item::MaybeItem::Present(item) => {
-                    let item_match = search_key.as_ref().map(|search_key| {
+                    let item_match = if let Some(search_key) = &search_key {
                         let item_key = K::deserialize_from(&item.data()[..K::LEN]);
                         &item_key == search_key
-                    });
-
+                    } else {
+                        false
+                    };
                     // If this item has the same key as the key we're trying to erase, then erase the item.
                     // But keep going! We need to erase everything.
-                    if item_match.unwrap_or(true) {
+                    if search_key.is_none() || item_match {
                         item.header
                             .erase_data(flash, flash_range.clone(), cache, item_address)
                             .await?;
@@ -1338,6 +1339,71 @@ mod tests {
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
                 j
+            )
+            .await
+            .unwrap()
+            .is_none());
+        }
+    }
+
+    #[test]
+    async fn remove_all() {
+        let mut flash = mock_flash::MockFlashBase::<4, 1, 4096>::new(
+            mock_flash::WriteCountCheck::Twice,
+            None,
+            true,
+        );
+        let mut data_buffer = AlignedBuf([0; 128]);
+        const FLASH_RANGE: Range<u32> = 0x0000..0x4000;
+
+        // Add some data to flash
+        for value in 0..10 {
+            for key in 0..24 {
+                store_item(
+                    &mut flash,
+                    FLASH_RANGE,
+                    &mut cache::NoCache::new(),
+                    &mut data_buffer,
+                    key as u8,
+                    &vec![key as u8; value + 2].as_slice(),
+                )
+                .await
+                .unwrap();
+            }
+        }
+
+        // Sanity check that we can find all the keys we just added.
+        for key in 0..24 {
+            assert!(fetch_item::<u8, &[u8], _>(
+                &mut flash,
+                FLASH_RANGE,
+                &mut cache::NoCache::new(),
+                &mut data_buffer,
+                key
+            )
+            .await
+            .unwrap()
+            .is_some());
+        }
+
+        // Remove all the items
+        remove_all_items::<u8, _>(
+            &mut flash,
+            FLASH_RANGE,
+            &mut cache::NoCache::new(),
+            &mut data_buffer,
+        )
+        .await
+        .unwrap();
+
+        // Verify that none of the keys are present in flash.
+        for key in 0..24 {
+            assert!(fetch_item::<u8, &[u8], _>(
+                &mut flash,
+                FLASH_RANGE,
+                &mut cache::NoCache::new(),
+                &mut data_buffer,
+                key
             )
             .await
             .unwrap()
