@@ -8,7 +8,7 @@
   The API before would lead to a lot of extra unncesessary binary size.
 - *Breaking:* Removed the `StorageItem` trait in favor of two separate `Key` and `Value` traits. This helps cut
   binary size and is closer to what users of the map APIs were expecting.
-- *Breaking:* The error type is no longer generic over the Item error. That error variant has been renamed `MapValueError`
+- *Breaking:* The error type is no longer generic over the Item error. That error variant has been renamed `SerializationError`
   and carries a predefined error subtype.
 - Added `erase_all` function as a helper to erase the flash in a region.
 - *Breaking:* Changed the way that queue iteration works. Now there's an `iter` function instead of two separate `peek_many` and `pop_many` functions. The new iter returns an entry from which you can get the data that was just peeked. If you want to pop it, then call the pop function on the entry.
