@@ -550,7 +550,26 @@ pub async fn remove_item<K: Key, S: MultiwriteNorFlash>(
             flash_range.clone(),
             cache,
             data_buffer,
-            search_key.clone()
+            Some(search_key.clone())
+        )
+        .await,
+        repair = try_repair::<K, _>(flash, flash_range.clone(), cache, data_buffer).await?
+    )
+}
+
+pub async fn remove_all_item<K: Key, S: MultiwriteNorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+    cache: &mut impl KeyCacheImpl<K>,
+    data_buffer: &mut [u8],
+) -> Result<(), Error<S::Error>> {
+    run_with_auto_repair!(
+        function = remove_item_inner::<K, _>(
+            flash,
+            flash_range.clone(),
+            cache,
+            data_buffer,
+            None,
         )
         .await,
         repair = try_repair::<K, _>(flash, flash_range.clone(), cache, data_buffer).await?
@@ -562,9 +581,13 @@ async fn remove_item_inner<K: Key, S: MultiwriteNorFlash>(
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,
     data_buffer: &mut [u8],
-    search_key: K,
+    search_key: Option<K>,
 ) -> Result<(), Error<S::Error>> {
-    cache.notice_key_erased(&search_key);
+    if let Some(key) = &search_key {
+        cache.notice_key_erased(key);
+    } else {
+        cache.invalidate_cache_state();
+    }
 
     // Search for the last used page. We're gonna erase from the one after this first.
     // If we get an early shutoff or cancellation, this will make it so that we don't return
@@ -608,7 +631,7 @@ async fn remove_item_inner<K: Key, S: MultiwriteNorFlash>(
 
                     // If this item has the same key as the key we're trying to erase, then erase the item.
                     // But keep going! We need to erase everything.
-                    if item_key == search_key {
+                    if search_key.as_ref().map(|search_key| &item_key == search_key).unwrap_or(true) {
                         item.header
                             .erase_data(flash, flash_range.clone(), cache, item_address)
                             .await?;
