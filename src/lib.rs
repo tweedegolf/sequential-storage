@@ -13,8 +13,10 @@ use core::{
     ops::{Deref, DerefMut, Range},
 };
 use embedded_storage_async::nor_flash::NorFlash;
-use map::MapValueError;
+use map::SerializationError;
 
+#[cfg(feature = "arrayvec")]
+mod arrayvec_impl;
 pub mod cache;
 mod item;
 pub mod map;
@@ -377,8 +379,14 @@ pub enum Error<S> {
     BufferTooBig,
     /// A provided buffer was to small to be used (usize is size needed)
     BufferTooSmall(usize),
-    /// A map value error
-    MapValueError(MapValueError),
+    /// A serialization error (from the key or value)
+    SerializationError(SerializationError),
+}
+
+impl<S> From<SerializationError> for Error<S> {
+    fn from(v: SerializationError) -> Self {
+        Self::SerializationError(v)
+    }
 }
 
 impl<S: PartialEq> PartialEq for Error<S> {
@@ -407,7 +415,7 @@ where
                 f,
                 "A provided buffer was to small to be used. Needed was {needed}"
             ),
-            Error::MapValueError(value) => write!(f, "Map value error: {value}"),
+            Error::SerializationError(value) => write!(f, "Map value error: {value}"),
         }
     }
 }
