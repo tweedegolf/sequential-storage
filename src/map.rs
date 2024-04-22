@@ -557,21 +557,28 @@ pub async fn remove_item<K: Key, S: MultiwriteNorFlash>(
     )
 }
 
-pub async fn remove_all_item<K: Key, S: MultiwriteNorFlash>(
+/// Fully remove all stored items. Additional calls to fetch with any key will return None until
+/// new items are stored again.
+///
+/// <div class="warning">
+/// This might be really slow!
+/// </div>
+///
+/// <div class="warning">
+///
+/// *You are required to, on a given flash range, use the same [Key] type every time. You are allowed to use*
+/// *multiple [Value] types. See the module-level docs for more information about this.*
+///
+/// </div>
+pub async fn remove_all_items<K: Key, S: MultiwriteNorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,
     data_buffer: &mut [u8],
 ) -> Result<(), Error<S::Error>> {
     run_with_auto_repair!(
-        function = remove_item_inner::<K, _>(
-            flash,
-            flash_range.clone(),
-            cache,
-            data_buffer,
-            None,
-        )
-        .await,
+        function =
+            remove_item_inner::<K, _>(flash, flash_range.clone(), cache, data_buffer, None).await,
         repair = try_repair::<K, _>(flash, flash_range.clone(), cache, data_buffer).await?
     )
 }
@@ -627,11 +634,14 @@ async fn remove_item_inner<K: Key, S: MultiwriteNorFlash>(
                 item::MaybeItem::Corrupted(_, _) => continue,
                 item::MaybeItem::Erased(_, _) => continue,
                 item::MaybeItem::Present(item) => {
-                    let item_key = K::deserialize_from(&item.data()[..K::LEN]);
+                    let item_match = search_key.as_ref().map(|search_key| {
+                        let item_key = K::deserialize_from(&item.data()[..K::LEN]);
+                        &item_key == search_key
+                    });
 
                     // If this item has the same key as the key we're trying to erase, then erase the item.
                     // But keep going! We need to erase everything.
-                    if search_key.as_ref().map(|search_key| &item_key == search_key).unwrap_or(true) {
+                    if item_match.unwrap_or(true) {
                         item.header
                             .erase_data(flash, flash_range.clone(), cache, item_address)
                             .await?;
