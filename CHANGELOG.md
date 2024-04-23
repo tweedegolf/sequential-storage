@@ -13,6 +13,7 @@
 - Added `erase_all` function as a helper to erase the flash in a region.
 - *Breaking:* Changed the way that queue iteration works. Now there's an `iter` function instead of two separate `peek_many` and `pop_many` functions. The new iter returns an entry from which you can get the data that was just peeked. If you want to pop it, then call the pop function on the entry.
 - Added `arrayvec` feature that when activated impls the `Key` trait for `ArrayVec` and `ArrayString`.
+- Added a new `map::remove_all_items()` API to remove all stored items in flash.
 
 ## 1.0.0 01-03-24
 
