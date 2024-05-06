@@ -679,7 +679,7 @@ macro_rules! impl_key_num {
 
             fn get_len(_buffer: &[u8]) -> Result<usize, SerializationError> {
                 Ok(core::mem::size_of::<Self>())
-            }        
+            }
         }
     };
 }
@@ -711,7 +711,7 @@ impl<const N: usize> Key for [u8; N] {
 
         Ok((buffer[..N].try_into().unwrap(), N))
     }
-    
+
     fn get_len(_buffer: &[u8]) -> Result<usize, SerializationError> {
         Ok(N)
     }
