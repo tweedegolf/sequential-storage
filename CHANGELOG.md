@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+# 2.0.0 06-05-24
+
 - *Breaking:* Made the cache API a bit more strict. Caches now always have to be passed as a mutable reference.
   The API before would lead to a lot of extra unncesessary binary size.
 - *Breaking:* Removed the `StorageItem` trait in favor of two separate `Key` and `Value` traits. This helps cut
