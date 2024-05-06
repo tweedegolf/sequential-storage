@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+# 2.0.1 06-05-24
+
+- Implemented the `get_len` function for all built-in key types
+
 # 2.0.0 06-05-24
 
 - *Breaking:* Made the cache API a bit more strict. Caches now always have to be passed as a mutable reference.
