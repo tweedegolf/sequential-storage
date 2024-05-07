@@ -148,6 +148,11 @@ const fn calculate_page_index<S: NorFlash>(flash_range: Range<u32>, address: u32
     (address - flash_range.start) as usize / S::ERASE_SIZE
 }
 
+const fn calculate_page_size<S: NorFlash>() -> usize {
+    // Page minus the two page status words
+    S::ERASE_SIZE - S::WORD_SIZE * 2
+}
+
 /// The marker being used for page states
 const MARKER: u8 = 0;
 
@@ -366,7 +371,6 @@ pub enum Error<S> {
         backtrace: std::backtrace::Backtrace,
     },
     /// The item cannot be stored anymore because the storage is full.
-    /// If you get this error some data may be lost.
     FullStorage,
     /// It's been detected that the memory is likely corrupted.
     /// You may want to erase the memory to recover.
@@ -381,6 +385,9 @@ pub enum Error<S> {
     BufferTooSmall(usize),
     /// A serialization error (from the key or value)
     SerializationError(SerializationError),
+    /// The item does not fit in flash, ever.
+    /// This is different from [Error::FullStorage] because this item is too big to fit even in empty flash.
+    ItemTooBig,
 }
 
 impl<S> From<SerializationError> for Error<S> {
@@ -416,6 +423,7 @@ where
                 "A provided buffer was to small to be used. Needed was {needed}"
             ),
             Error::SerializationError(value) => write!(f, "Map value error: {value}"),
+            Error::ItemTooBig => write!(f, "The item is too big to fit in the flash"),
         }
     }
 }

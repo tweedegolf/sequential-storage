@@ -178,19 +178,19 @@ impl ItemHeader {
     }
 
     /// Get the address of the start of the data for this item
-    pub fn data_address<S: NorFlash>(address: u32) -> u32 {
+    pub const fn data_address<S: NorFlash>(address: u32) -> u32 {
         address + round_up_to_alignment::<S>(Self::LENGTH as u32)
     }
 
     /// Get the location of the next item in flash
-    pub fn next_item_address<S: NorFlash>(&self, address: u32) -> u32 {
+    pub const fn next_item_address<S: NorFlash>(&self, address: u32) -> u32 {
         let data_address = ItemHeader::data_address::<S>(address);
         data_address + round_up_to_alignment::<S>(self.length as u32)
     }
 
     /// Calculates the amount of bytes available for data.
     /// Essentially, it's the given amount minus the header and minus some alignment padding.
-    pub fn available_data_bytes<S: NorFlash>(total_available: u32) -> Option<u32> {
+    pub const fn available_data_bytes<S: NorFlash>(total_available: u32) -> Option<u32> {
         let data_start = Self::data_address::<S>(0);
         let data_end = round_down_to_alignment::<S>(total_available);
 

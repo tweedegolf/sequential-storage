@@ -108,12 +108,12 @@ async fn push_inner<S: NorFlash>(
     }
 
     // Data must fit in a single page
-    if data.len()
-        > ItemHeader::available_data_bytes::<S>((S::ERASE_SIZE - S::WORD_SIZE * 2) as u32).unwrap()
-            as usize
+    if data.len() > u16::MAX as usize
+        || data.len()
+            > calculate_page_size::<S>().saturating_sub(ItemHeader::data_address::<S>(0) as usize)
     {
         cache.unmark_dirty();
-        return Err(Error::BufferTooBig);
+        return Err(Error::ItemTooBig);
     }
 
     let current_page = find_youngest_page(flash, flash_range.clone(), cache).await?;
@@ -1298,6 +1298,34 @@ mod tests {
                 .await
                 .unwrap(),
             0
+        );
+    }
+
+    #[test]
+    async fn store_too_big_item() {
+        let mut flash = MockFlashBig::new(WriteCountCheck::Twice, None, true);
+        const FLASH_RANGE: Range<u32> = 0x000..0x1000;
+
+        push(
+            &mut flash,
+            FLASH_RANGE,
+            &mut cache::NoCache::new(),
+            &[0; 1024 - 4 * 2 - 8],
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            push(
+                &mut flash,
+                FLASH_RANGE,
+                &mut cache::NoCache::new(),
+                &[0; 1024 - 4 * 2 - 8 + 1],
+                false,
+            )
+            .await,
+            Err(Error::ItemTooBig)
         );
     }
 }

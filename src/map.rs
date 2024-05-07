@@ -425,6 +425,15 @@ async fn store_item_inner<'d, K: Key, S: NorFlash>(
                     .serialize_into(&mut data_buffer[key_len..])
                     .map_err(Error::SerializationError)?;
 
+            if item_data_length > u16::MAX as usize
+                || item_data_length
+                    > calculate_page_size::<S>()
+                        .saturating_sub(ItemHeader::data_address::<S>(0) as usize)
+            {
+                cache.unmark_dirty();
+                return Err(Error::ItemTooBig);
+            }
+
             let free_spot_address = find_next_free_item_spot(
                 flash,
                 flash_range.clone(),
@@ -1346,5 +1355,35 @@ mod tests {
             .unwrap()
             .is_none());
         }
+    }
+
+    #[test]
+    async fn store_too_big_item() {
+        let mut flash = MockFlashBig::new(mock_flash::WriteCountCheck::Twice, None, true);
+        const FLASH_RANGE: Range<u32> = 0x000..0x1000;
+
+        store_item(
+            &mut flash,
+            FLASH_RANGE,
+            &mut cache::NoCache::new(),
+            &mut [0; 1024],
+            0u8,
+            &[0; 1024 - 4 * 2 - 8 - 1],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            store_item(
+                &mut flash,
+                FLASH_RANGE,
+                &mut cache::NoCache::new(),
+                &mut [0; 1024],
+                0u8,
+                &[0; 1024 - 4 * 2 - 8 - 1 + 1],
+            )
+            .await,
+            Err(Error::ItemTooBig)
+        );
     }
 }
