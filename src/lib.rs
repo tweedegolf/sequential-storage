@@ -387,6 +387,8 @@ pub enum Error<S> {
     SerializationError(SerializationError),
     /// The item does not fit in flash, ever.
     /// This is different from [Error::FullStorage] because this item is too big to fit even in empty flash.
+    ///
+    /// See the readme for more info about the constraints on item sizes.
     ItemTooBig,
 }
 

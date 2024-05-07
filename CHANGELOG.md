@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Added check for too big items that won't ever fit in flash so it returns a good clear error.
+
 # 2.0.1 06-05-24
 
 - Implemented the `get_len` function for all built-in key types
