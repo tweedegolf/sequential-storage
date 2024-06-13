@@ -4,6 +4,18 @@
 
 ## Unreleased
 
+- Added a new `map::remove_all_items()` API to remove all stored items in flash.
+
+# 2.0.2 07-05-24
+
+- Added check for too big items that won't ever fit in flash so it returns a good clear error.
+
+# 2.0.1 06-05-24
+
+- Implemented the `get_len` function for all built-in key types
+
+# 2.0.0 06-05-24
+
 - *Breaking:* Made the cache API a bit more strict. Caches now always have to be passed as a mutable reference.
   The API before would lead to a lot of extra unncesessary binary size.
 - *Breaking:* Removed the `StorageItem` trait in favor of two separate `Key` and `Value` traits. This helps cut
@@ -13,7 +25,6 @@
 - Added `erase_all` function as a helper to erase the flash in a region.
 - *Breaking:* Changed the way that queue iteration works. Now there's an `iter` function instead of two separate `peek_many` and `pop_many` functions. The new iter returns an entry from which you can get the data that was just peeked. If you want to pop it, then call the pop function on the entry.
 - Added `arrayvec` feature that when activated impls the `Key` trait for `ArrayVec` and `ArrayString`.
-- Added a new `map::remove_all_items()` API to remove all stored items in flash.
 
 ## 1.0.0 01-03-24
 
