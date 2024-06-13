@@ -71,7 +71,7 @@ fn fuzz(ops: Input, mut cache: impl CacheImpl + Debug) {
 
     for mut op in ops.ops.into_iter() {
         #[cfg(fuzzing_repro)]
-        eprintln!("{}", flash.print_items());
+        eprintln!("{}", block_on(flash.print_items()));
         #[cfg(fuzzing_repro)]
         eprintln!("{:?}", cache);
         #[cfg(fuzzing_repro)]
@@ -128,7 +128,7 @@ fn fuzz(ops: Input, mut cache: impl CacheImpl + Debug) {
                         backtrace: _backtrace,
                     }) => {
                         // We need to check if it managed to write
-                        if let Some(true) = flash.get_item_presence(address) {
+                        if let Some(true) = block_on(flash.get_item_presence(address)) {
                             #[cfg(fuzzing_repro)]
                             eprintln!("Early shutoff when pushing {val:?}! (but it still stored fully). Originated from:\n{_backtrace:#}");
                             order.push_back(val);
@@ -172,7 +172,7 @@ fn fuzz(ops: Input, mut cache: impl CacheImpl + Debug) {
                             "Early shutoff when popping (single)! Originated from:\n{_backtrace:#}"
                         );
 
-                        if !matches!(flash.get_item_presence(address), Some(true)) {
+                        if !matches!(block_on(flash.get_item_presence(address)), Some(true)) {
                             // The item is no longer readable here
                             order.pop_front();
                         }
@@ -276,7 +276,10 @@ fn fuzz(ops: Input, mut cache: impl CacheImpl + Debug) {
                                             "Early shutoff when popping iterator entry! Originated from:\n{_backtrace:#}"
                                         );
 
-                                        if !matches!(flash.get_item_presence(address), Some(true)) {
+                                        if !matches!(
+                                            block_on(flash.get_item_presence(address)),
+                                            Some(true)
+                                        ) {
                                             // The item is no longer readable here
                                             order.remove(i - popped_items).unwrap();
                                         }

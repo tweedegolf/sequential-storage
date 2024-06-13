@@ -49,6 +49,14 @@ pub async fn erase_all<S: NorFlash>(
         })
 }
 
+/// Get the minimal overhead size per stored item for the given flash type.
+///
+/// The associated data of each item is additionally padded to a full flash word size, but that's not part of this number.  
+/// This means the full item length is `returned number + (data length).next_multiple_of(S::WORD_SIZE)`.
+pub const fn item_overhead_size<S: NorFlash>() -> u32 {
+    item::ItemHeader::data_address::<S>(0)
+}
+
 // Type representing buffer aligned to 4 byte boundary.
 #[repr(align(4))]
 pub(crate) struct AlignedBuf<const SIZE: usize>(pub(crate) [u8; SIZE]);
