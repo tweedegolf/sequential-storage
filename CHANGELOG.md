@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Added a new `map::remove_all_items()` API to remove all stored items in flash.
+
 # 2.0.2 07-05-24
 
 - Added check for too big items that won't ever fit in flash so it returns a good clear error.
