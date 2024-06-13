@@ -113,12 +113,11 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
         self.current_stats
     }
 
-    #[cfg(feature = "_test")]
+    #[cfg(any(test, feature = "_test"))]
     /// Print all items in flash to the returned string
-    pub fn print_items(&mut self) -> String {
+    pub async fn print_items(&mut self) -> String {
         use crate::cache::NoCache;
         use crate::NorFlashExt;
-        use futures::executor::block_on;
         use std::fmt::Write;
 
         let mut buf = [0; 1024 * 16];
@@ -132,12 +131,14 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
             writeln!(
                 s,
                 "  Page {page_index} ({}):",
-                match block_on(crate::get_page_state(
+                match crate::get_page_state(
                     self,
                     Self::FULL_FLASH_RANGE,
                     &mut NoCache::new(),
                     page_index
-                )) {
+                )
+                .await
+                {
                     Ok(value) => format!("{value:?}"),
                     Err(e) => format!("Error ({e:?})"),
                 }
@@ -151,13 +152,13 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
                     - Self::WORD_SIZE as u32;
 
             let mut it = crate::item::ItemHeaderIter::new(page_data_start, page_data_end);
-            while let (Some(header), item_address) =
-                block_on(it.traverse(self, |_, _| false)).unwrap()
+            while let (Some(header), item_address) = it.traverse(self, |_, _| false).await.unwrap()
             {
                 let next_item_address = header.next_item_address::<Self>(item_address);
-                let maybe_item =
-                    block_on(header.read_item(self, &mut buf, item_address, page_data_end))
-                        .unwrap();
+                let maybe_item = header
+                    .read_item(self, &mut buf, item_address, page_data_end)
+                    .await
+                    .unwrap();
                 writeln!(
                     s,
                     "   Item {maybe_item:?} at {item_address}..{next_item_address}"
@@ -169,15 +170,14 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
         s
     }
 
-    #[cfg(feature = "_test")]
+    #[cfg(any(test, feature = "_test"))]
     /// Get the presence of the item at the given address.
     ///
     /// - If some, the item is there.
     /// - If true, the item is present and fine.
     /// - If false, the item is corrupt or erased.
-    pub fn get_item_presence(&mut self, target_item_address: u32) -> Option<bool> {
+    pub async fn get_item_presence(&mut self, target_item_address: u32) -> Option<bool> {
         use crate::NorFlashExt;
-        use futures::executor::block_on;
 
         if !Self::FULL_FLASH_RANGE.contains(&target_item_address) {
             return None;
@@ -197,14 +197,14 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
 
         let mut found_item = None;
         let mut it = crate::item::ItemHeaderIter::new(page_data_start, page_data_end);
-        while let (Some(header), item_address) = block_on(it.traverse(self, |_, _| false)).unwrap()
-        {
+        while let (Some(header), item_address) = it.traverse(self, |_, _| false).await.unwrap() {
             let next_item_address = header.next_item_address::<Self>(item_address);
 
             if (item_address..next_item_address).contains(&target_item_address) {
-                let maybe_item =
-                    block_on(header.read_item(self, &mut buf, item_address, page_data_end))
-                        .unwrap();
+                let maybe_item = header
+                    .read_item(self, &mut buf, item_address, page_data_end)
+                    .await
+                    .unwrap();
 
                 match maybe_item {
                     crate::item::MaybeItem::Corrupted(_, _)

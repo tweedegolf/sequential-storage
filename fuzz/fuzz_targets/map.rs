@@ -86,7 +86,7 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
 
     for op in ops.ops.into_iter() {
         #[cfg(fuzzing_repro)]
-        eprintln!("{}", flash.print_items());
+        eprintln!("{}", block_on(flash.print_items()));
         #[cfg(fuzzing_repro)]
         eprintln!("{:?}", cache);
         #[cfg(fuzzing_repro)]
@@ -120,14 +120,14 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                         )) {
                             Ok(Some(check_item)) if check_item == value => {
                                 #[cfg(fuzzing_repro)]
-                                eprintln!("Early shutoff when storing {item:?}! (but it still stored fully). Originated from:\n{_backtrace:#}");
+                                eprintln!("Early shutoff when storing key: {key}, value: {value:?}! (but it still stored fully). Originated from:\n{_backtrace:#}");
                                 // Even though we got a shutoff, it still managed to store well
                                 map.insert(key, value);
                             }
                             _ => {
                                 // Could not fetch the item we stored...
                                 #[cfg(fuzzing_repro)]
-                                eprintln!("Early shutoff when storing {item:?}! Originated from:\n{_backtrace:#}");
+                                eprintln!("Early shutoff when storing key: {key}, value: {value:?}! Originated from:\n{_backtrace:#}");
                             }
                         }
                     }
