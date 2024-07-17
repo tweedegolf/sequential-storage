@@ -4,18 +4,21 @@
 
 ## Unreleased
 
+## 3.0.0 17-07-24
+
+- *Breaking:* Map keys are now always passed by reference. This avoids extra cloning and memory use for bigger keys.
 - Added `space_left` function for queue
 - Added a new `map::remove_all_items()` API to remove all stored items in flash.
 
-# 2.0.2 07-05-24
+## 2.0.2 07-05-24
 
 - Added check for too big items that won't ever fit in flash so it returns a good clear error.
 
-# 2.0.1 06-05-24
+## 2.0.1 06-05-24
 
 - Implemented the `get_len` function for all built-in key types
 
-# 2.0.0 06-05-24
+## 2.0.0 06-05-24
 
 - *Breaking:* Made the cache API a bit more strict. Caches now always have to be passed as a mutable reference.
   The API before would lead to a lot of extra unncesessary binary size.

@@ -4,7 +4,7 @@ use core::{fmt::Debug, ops::Range};
 
 use embedded_storage_async::nor_flash::NorFlash;
 
-use crate::{item::ItemHeader, PageState};
+use crate::{item::ItemHeader, map::Key, PageState};
 
 use self::{
     key_pointers::{CachedKeyPointers, KeyPointersCache, UncachedKeyPointers},
@@ -26,7 +26,7 @@ pub trait CacheImpl: PrivateCacheImpl {}
 
 /// Trait implemented by all cache types that know about keys
 #[allow(private_bounds)]
-pub trait KeyCacheImpl<KEY: Eq>: CacheImpl + PrivateKeyCacheImpl<KEY> {}
+pub trait KeyCacheImpl<KEY: Key>: CacheImpl + PrivateKeyCacheImpl<KEY> {}
 
 pub(crate) trait Invalidate {
     fn invalidate_cache_state(&mut self);
@@ -133,7 +133,7 @@ impl<T: PrivateCacheImpl> PrivateCacheImpl for &mut T {
     }
 }
 
-pub(crate) trait PrivateKeyCacheImpl<KEY: Eq>: PrivateCacheImpl {
+pub(crate) trait PrivateKeyCacheImpl<KEY: Key>: PrivateCacheImpl {
     type KPC: KeyPointersCache<KEY>;
 
     fn key_pointers(&mut self) -> &mut Self::KPC;
@@ -142,7 +142,7 @@ pub(crate) trait PrivateKeyCacheImpl<KEY: Eq>: PrivateCacheImpl {
         self.key_pointers().key_location(key)
     }
 
-    fn notice_key_location(&mut self, key: KEY, item_address: u32, dirty: bool) {
+    fn notice_key_location(&mut self, key: &KEY, item_address: u32, dirty: bool) {
         if dirty {
             self.mark_dirty();
         }
@@ -155,7 +155,7 @@ pub(crate) trait PrivateKeyCacheImpl<KEY: Eq>: PrivateCacheImpl {
     }
 }
 
-impl<KEY: Eq, T: PrivateKeyCacheImpl<KEY>> PrivateKeyCacheImpl<KEY> for &mut T {
+impl<KEY: Key, T: PrivateKeyCacheImpl<KEY>> PrivateKeyCacheImpl<KEY> for &mut T {
     type KPC = T::KPC;
 
     fn key_pointers(&mut self) -> &mut Self::KPC {
@@ -240,13 +240,13 @@ impl PrivateCacheImpl for NoCache {
 }
 
 impl CacheImpl for NoCache {}
-impl<KEY: Eq> KeyCacheImpl<KEY> for NoCache {}
+impl<KEY: Key> KeyCacheImpl<KEY> for NoCache {}
 
 impl Invalidate for NoCache {
     fn invalidate_cache_state(&mut self) {}
 }
 
-impl<KEY: Eq> PrivateKeyCacheImpl<KEY> for NoCache {
+impl<KEY: Key> PrivateKeyCacheImpl<KEY> for NoCache {
     type KPC = UncachedKeyPointers;
 
     fn key_pointers(&mut self) -> &mut Self::KPC {
@@ -309,7 +309,7 @@ impl<const PAGE_COUNT: usize> PrivateCacheImpl for PageStateCache<PAGE_COUNT> {
 }
 
 impl<const PAGE_COUNT: usize> CacheImpl for PageStateCache<PAGE_COUNT> {}
-impl<KEY: Eq, const PAGE_COUNT: usize> KeyCacheImpl<KEY> for PageStateCache<PAGE_COUNT> {}
+impl<KEY: Key, const PAGE_COUNT: usize> KeyCacheImpl<KEY> for PageStateCache<PAGE_COUNT> {}
 
 impl<const PAGE_COUNT: usize> Invalidate for PageStateCache<PAGE_COUNT> {
     fn invalidate_cache_state(&mut self) {
@@ -319,7 +319,7 @@ impl<const PAGE_COUNT: usize> Invalidate for PageStateCache<PAGE_COUNT> {
     }
 }
 
-impl<KEY: Eq, const PAGE_COUNT: usize> PrivateKeyCacheImpl<KEY> for PageStateCache<PAGE_COUNT> {
+impl<KEY: Key, const PAGE_COUNT: usize> PrivateKeyCacheImpl<KEY> for PageStateCache<PAGE_COUNT> {
     type KPC = UncachedKeyPointers;
 
     fn key_pointers(&mut self) -> &mut Self::KPC {
@@ -382,7 +382,7 @@ impl<const PAGE_COUNT: usize> PrivateCacheImpl for PagePointerCache<PAGE_COUNT> 
 }
 
 impl<const PAGE_COUNT: usize> CacheImpl for PagePointerCache<PAGE_COUNT> {}
-impl<KEY: Eq, const PAGE_COUNT: usize> KeyCacheImpl<KEY> for PagePointerCache<PAGE_COUNT> {}
+impl<KEY: Key, const PAGE_COUNT: usize> KeyCacheImpl<KEY> for PagePointerCache<PAGE_COUNT> {}
 
 impl<const PAGE_COUNT: usize> Invalidate for PagePointerCache<PAGE_COUNT> {
     fn invalidate_cache_state(&mut self) {
@@ -392,7 +392,7 @@ impl<const PAGE_COUNT: usize> Invalidate for PagePointerCache<PAGE_COUNT> {
     }
 }
 
-impl<KEY: Eq, const PAGE_COUNT: usize> PrivateKeyCacheImpl<KEY> for PagePointerCache<PAGE_COUNT> {
+impl<KEY: Key, const PAGE_COUNT: usize> PrivateKeyCacheImpl<KEY> for PagePointerCache<PAGE_COUNT> {
     type KPC = UncachedKeyPointers;
 
     fn key_pointers(&mut self) -> &mut Self::KPC {
@@ -417,14 +417,14 @@ impl<KEY: Eq, const PAGE_COUNT: usize> PrivateKeyCacheImpl<KEY> for PagePointerC
 /// the chance of a cache hit.
 /// The keys are cached in a fifo and any time its location is updated in cache it's added to the front.
 #[derive(Debug)]
-pub struct KeyPointerCache<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> {
+pub struct KeyPointerCache<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> {
     dirt_tracker: DirtTracker,
     page_states: CachedPageStates<PAGE_COUNT>,
     page_pointers: CachedPagePointers<PAGE_COUNT>,
     key_pointers: CachedKeyPointers<KEY, KEYS>,
 }
 
-impl<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> KeyPointerCache<PAGE_COUNT, KEY, KEYS> {
+impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> KeyPointerCache<PAGE_COUNT, KEY, KEYS> {
     /// Construct a new instance
     pub const fn new() -> Self {
         Self {
@@ -436,7 +436,7 @@ impl<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> KeyPointerCache<PAGE_C
     }
 }
 
-impl<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> Default
+impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> Default
     for KeyPointerCache<PAGE_COUNT, KEY, KEYS>
 {
     fn default() -> Self {
@@ -444,7 +444,7 @@ impl<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> Default
     }
 }
 
-impl<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> PrivateCacheImpl
+impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> PrivateCacheImpl
     for KeyPointerCache<PAGE_COUNT, KEY, KEYS>
 {
     type PSC = CachedPageStates<PAGE_COUNT>;
@@ -463,16 +463,16 @@ impl<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> PrivateCacheImpl
     }
 }
 
-impl<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> CacheImpl
+impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> CacheImpl
     for KeyPointerCache<PAGE_COUNT, KEY, KEYS>
 {
 }
-impl<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> KeyCacheImpl<KEY>
+impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> KeyCacheImpl<KEY>
     for KeyPointerCache<PAGE_COUNT, KEY, KEYS>
 {
 }
 
-impl<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> Invalidate
+impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> Invalidate
     for KeyPointerCache<PAGE_COUNT, KEY, KEYS>
 {
     fn invalidate_cache_state(&mut self) {
@@ -483,7 +483,7 @@ impl<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> Invalidate
     }
 }
 
-impl<const PAGE_COUNT: usize, KEY: Eq, const KEYS: usize> PrivateKeyCacheImpl<KEY>
+impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> PrivateKeyCacheImpl<KEY>
     for KeyPointerCache<PAGE_COUNT, KEY, KEYS>
 {
     type KPC = CachedKeyPointers<KEY, KEYS>;

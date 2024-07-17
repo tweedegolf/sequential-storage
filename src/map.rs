@@ -38,7 +38,7 @@
 //!         flash_range.clone(),
 //!         &mut NoCache::new(),
 //!         &mut data_buffer,
-//!         42,
+//!         &42,
 //!     ).await.unwrap(),
 //!     None
 //! );
@@ -52,7 +52,7 @@
 //!     flash_range.clone(),
 //!     &mut NoCache::new(),
 //!     &mut data_buffer,
-//!     42u8,
+//!     &42u8,
 //!     &104729u32,
 //! ).await.unwrap();
 //!
@@ -64,7 +64,7 @@
 //!         flash_range.clone(),
 //!         &mut NoCache::new(),
 //!         &mut data_buffer,
-//!         42,
+//!         &42,
 //!     ).await.unwrap(),
 //!     Some(104729)
 //! );
@@ -127,7 +127,7 @@ pub async fn fetch_item<'d, K: Key, V: Value<'d>, S: NorFlash>(
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,
     data_buffer: &'d mut [u8],
-    search_key: K,
+    search_key: &K,
 ) -> Result<Option<V>, Error<S::Error>> {
     let result = run_with_auto_repair!(
         function = {
@@ -136,7 +136,7 @@ pub async fn fetch_item<'d, K: Key, V: Value<'d>, S: NorFlash>(
                 flash_range.clone(),
                 cache,
                 data_buffer,
-                search_key.clone(),
+                search_key,
             )
             .await
         },
@@ -166,7 +166,7 @@ async fn fetch_item_with_location<'d, K: Key, S: NorFlash>(
     flash_range: Range<u32>,
     cache: &mut impl PrivateKeyCacheImpl<K>,
     data_buffer: &'d mut [u8],
-    search_key: K,
+    search_key: &K,
 ) -> Result<Option<(ItemUnborrowed, u32, Option<usize>)>, Error<S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
@@ -268,7 +268,7 @@ async fn fetch_item_with_location<'d, K: Key, S: NorFlash>(
         let mut it = ItemIter::new(page_data_start_address, page_data_end_address);
         while let Some((item, address)) = it.next(flash, data_buffer).await? {
             let (found_key, found_key_len) = K::deserialize_from(item.data())?;
-            if found_key == search_key {
+            if found_key == *search_key {
                 newest_found_item_data = Some((address, found_key_len));
             }
         }
@@ -341,7 +341,7 @@ pub async fn store_item<'d, K: Key, V: Value<'d>, S: NorFlash>(
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,
     data_buffer: &mut [u8],
-    key: K,
+    key: &K,
     item: &V,
 ) -> Result<(), Error<S::Error>> {
     run_with_auto_repair!(
@@ -350,7 +350,7 @@ pub async fn store_item<'d, K: Key, V: Value<'d>, S: NorFlash>(
             flash_range.clone(),
             cache,
             data_buffer,
-            key.clone(),
+            key,
             item
         )
         .await,
@@ -363,7 +363,7 @@ async fn store_item_inner<'d, K: Key, S: NorFlash>(
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,
     data_buffer: &mut [u8],
-    key: K,
+    key: &K,
     item: &dyn Value<'d>,
 ) -> Result<(), Error<S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
@@ -446,7 +446,7 @@ async fn store_item_inner<'d, K: Key, S: NorFlash>(
 
             match free_spot_address {
                 Some(free_spot_address) => {
-                    cache.notice_key_location(key.clone(), free_spot_address, true);
+                    cache.notice_key_location(key, free_spot_address, true);
                     Item::write_new(
                         flash,
                         flash_range.clone(),
@@ -558,7 +558,7 @@ pub async fn remove_item<K: Key, S: MultiwriteNorFlash>(
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,
     data_buffer: &mut [u8],
-    search_key: K,
+    search_key: &K,
 ) -> Result<(), Error<S::Error>> {
     run_with_auto_repair!(
         function = remove_item_inner::<K, _>(
@@ -566,7 +566,7 @@ pub async fn remove_item<K: Key, S: MultiwriteNorFlash>(
             flash_range.clone(),
             cache,
             data_buffer,
-            Some(search_key.clone())
+            Some(search_key)
         )
         .await,
         repair = try_repair::<K, _>(flash, flash_range.clone(), cache, data_buffer).await?
@@ -605,7 +605,7 @@ async fn remove_item_inner<K: Key, S: MultiwriteNorFlash>(
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,
     data_buffer: &mut [u8],
-    search_key: Option<K>,
+    search_key: Option<&K>,
 ) -> Result<(), Error<S::Error>> {
     if let Some(key) = &search_key {
         cache.notice_key_erased(key);
@@ -651,8 +651,8 @@ async fn remove_item_inner<K: Key, S: MultiwriteNorFlash>(
                 item::MaybeItem::Corrupted(_, _) => continue,
                 item::MaybeItem::Erased(_, _) => continue,
                 item::MaybeItem::Present(item) => {
-                    let item_match = match &search_key {
-                        Some(search_key) => &K::deserialize_from(item.data())?.0 == search_key,
+                    let item_match = match search_key {
+                        Some(search_key) => K::deserialize_from(item.data())?.0 == *search_key,
                         _ => true,
                     };
                     // If this item has the same key as the key we're trying to erase, then erase the item.
@@ -908,7 +908,7 @@ async fn migrate_items<K: Key, S: NorFlash>(
             flash_range.clone(),
             cache,
             data_buffer,
-            key.clone(),
+            &key,
         )
         .await?
         else {
@@ -922,7 +922,7 @@ async fn migrate_items<K: Key, S: NorFlash>(
         let found_item = found_item.reborrow(data_buffer);
 
         if found_address == item_address {
-            cache.notice_key_location(key, next_page_write_address, true);
+            cache.notice_key_location(&key, next_page_write_address, true);
             found_item
                 .write(flash, flash_range.clone(), cache, next_page_write_address)
                 .await?;
@@ -1010,7 +1010,7 @@ mod tests {
             flash_range.clone(),
             &mut cache::NoCache::new(),
             &mut data_buffer,
-            0,
+            &0,
         )
         .await
         .unwrap();
@@ -1021,7 +1021,7 @@ mod tests {
             flash_range.clone(),
             &mut cache::NoCache::new(),
             &mut data_buffer,
-            60,
+            &60,
         )
         .await
         .unwrap();
@@ -1032,7 +1032,7 @@ mod tests {
             flash_range.clone(),
             &mut cache::NoCache::new(),
             &mut data_buffer,
-            0xFF,
+            &0xFF,
         )
         .await
         .unwrap();
@@ -1043,7 +1043,7 @@ mod tests {
             flash_range.clone(),
             &mut cache::NoCache::new(),
             &mut data_buffer,
-            0u8,
+            &0u8,
             &[5],
         )
         .await
@@ -1053,7 +1053,7 @@ mod tests {
             flash_range.clone(),
             &mut cache::NoCache::new(),
             &mut data_buffer,
-            0u8,
+            &0u8,
             &[5, 6],
         )
         .await
@@ -1064,7 +1064,7 @@ mod tests {
             flash_range.clone(),
             &mut cache::NoCache::new(),
             &mut data_buffer,
-            0,
+            &0,
         )
         .await
         .unwrap()
@@ -1076,7 +1076,7 @@ mod tests {
             flash_range.clone(),
             &mut cache::NoCache::new(),
             &mut data_buffer,
-            1u8,
+            &1u8,
             &[2, 2, 2, 2, 2, 2],
         )
         .await
@@ -1087,7 +1087,7 @@ mod tests {
             flash_range.clone(),
             &mut cache::NoCache::new(),
             &mut data_buffer,
-            0,
+            &0,
         )
         .await
         .unwrap()
@@ -1099,7 +1099,7 @@ mod tests {
             flash_range.clone(),
             &mut cache::NoCache::new(),
             &mut data_buffer,
-            1,
+            &1,
         )
         .await
         .unwrap()
@@ -1112,7 +1112,7 @@ mod tests {
                 flash_range.clone(),
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                (index % 10) as u8,
+                &((index % 10) as u8),
                 &vec![(index % 10) as u8 * 2; index % 10].as_slice(),
             )
             .await
@@ -1125,7 +1125,7 @@ mod tests {
                 flash_range.clone(),
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                i,
+                &i,
             )
             .await
             .unwrap()
@@ -1139,7 +1139,7 @@ mod tests {
                 flash_range.clone(),
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                11u8,
+                &11u8,
                 &[0; 10],
             )
             .await
@@ -1152,7 +1152,7 @@ mod tests {
                 flash_range.clone(),
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                i,
+                &i,
             )
             .await
             .unwrap()
@@ -1178,7 +1178,7 @@ mod tests {
                 0x00..0x40,
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                i,
+                &i,
                 &vec![i; i as usize].as_slice(),
             )
             .await
@@ -1191,7 +1191,7 @@ mod tests {
                 0x00..0x40,
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                UPPER_BOUND,
+                &UPPER_BOUND,
                 &vec![0; UPPER_BOUND as usize].as_slice(),
             )
             .await,
@@ -1204,7 +1204,7 @@ mod tests {
                 0x00..0x40,
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                i,
+                &i,
             )
             .await
             .unwrap()
@@ -1231,7 +1231,7 @@ mod tests {
                 0x0000..0x1000,
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                i,
+                &i,
                 &vec![i; i as usize].as_slice(),
             )
             .await
@@ -1244,7 +1244,7 @@ mod tests {
                 0x0000..0x1000,
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                UPPER_BOUND,
+                &UPPER_BOUND,
                 &vec![0; UPPER_BOUND as usize].as_slice(),
             )
             .await,
@@ -1257,7 +1257,7 @@ mod tests {
                 0x0000..0x1000,
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                i,
+                &i,
             )
             .await
             .unwrap()
@@ -1285,7 +1285,7 @@ mod tests {
                     0x0000..0x4000,
                     &mut cache::NoCache::new(),
                     &mut data_buffer,
-                    i as u16,
+                    &(i as u16),
                     &vec![i as u8; LENGHT_PER_KEY[i]].as_slice(),
                 )
                 .await
@@ -1299,7 +1299,7 @@ mod tests {
                 0x0000..0x4000,
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                i as u16,
+                &(i as u16),
             )
             .await
             .unwrap()
@@ -1329,7 +1329,7 @@ mod tests {
                     FLASH_RANGE,
                     &mut cache::NoCache::new(),
                     &mut data_buffer,
-                    i as u8,
+                    &(i as u8),
                     &vec![i as u8; j + 2].as_slice(),
                 )
                 .await
@@ -1345,7 +1345,7 @@ mod tests {
                     FLASH_RANGE,
                     &mut cache::NoCache::new(),
                     &mut data_buffer,
-                    i
+                    &i
                 )
                 .await
                 .unwrap()
@@ -1358,7 +1358,7 @@ mod tests {
                 FLASH_RANGE,
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                j,
+                &j,
             )
             .await
             .unwrap();
@@ -1370,7 +1370,7 @@ mod tests {
                     FLASH_RANGE,
                     &mut cache::NoCache::new(),
                     &mut data_buffer,
-                    i
+                    &i
                 )
                 .await
                 .unwrap()
@@ -1382,7 +1382,7 @@ mod tests {
                 FLASH_RANGE,
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                j
+                &j
             )
             .await
             .unwrap()
@@ -1402,14 +1402,14 @@ mod tests {
 
         // Add some data to flash
         for value in 0..10 {
-            for key in 0..24 {
+            for key in 0..24u8 {
                 store_item(
                     &mut flash,
                     FLASH_RANGE,
                     &mut cache::NoCache::new(),
                     &mut data_buffer,
-                    key as u8,
-                    &vec![key as u8; value + 2].as_slice(),
+                    &key,
+                    &vec![key; value + 2].as_slice(),
                 )
                 .await
                 .unwrap();
@@ -1417,13 +1417,13 @@ mod tests {
         }
 
         // Sanity check that we can find all the keys we just added.
-        for key in 0..24 {
+        for key in 0..24u8 {
             assert!(fetch_item::<u8, &[u8], _>(
                 &mut flash,
                 FLASH_RANGE,
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                key
+                &key
             )
             .await
             .unwrap()
@@ -1447,7 +1447,7 @@ mod tests {
                 FLASH_RANGE,
                 &mut cache::NoCache::new(),
                 &mut data_buffer,
-                key
+                &key
             )
             .await
             .unwrap()
@@ -1465,7 +1465,7 @@ mod tests {
             FLASH_RANGE,
             &mut cache::NoCache::new(),
             &mut [0; 1024],
-            0u8,
+            &0u8,
             &[0; 1024 - 4 * 2 - 8 - 1],
         )
         .await
@@ -1477,7 +1477,7 @@ mod tests {
                 FLASH_RANGE,
                 &mut cache::NoCache::new(),
                 &mut [0; 1024],
-                0u8,
+                &0u8,
                 &[0; 1024 - 4 * 2 - 8 - 1 + 1],
             )
             .await,

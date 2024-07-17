@@ -213,7 +213,7 @@ mod map_tests {
                     FLASH_RANGE,
                     cache,
                     &mut data_buffer,
-                    i as u16,
+                    &(i as u16),
                     &vec![i as u8; LENGHT_PER_KEY[i]].as_slice(),
                 )
                 .await
@@ -231,7 +231,7 @@ mod map_tests {
                     FLASH_RANGE,
                     cache,
                     &mut data_buffer,
-                    i as u16,
+                    &(i as u16),
                 )
                 .await
                 .unwrap()
