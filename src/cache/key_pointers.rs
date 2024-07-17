@@ -54,7 +54,7 @@ impl<KEY: Key, const KEYS: usize> KeyPointersCache<KEY> for CachedKeyPointers<KE
     }
 
     fn notice_key_location(&mut self, key: &KEY, item_address: u32) {
-        match self.key_index(&key) {
+        match self.key_index(key) {
             Some(existing_index) => {
                 self.key_pointers[existing_index] =
                     Some((key.clone(), NonZeroU32::new(item_address).unwrap()));

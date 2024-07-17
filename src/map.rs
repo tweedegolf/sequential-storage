@@ -131,14 +131,8 @@ pub async fn fetch_item<'d, K: Key, V: Value<'d>, S: NorFlash>(
 ) -> Result<Option<V>, Error<S::Error>> {
     let result = run_with_auto_repair!(
         function = {
-            fetch_item_with_location(
-                flash,
-                flash_range.clone(),
-                cache,
-                data_buffer,
-                search_key,
-            )
-            .await
+            fetch_item_with_location(flash, flash_range.clone(), cache, data_buffer, search_key)
+                .await
         },
         repair = try_repair::<K, _>(flash, flash_range.clone(), cache, data_buffer).await?
     );
@@ -180,7 +174,7 @@ async fn fetch_item_with_location<'d, K: Key, S: NorFlash>(
     }
 
     'cache: {
-        if let Some(cached_location) = cache.key_location(&search_key) {
+        if let Some(cached_location) = cache.key_location(search_key) {
             let page_index = calculate_page_index::<S>(flash_range.clone(), cached_location);
             let page_data_end_address =
                 calculate_page_end_address::<S>(flash_range.clone(), page_index)
@@ -345,15 +339,8 @@ pub async fn store_item<'d, K: Key, V: Value<'d>, S: NorFlash>(
     item: &V,
 ) -> Result<(), Error<S::Error>> {
     run_with_auto_repair!(
-        function = store_item_inner(
-            flash,
-            flash_range.clone(),
-            cache,
-            data_buffer,
-            key,
-            item
-        )
-        .await,
+        function =
+            store_item_inner(flash, flash_range.clone(), cache, data_buffer, key, item).await,
         repair = try_repair::<K, _>(flash, flash_range.clone(), cache, data_buffer).await?
     )
 }
@@ -903,14 +890,9 @@ async fn migrate_items<K: Key, S: NorFlash>(
         cache.unmark_dirty();
 
         // Search for the newest item with the key we found
-        let Some((found_item, found_address, _)) = fetch_item_with_location::<K, S>(
-            flash,
-            flash_range.clone(),
-            cache,
-            data_buffer,
-            &key,
-        )
-        .await?
+        let Some((found_item, found_address, _)) =
+            fetch_item_with_location::<K, S>(flash, flash_range.clone(), cache, data_buffer, &key)
+                .await?
         else {
             // We couldn't even find our own item?
             return Err(Error::Corrupted {
