@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Added `space_left` function for queue
+
 # 2.0.2 07-05-24
 
 - Added check for too big items that won't ever fit in flash so it returns a good clear error.

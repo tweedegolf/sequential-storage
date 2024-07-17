@@ -584,6 +584,106 @@ async fn find_max_fit_inner<S: NorFlash>(
     ))
 }
 
+/// Calculate how much space is left free in the queue (in bytes).
+///
+/// The number given back is accurate, however there are lots of things that add overhead and padding.
+/// Every push is an item with its own overhead. You can check the overhead per item with [crate::item_overhead_size].
+///
+/// Furthermore, every item has to fully fit in a page. So if a page has 50 bytes left and you push an item of 60 bytes,
+/// the current page is closed and the item is stored on the next page, 'wasting' the 50 you had.
+///
+/// So unless you're tracking all this, the returned number should only be used as a rough indication.
+pub async fn space_left<S: NorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+    cache: &mut impl CacheImpl,
+) -> Result<u32, Error<S::Error>> {
+    run_with_auto_repair!(
+        function = space_left_inner(flash, flash_range.clone(), cache).await,
+        repair = try_repair(flash, flash_range.clone(), cache).await?
+    )
+}
+
+async fn space_left_inner<S: NorFlash>(
+    flash: &mut S,
+    flash_range: Range<u32>,
+    cache: &mut impl CacheImpl,
+) -> Result<u32, Error<S::Error>> {
+    assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
+    assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
+
+    assert!(S::ERASE_SIZE >= S::WORD_SIZE * 4);
+    assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
+
+    if cache.is_dirty() {
+        cache.invalidate_cache_state();
+    }
+
+    let mut total_free_space = 0;
+
+    for page in get_pages::<S>(flash_range.clone(), 0) {
+        let state = get_page_state(flash, flash_range.clone(), cache, page).await?;
+        let page_empty =
+            is_page_empty(flash, flash_range.clone(), cache, page, Some(state)).await?;
+
+        if state.is_closed() && !page_empty {
+            continue;
+        }
+
+        // See how much space we can find in the current page.
+        let page_data_start_address =
+            calculate_page_address::<S>(flash_range.clone(), page) + S::WORD_SIZE as u32;
+        let page_data_end_address =
+            calculate_page_end_address::<S>(flash_range.clone(), page) - S::WORD_SIZE as u32;
+
+        if page_empty {
+            total_free_space += page_data_end_address - page_data_start_address;
+            continue;
+        }
+
+        // Partial open page
+        let next_item_address = match cache.first_item_after_written(page) {
+            Some(next_item_address) => next_item_address,
+            None => {
+                ItemHeaderIter::new(
+                    cache
+                        .first_item_after_erased(page)
+                        .unwrap_or(page_data_start_address),
+                    page_data_end_address,
+                )
+                .traverse(flash, |_, _| true)
+                .await?
+                .1
+            }
+        };
+
+        if ItemHeader::available_data_bytes::<S>(page_data_end_address - next_item_address)
+            .is_none()
+        {
+            // No data fits on this partial open page anymore.
+            // So if all data on this is already erased, then this page might as well be counted as empty.
+            // We can use [is_page_empty] and lie to to it so it checks the items.
+            if is_page_empty(
+                flash,
+                flash_range.clone(),
+                cache,
+                page,
+                Some(PageState::Closed),
+            )
+            .await?
+            {
+                total_free_space += page_data_end_address - page_data_start_address;
+                continue;
+            }
+        }
+
+        total_free_space += page_data_end_address - next_item_address;
+    }
+
+    cache.unmark_dirty();
+    Ok(total_free_space)
+}
+
 async fn find_youngest_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
@@ -658,14 +758,21 @@ mod tests {
     #[test]
     async fn peek_and_overwrite_old_data() {
         let mut flash = MockFlashTiny::new(WriteCountCheck::Twice, None, true);
-        let flash_range = 0x00..0x40;
+        const FLASH_RANGE: Range<u32> = 0x00..0x40;
         let mut data_buffer = AlignedBuf([0; 1024]);
         const DATA_SIZE: usize = 22;
 
         assert_eq!(
+            space_left(&mut flash, FLASH_RANGE, &mut cache::NoCache::new())
+                .await
+                .unwrap(),
+            60
+        );
+
+        assert_eq!(
             peek(
                 &mut flash,
-                flash_range.clone(),
+                FLASH_RANGE,
                 &mut cache::NoCache::new(),
                 &mut data_buffer
             )
@@ -677,17 +784,25 @@ mod tests {
         data_buffer[..DATA_SIZE].copy_from_slice(&[0xAA; DATA_SIZE]);
         push(
             &mut flash,
-            flash_range.clone(),
+            FLASH_RANGE,
             &mut cache::NoCache::new(),
             &data_buffer[..DATA_SIZE],
             false,
         )
         .await
         .unwrap();
+
+        assert_eq!(
+            space_left(&mut flash, FLASH_RANGE, &mut cache::NoCache::new())
+                .await
+                .unwrap(),
+            30
+        );
+
         assert_eq!(
             peek(
                 &mut flash,
-                flash_range.clone(),
+                FLASH_RANGE,
                 &mut cache::NoCache::new(),
                 &mut data_buffer
             )
@@ -699,17 +814,25 @@ mod tests {
         data_buffer[..DATA_SIZE].copy_from_slice(&[0xBB; DATA_SIZE]);
         push(
             &mut flash,
-            flash_range.clone(),
+            FLASH_RANGE,
             &mut cache::NoCache::new(),
             &data_buffer[..DATA_SIZE],
             false,
         )
         .await
         .unwrap();
+
+        assert_eq!(
+            space_left(&mut flash, FLASH_RANGE, &mut cache::NoCache::new())
+                .await
+                .unwrap(),
+            0
+        );
+
         assert_eq!(
             peek(
                 &mut flash,
-                flash_range.clone(),
+                FLASH_RANGE,
                 &mut cache::NoCache::new(),
                 &mut data_buffer
             )
@@ -723,7 +846,7 @@ mod tests {
         data_buffer[..DATA_SIZE].copy_from_slice(&[0xCC; DATA_SIZE]);
         push(
             &mut flash,
-            flash_range.clone(),
+            FLASH_RANGE,
             &mut cache::NoCache::new(),
             &data_buffer[..DATA_SIZE],
             false,
@@ -734,7 +857,7 @@ mod tests {
         data_buffer[..DATA_SIZE].copy_from_slice(&[0xDD; DATA_SIZE]);
         push(
             &mut flash,
-            flash_range.clone(),
+            FLASH_RANGE,
             &mut cache::NoCache::new(),
             &data_buffer[..DATA_SIZE],
             true,
@@ -745,7 +868,7 @@ mod tests {
         assert_eq!(
             peek(
                 &mut flash,
-                flash_range.clone(),
+                FLASH_RANGE,
                 &mut cache::NoCache::new(),
                 &mut data_buffer
             )
@@ -757,7 +880,7 @@ mod tests {
         assert_eq!(
             pop(
                 &mut flash,
-                flash_range.clone(),
+                FLASH_RANGE,
                 &mut cache::NoCache::new(),
                 &mut data_buffer
             )
@@ -768,9 +891,16 @@ mod tests {
         );
 
         assert_eq!(
+            space_left(&mut flash, FLASH_RANGE, &mut cache::NoCache::new())
+                .await
+                .unwrap(),
+            30
+        );
+
+        assert_eq!(
             peek(
                 &mut flash,
-                flash_range.clone(),
+                FLASH_RANGE,
                 &mut cache::NoCache::new(),
                 &mut data_buffer
             )
@@ -782,7 +912,7 @@ mod tests {
         assert_eq!(
             pop(
                 &mut flash,
-                flash_range.clone(),
+                FLASH_RANGE,
                 &mut cache::NoCache::new(),
                 &mut data_buffer
             )
@@ -793,9 +923,16 @@ mod tests {
         );
 
         assert_eq!(
+            space_left(&mut flash, FLASH_RANGE, &mut cache::NoCache::new())
+                .await
+                .unwrap(),
+            60
+        );
+
+        assert_eq!(
             peek(
                 &mut flash,
-                flash_range.clone(),
+                FLASH_RANGE,
                 &mut cache::NoCache::new(),
                 &mut data_buffer
             )
@@ -806,7 +943,7 @@ mod tests {
         assert_eq!(
             pop(
                 &mut flash,
-                flash_range.clone(),
+                FLASH_RANGE,
                 &mut cache::NoCache::new(),
                 &mut data_buffer
             )
