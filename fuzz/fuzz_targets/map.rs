@@ -35,6 +35,7 @@ enum Op {
     Store(StoreOp),
     Fetch(u8),
     Remove(u8),
+    RemoveAll,
 }
 
 #[derive(Arbitrary, Debug, Clone)]
@@ -64,7 +65,11 @@ enum CacheType {
 
 fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
     let mut flash = MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::new(
-        if ops.ops.iter().any(|op| matches!(op, Op::Remove(_))) {
+        if ops
+            .ops
+            .iter()
+            .any(|op| matches!(op, Op::Remove(_) | Op::RemoveAll))
+        {
             WriteCountCheck::Twice
         } else {
             WriteCountCheck::OnceOnly
@@ -190,6 +195,7 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                         value: MockFlashError::EarlyShutoff(_),
                         backtrace: _backtrace,
                     }) => {
+                        // Check if the item is still there. It might or it might not and either is fine
                         match block_on(sequential_storage::map::fetch_item::<u8, &[u8], _>(
                             &mut flash,
                             FLASH_RANGE,
@@ -210,6 +216,54 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                             }
                         }
                     }
+                    Err(Error::Corrupted {
+                        backtrace: _backtrace,
+                    }) => {
+                        #[cfg(fuzzing_repro)]
+                        eprintln!("Corrupted when removing! Originated from:\n{_backtrace:#}");
+                        panic!("Corrupted!");
+                    }
+                    Err(e) => panic!("{e:?}"),
+                }
+            }
+            Op::RemoveAll => {
+                match block_on(sequential_storage::map::remove_all_items::<u8, _>(
+                    &mut flash,
+                    FLASH_RANGE,
+                    &mut cache,
+                    &mut buf.0,
+                )) {
+                    Ok(()) => {
+                        map.clear();
+                    }
+                    Err(Error::Storage {
+                        value: MockFlashError::EarlyShutoff(_),
+                        backtrace: _backtrace,
+                    }) => {
+                        for key in map.keys().copied().collect::<Vec<_>>() {
+                            // Check if the item is still there. It might or it might not and either is fine
+                            match block_on(sequential_storage::map::fetch_item::<u8, &[u8], _>(
+                                &mut flash,
+                                FLASH_RANGE,
+                                &mut cache,
+                                &mut buf.0,
+                                key,
+                            )) {
+                                Ok(Some(_)) => {
+                                    #[cfg(fuzzing_repro)]
+                                    eprintln!("Early shutoff when removing item {key}! Originated from:\n{_backtrace:#}");
+                                }
+                                _ => {
+                                    // Could not fetch the item we stored...
+                                    #[cfg(fuzzing_repro)]
+                                    eprintln!("Early shutoff when removing item {key}! (but it still removed fully). Originated from:\n{_backtrace:#}");
+                                    // Even though we got a shutoff, it still managed to store well
+                                    map.remove(&key);
+                                }
+                            }
+                        }
+                    }
+
                     Err(Error::Corrupted {
                         backtrace: _backtrace,
                     }) => {

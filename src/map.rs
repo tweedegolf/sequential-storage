@@ -599,6 +599,7 @@ pub async fn remove_all_items<K: Key, S: MultiwriteNorFlash>(
     )
 }
 
+/// If `search_key` is None, then all items will be removed
 async fn remove_item_inner<K: Key, S: MultiwriteNorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
@@ -650,15 +651,13 @@ async fn remove_item_inner<K: Key, S: MultiwriteNorFlash>(
                 item::MaybeItem::Corrupted(_, _) => continue,
                 item::MaybeItem::Erased(_, _) => continue,
                 item::MaybeItem::Present(item) => {
-                    let item_match = if let Some(search_key) = &search_key {
-                        let (item_key, _) = K::deserialize_from(item.data())?;
-                        &item_key == search_key
-                    } else {
-                        false
+                    let item_match = match &search_key {
+                        Some(search_key) => &K::deserialize_from(item.data())?.0 == search_key,
+                        _ => true,
                     };
                     // If this item has the same key as the key we're trying to erase, then erase the item.
                     // But keep going! We need to erase everything.
-                    if search_key.is_none() || item_match {
+                    if item_match {
                         item.header
                             .erase_data(flash, flash_range.clone(), cache, item_address)
                             .await?;
