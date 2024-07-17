@@ -96,7 +96,7 @@ async fn run_map<E: defmt::Format>(
             flash_range.clone(),
             &mut NoCache::new(),
             &mut data_buffer,
-            0u8,
+            &0u8,
             &0u8,
         )
         .await
@@ -108,7 +108,7 @@ async fn run_map<E: defmt::Format>(
             flash_range.clone(),
             &mut NoCache::new(),
             &mut data_buffer,
-            1u8,
+            &1u8,
             &123u32,
         )
         .await
@@ -120,7 +120,7 @@ async fn run_map<E: defmt::Format>(
             flash_range.clone(),
             &mut NoCache::new(),
             &mut data_buffer,
-            2u8,
+            &2u8,
             &0.123f32,
         )
         .await
@@ -132,7 +132,7 @@ async fn run_map<E: defmt::Format>(
             flash_range.clone(),
             &mut NoCache::new(),
             &mut data_buffer,
-            3,
+            &3,
         )
         .await
     );
@@ -145,7 +145,7 @@ async fn run_map<E: defmt::Format>(
             flash_range.clone(),
             &mut NoCache::new(),
             &mut data_buffer,
-            1,
+            &1,
         )
         .await
     );

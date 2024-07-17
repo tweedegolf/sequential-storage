@@ -1,9 +1,11 @@
 use core::{fmt::Debug, num::NonZeroU32};
 
-pub(crate) trait KeyPointersCache<KEY: Eq> {
+use crate::map::Key;
+
+pub(crate) trait KeyPointersCache<KEY: Key> {
     fn key_location(&self, key: &KEY) -> Option<u32>;
 
-    fn notice_key_location(&mut self, key: KEY, item_address: u32);
+    fn notice_key_location(&mut self, key: &KEY, item_address: u32);
     fn notice_key_erased(&mut self, key: &KEY);
 
     fn invalidate_cache_state(&mut self);
@@ -45,20 +47,20 @@ impl<KEY: Eq, const KEYS: usize> CachedKeyPointers<KEY, KEYS> {
     }
 }
 
-impl<KEY: Eq, const KEYS: usize> KeyPointersCache<KEY> for CachedKeyPointers<KEY, KEYS> {
+impl<KEY: Key, const KEYS: usize> KeyPointersCache<KEY> for CachedKeyPointers<KEY, KEYS> {
     fn key_location(&self, key: &KEY) -> Option<u32> {
         self.key_index(key)
             .map(|index| self.key_pointers[index].as_ref().unwrap().1.get())
     }
 
-    fn notice_key_location(&mut self, key: KEY, item_address: u32) {
-        match self.key_index(&key) {
+    fn notice_key_location(&mut self, key: &KEY, item_address: u32) {
+        match self.key_index(key) {
             Some(existing_index) => {
                 self.key_pointers[existing_index] =
-                    Some((key, NonZeroU32::new(item_address).unwrap()));
+                    Some((key.clone(), NonZeroU32::new(item_address).unwrap()));
                 move_to_front(&mut self.key_pointers, existing_index);
             }
-            None => self.insert_front((key, NonZeroU32::new(item_address).unwrap())),
+            None => self.insert_front((key.clone(), NonZeroU32::new(item_address).unwrap())),
         }
     }
 
@@ -77,12 +79,12 @@ impl<KEY: Eq, const KEYS: usize> KeyPointersCache<KEY> for CachedKeyPointers<KEY
 #[derive(Debug)]
 pub(crate) struct UncachedKeyPointers;
 
-impl<KEY: Eq> KeyPointersCache<KEY> for UncachedKeyPointers {
+impl<KEY: Key> KeyPointersCache<KEY> for UncachedKeyPointers {
     fn key_location(&self, _key: &KEY) -> Option<u32> {
         None
     }
 
-    fn notice_key_location(&mut self, _key: KEY, _item_address: u32) {}
+    fn notice_key_location(&mut self, _key: &KEY, _item_address: u32) {}
 
     fn notice_key_erased(&mut self, _key: &KEY) {}
 

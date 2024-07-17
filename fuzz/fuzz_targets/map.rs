@@ -105,7 +105,7 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                     FLASH_RANGE,
                     &mut cache,
                     &mut buf.0,
-                    key,
+                    &key,
                     &value.as_slice(),
                 )) {
                     Ok(_) => {
@@ -121,7 +121,7 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                             FLASH_RANGE,
                             &mut cache,
                             &mut buf.0,
-                            key,
+                            &key,
                         )) {
                             Ok(Some(check_item)) if check_item == value => {
                                 #[cfg(fuzzing_repro)]
@@ -152,7 +152,7 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                     FLASH_RANGE,
                     &mut cache,
                     &mut buf.0,
-                    key,
+                    &key,
                 )) {
                     Ok(Some(fetch_result)) => {
                         let map_value = map
@@ -186,7 +186,7 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                     FLASH_RANGE,
                     &mut cache,
                     &mut buf.0,
-                    key,
+                    &key,
                 )) {
                     Ok(()) => {
                         map.remove(&key);
@@ -201,7 +201,7 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                             FLASH_RANGE,
                             &mut cache,
                             &mut buf.0,
-                            key,
+                            &key,
                         )) {
                             Ok(Some(_)) => {
                                 #[cfg(fuzzing_repro)]
@@ -247,7 +247,7 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                                 FLASH_RANGE,
                                 &mut cache,
                                 &mut buf.0,
-                                key,
+                                &key,
                             )) {
                                 Ok(Some(_)) => {
                                     #[cfg(fuzzing_repro)]
