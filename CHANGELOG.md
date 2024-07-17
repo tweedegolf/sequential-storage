@@ -5,6 +5,7 @@
 ## Unreleased
 
 - Added `space_left` function for queue
+- Added a new `map::remove_all_items()` API to remove all stored items in flash.
 
 # 2.0.2 07-05-24
 
