@@ -29,3 +29,6 @@ std = []
 # Enable the implementation of the map Key trait for ArrayVec and ArrayString
 arrayvec = ["dep:arrayvec"]
 _test = ["dep:futures", "dep:approx", "std", "arrayvec"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing_repro)'] }
