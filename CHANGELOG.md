@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Add `defmt` attributes to cache types.
+
 ## 3.0.0 17-07-24
 
 - *Breaking:* Map keys are now always passed by reference. This avoids extra cloning and memory use for bigger keys.
