@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## 3.0.1 25-07-24
+
 - Add `defmt` attributes to cache types.
 
 ## 3.0.0 17-07-24
