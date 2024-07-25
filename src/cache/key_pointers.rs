@@ -12,6 +12,7 @@ pub(crate) trait KeyPointersCache<KEY: Key> {
 }
 
 #[derive(Debug)]
+#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
 pub(crate) struct CachedKeyPointers<KEY: Eq, const KEYS: usize> {
     key_pointers: [Option<(KEY, NonZeroU32)>; KEYS],
 }
@@ -77,6 +78,7 @@ impl<KEY: Key, const KEYS: usize> KeyPointersCache<KEY> for CachedKeyPointers<KE
 }
 
 #[derive(Debug)]
+#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
 pub(crate) struct UncachedKeyPointers;
 
 impl<KEY: Key> KeyPointersCache<KEY> for UncachedKeyPointers {

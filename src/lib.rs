@@ -329,6 +329,7 @@ async fn partial_close_page<S: NorFlash>(
 
 /// The state of a page
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
 enum PageState {
     /// This page was fully written and has now been sealed
     Closed,
