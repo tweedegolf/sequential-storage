@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Added `Value` impls for `bool` and `Option<T: Value>`
+
 ## 3.0.1 25-07-24
 
 - Add `defmt` attributes to cache types.

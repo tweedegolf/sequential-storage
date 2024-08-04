@@ -803,6 +803,41 @@ impl<'a, const N: usize> Value<'a> for [u8; N] {
     }
 }
 
+impl<'a> Value<'a> for bool {
+    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
+        <u8 as Value>::serialize_into(&(*self as u8), buffer)
+    }
+
+    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, SerializationError>
+    where
+        Self: Sized,
+    {
+        Ok(<u8 as Value>::deserialize_from(buffer)? != 0)
+    }
+}
+
+impl<'a, T: Value<'a>> Value<'a> for Option<T> {
+    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
+        if let Some(val) = self {
+            <bool as Value>::serialize_into(&true, buffer)?;
+            <T as Value>::serialize_into(val, buffer)
+        } else {
+            <bool as Value>::serialize_into(&false, buffer)
+        }
+    }
+
+    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, SerializationError>
+    where
+        Self: Sized,
+    {
+        if <bool as Value>::deserialize_from(buffer)? {
+            Ok(Some(<T as Value>::deserialize_from(buffer)?))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
 macro_rules! impl_map_item_num {
     ($int:ty) => {
         impl<'a> Value<'a> for $int {
