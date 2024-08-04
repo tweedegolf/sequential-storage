@@ -6,10 +6,12 @@
 //! ```text
 //! ┌──────┬──────┬──────┬──────┬──────┬──────┬──────┬──────┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
 //! │      :      :      :      │      :      │      :      │  :  :  :  :  :  │  :  :  :  :  :  :  :  :  :  │  :  :  :  :  :  │
-//! │            CRC            │   Length    │   Length'   │Pad to word align│            Data             │Pad to word align│
+//! │            CRC       ...  │   Length    │   Length'   │Pad to word align│            Data             │Pad to word align│
 //! │      :      :      :      │      :      │      :      │  :  :  :  :  :  │  :  :  :  :  :   :  :  :  : │  :  :  :  :  :  │
 //! └──────┴──────┴──────┴──────┴──────┴──────┴──────┴──────┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴───┴──┴──┴──┴─┴──┴──┴──┴──┴──┴──┘
-//! 0      1      2      3      4      5      6      7      8                 8+padding                     8+padding+length  8+padding+length+endpadding
+//! 0      1      2      3  ...  WS            WS+2          WS+4              WS+4+padding                  WS+4+padding+length  WS+4+padding+length+endpadding
+//!
+//! WS = max(4, WORD_SIZE)
 //! ```
 //!
 //! An item consists of an [ItemHeader] and some data.
@@ -21,36 +23,42 @@
 //! and has some other modifications to make corruption less likely to happen.
 //!
 
-use core::num::NonZeroU32;
 use core::ops::Range;
+use core::{marker::PhantomData, num::NonZeroU32};
 
-use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
+use embedded_storage_async::nor_flash::NorFlash;
 
 use crate::{
     cache::PrivateCacheImpl, calculate_page_address, calculate_page_end_address,
     calculate_page_index, get_page_state, round_down_to_alignment, round_down_to_alignment_usize,
     round_up_to_alignment, round_up_to_alignment_usize, AlignedBuf, Error, NorFlashExt, PageState,
-    MAX_WORD_SIZE,
+    WordclearNorFlash, MAX_WORD_SIZE,
 };
 
 #[derive(Debug, Clone)]
-pub struct ItemHeader {
+pub struct ItemHeader<S> {
     /// Length of the item payload (so not including the header and not including word alignment)
     pub length: u16,
     pub crc: Option<NonZeroU32>,
+    _p: PhantomData<S>,
 }
 
-impl ItemHeader {
-    const LENGTH: usize = 8;
+impl<S: NorFlash> ItemHeader<S> {
+    const DATA_CRC_LENGTH: usize = if <S as NorFlashExt>::WORD_SIZE < 4 {
+        4 // The minimum is 4 to hold the CRC32.
+    } else {
+        <S as NorFlashExt>::WORD_SIZE
+    };
+    const LENGTH: usize = Self::DATA_CRC_LENGTH + 4;
 
-    const DATA_CRC_FIELD: Range<usize> = 0..4;
-    const LENGTH_FIELD: Range<usize> = 4..6;
-    const LENGTH_CRC_FIELD: Range<usize> = 6..8;
+    const DATA_CRC_FIELD: Range<usize> = 0..Self::DATA_CRC_LENGTH;
+    const LENGTH_FIELD: Range<usize> = Self::DATA_CRC_LENGTH..Self::DATA_CRC_LENGTH + 2;
+    const LENGTH_CRC_FIELD: Range<usize> = Self::DATA_CRC_LENGTH + 2..Self::DATA_CRC_LENGTH + 4;
 
     /// Read the header from the flash at the given address.
     ///
     /// If the item doesn't exist or doesn't fit between the address and the end address, none is returned.
-    pub async fn read_new<S: NorFlash>(
+    pub async fn read_new(
         flash: &mut S,
         address: u32,
         end_address: u32,
@@ -90,25 +98,28 @@ impl ItemHeader {
         Ok(Some(Self {
             length: u16::from_le_bytes(header_slice[Self::LENGTH_FIELD].try_into().unwrap()),
             crc: {
-                match u32::from_le_bytes(header_slice[Self::DATA_CRC_FIELD].try_into().unwrap()) {
+                match u32::from_le_bytes(
+                    header_slice[Self::DATA_CRC_FIELD][..4].try_into().unwrap(),
+                ) {
                     0 => None,
                     value => Some(NonZeroU32::new(value).unwrap()),
                 }
             },
+            _p: PhantomData,
         }))
     }
 
-    pub async fn read_item<'d, S: NorFlash>(
+    pub async fn read_item<'d>(
         self,
         flash: &mut S,
         data_buffer: &'d mut [u8],
         address: u32,
         end_address: u32,
-    ) -> Result<MaybeItem<'d>, Error<S::Error>> {
+    ) -> Result<MaybeItem<'d, S>, Error<S::Error>> {
         match self.crc {
             None => Ok(MaybeItem::Erased(self, data_buffer)),
             Some(header_crc) => {
-                let data_address = ItemHeader::data_address::<S>(address);
+                let data_address = Self::data_address(address);
                 let read_len = round_up_to_alignment_usize::<S>(self.length as usize);
                 if data_buffer.len() < read_len {
                     return Err(Error::BufferTooSmall(read_len));
@@ -141,7 +152,7 @@ impl ItemHeader {
         }
     }
 
-    async fn write<S: NorFlash>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
+    async fn write(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
         let mut buffer = AlignedBuf([0xFF; MAX_WORD_SIZE]);
 
         buffer[Self::DATA_CRC_FIELD]
@@ -163,8 +174,43 @@ impl ItemHeader {
             })
     }
 
+    async fn clear_data_crc(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
+        let buffer = AlignedBuf([0x0; MAX_WORD_SIZE]);
+
+        flash
+            .write(address, &buffer[Self::DATA_CRC_FIELD])
+            .await
+            .map_err(|e| Error::Storage {
+                value: e,
+                #[cfg(feature = "_test")]
+                backtrace: std::backtrace::Backtrace::capture(),
+            })
+    }
+
+    /// Get the address of the start of the data for this item
+    pub const fn data_address(address: u32) -> u32 {
+        address + round_up_to_alignment::<S>(Self::LENGTH as u32)
+    }
+
+    /// Get the location of the next item in flash
+    pub const fn next_item_address(&self, address: u32) -> u32 {
+        let data_address = Self::data_address(address);
+        data_address + round_up_to_alignment::<S>(self.length as u32)
+    }
+
+    /// Calculates the amount of bytes available for data.
+    /// Essentially, it's the given amount minus the header and minus some alignment padding.
+    pub const fn available_data_bytes(total_available: u32) -> Option<u32> {
+        let data_start = Self::data_address(0);
+        let data_end = round_down_to_alignment::<S>(total_available);
+
+        data_end.checked_sub(data_start)
+    }
+}
+
+impl<S: WordclearNorFlash> ItemHeader<S> {
     /// Erase this item by setting the crc to none and overwriting the header with it
-    pub async fn erase_data<S: MultiwriteNorFlash>(
+    pub async fn erase_data(
         mut self,
         flash: &mut S,
         flash_range: Range<u32>,
@@ -173,37 +219,17 @@ impl ItemHeader {
     ) -> Result<Self, Error<S::Error>> {
         self.crc = None;
         cache.notice_item_erased::<S>(flash_range.clone(), address, &self);
-        self.write(flash, address).await?;
+        self.clear_data_crc(flash, address).await?;
         Ok(self)
-    }
-
-    /// Get the address of the start of the data for this item
-    pub const fn data_address<S: NorFlash>(address: u32) -> u32 {
-        address + round_up_to_alignment::<S>(Self::LENGTH as u32)
-    }
-
-    /// Get the location of the next item in flash
-    pub const fn next_item_address<S: NorFlash>(&self, address: u32) -> u32 {
-        let data_address = ItemHeader::data_address::<S>(address);
-        data_address + round_up_to_alignment::<S>(self.length as u32)
-    }
-
-    /// Calculates the amount of bytes available for data.
-    /// Essentially, it's the given amount minus the header and minus some alignment padding.
-    pub const fn available_data_bytes<S: NorFlash>(total_available: u32) -> Option<u32> {
-        let data_start = Self::data_address::<S>(0);
-        let data_end = round_down_to_alignment::<S>(total_available);
-
-        data_end.checked_sub(data_start)
     }
 }
 
-pub struct Item<'d> {
-    pub header: ItemHeader,
+pub struct Item<'d, S> {
+    pub header: ItemHeader<S>,
     data_buffer: &'d mut [u8],
 }
 
-impl<'d> Item<'d> {
+impl<'d, S: NorFlash> Item<'d, S> {
     pub fn data(&self) -> &[u8] {
         &self.data_buffer[..self.header.length as usize]
     }
@@ -213,20 +239,21 @@ impl<'d> Item<'d> {
     }
 
     /// Destruct the item to get back the full data buffer
-    pub fn destruct(self) -> (ItemHeader, &'d mut [u8]) {
+    pub fn destruct(self) -> (ItemHeader<S>, &'d mut [u8]) {
         (self.header, self.data_buffer)
     }
 
-    pub async fn write_new<S: NorFlash>(
+    pub async fn write_new(
         flash: &mut S,
         flash_range: Range<u32>,
         cache: &mut impl PrivateCacheImpl,
         address: u32,
         data: &'d [u8],
-    ) -> Result<ItemHeader, Error<S::Error>> {
+    ) -> Result<ItemHeader<S>, Error<S::Error>> {
         let header = ItemHeader {
             length: data.len() as u16,
             crc: Some(adapted_crc32(data)),
+            _p: PhantomData,
         };
 
         Self::write_raw(flash, flash_range, cache, &header, data, address).await?;
@@ -234,11 +261,11 @@ impl<'d> Item<'d> {
         Ok(header)
     }
 
-    async fn write_raw<S: NorFlash>(
+    async fn write_raw(
         flash: &mut S,
         flash_range: Range<u32>,
         cache: &mut impl PrivateCacheImpl,
-        header: &ItemHeader,
+        header: &ItemHeader<S>,
         data: &[u8],
         address: u32,
     ) -> Result<(), Error<S::Error>> {
@@ -247,7 +274,7 @@ impl<'d> Item<'d> {
 
         let (data_block, data_left) = data.split_at(round_down_to_alignment_usize::<S>(data.len()));
 
-        let data_address = ItemHeader::data_address::<S>(address);
+        let data_address = ItemHeader::<S>::data_address(address);
         flash
             .write(data_address, data_block)
             .await
@@ -276,7 +303,7 @@ impl<'d> Item<'d> {
         Ok(())
     }
 
-    pub async fn write<S: NorFlash>(
+    pub async fn write(
         &self,
         flash: &mut S,
         flash_range: Range<u32>,
@@ -294,7 +321,7 @@ impl<'d> Item<'d> {
         .await
     }
 
-    pub fn unborrow(self) -> ItemUnborrowed {
+    pub fn unborrow(self) -> ItemUnborrowed<S> {
         ItemUnborrowed {
             header: self.header,
             data_buffer_len: self.data_buffer.len(),
@@ -302,7 +329,7 @@ impl<'d> Item<'d> {
     }
 }
 
-impl<'d> core::fmt::Debug for Item<'d> {
+impl<'d, S: core::fmt::Debug> core::fmt::Debug for Item<'d, S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Item")
             .field("header", &self.header)
@@ -315,14 +342,14 @@ impl<'d> core::fmt::Debug for Item<'d> {
 }
 
 /// A version of [Item] that does not borrow the data. This is to circumvent the borrowchecker in some places.
-pub struct ItemUnborrowed {
-    pub header: ItemHeader,
+pub struct ItemUnborrowed<S> {
+    pub header: ItemHeader<S>,
     data_buffer_len: usize,
 }
 
-impl ItemUnborrowed {
+impl<S> ItemUnborrowed<S> {
     /// Reborrows the data. Watch out! Make sure the data buffer hasn't changed since unborrowing!
-    pub fn reborrow(self, data_buffer: &mut [u8]) -> Item<'_> {
+    pub fn reborrow(self, data_buffer: &mut [u8]) -> Item<'_, S> {
         Item {
             header: self.header,
             data_buffer: &mut data_buffer[..self.data_buffer_len],
@@ -359,7 +386,7 @@ pub async fn find_next_free_item_spot<S: NorFlash>(
         }
     };
 
-    if let Some(available) = ItemHeader::available_data_bytes::<S>(end_address - free_item_address)
+    if let Some(available) = ItemHeader::<S>::available_data_bytes(end_address - free_item_address)
     {
         if available >= data_length {
             Ok(Some(free_item_address))
@@ -371,13 +398,13 @@ pub async fn find_next_free_item_spot<S: NorFlash>(
     }
 }
 
-pub enum MaybeItem<'d> {
-    Corrupted(ItemHeader, &'d mut [u8]),
-    Erased(ItemHeader, &'d mut [u8]),
-    Present(Item<'d>),
+pub enum MaybeItem<'d, S> {
+    Corrupted(ItemHeader<S>, &'d mut [u8]),
+    Erased(ItemHeader<S>, &'d mut [u8]),
+    Present(Item<'d, S>),
 }
 
-impl<'d> core::fmt::Debug for MaybeItem<'d> {
+impl<'d, S: core::fmt::Debug> core::fmt::Debug for MaybeItem<'d, S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Corrupted(arg0, arg1) => f
@@ -391,8 +418,8 @@ impl<'d> core::fmt::Debug for MaybeItem<'d> {
     }
 }
 
-impl<'d> MaybeItem<'d> {
-    pub fn unwrap<E>(self) -> Result<Item<'d>, Error<E>> {
+impl<'d, S> MaybeItem<'d, S> {
+    pub fn unwrap<E>(self) -> Result<Item<'d, S>, Error<E>> {
         match self {
             MaybeItem::Corrupted(_, _) => Err(Error::Corrupted {
                 #[cfg(feature = "_test")]
@@ -521,7 +548,7 @@ impl ItemIter {
         &mut self,
         flash: &mut S,
         data_buffer: &'m mut [u8],
-    ) -> Result<Option<(Item<'m>, u32)>, Error<S::Error>> {
+    ) -> Result<Option<(Item<'m, S>, u32)>, Error<S::Error>> {
         let mut data_buffer = Some(data_buffer);
         while let (Some(header), address) = self.header.next(flash).await? {
             let buffer = data_buffer.take().unwrap();
@@ -558,7 +585,7 @@ impl ItemHeaderIter {
     pub async fn next<S: NorFlash>(
         &mut self,
         flash: &mut S,
-    ) -> Result<(Option<ItemHeader>, u32), Error<S::Error>> {
+    ) -> Result<(Option<ItemHeader<S>>, u32), Error<S::Error>> {
         self.traverse(flash, |_, _| false).await
     }
 
@@ -569,12 +596,12 @@ impl ItemHeaderIter {
     pub async fn traverse<S: NorFlash>(
         &mut self,
         flash: &mut S,
-        callback: impl Fn(&ItemHeader, u32) -> bool,
-    ) -> Result<(Option<ItemHeader>, u32), Error<S::Error>> {
+        callback: impl Fn(&ItemHeader<S>, u32) -> bool,
+    ) -> Result<(Option<ItemHeader<S>>, u32), Error<S::Error>> {
         loop {
             match ItemHeader::read_new(flash, self.current_address, self.end_address).await {
                 Ok(Some(header)) => {
-                    let next_address = header.next_item_address::<S>(self.current_address);
+                    let next_address = header.next_item_address(self.current_address);
                     if callback(&header, self.current_address) {
                         self.current_address = next_address;
                     } else {
@@ -587,7 +614,7 @@ impl ItemHeaderIter {
                     return Ok((None, self.current_address));
                 }
                 Err(Error::Corrupted { .. }) => {
-                    self.current_address = ItemHeader::data_address::<S>(self.current_address);
+                    self.current_address = ItemHeader::<S>::data_address(self.current_address);
                 }
                 Err(e) => return Err(e),
             }

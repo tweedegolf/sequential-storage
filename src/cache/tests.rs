@@ -23,7 +23,7 @@ mod queue_tests {
                 reads: 594934,
                 writes: 6299,
                 bytes_read: 2766058,
-                bytes_written: 53299
+                bytes_written: 45299,
             }
         );
     }
@@ -37,7 +37,7 @@ mod queue_tests {
                 reads: 308740,
                 writes: 6299,
                 bytes_read: 2479864,
-                bytes_written: 53299
+                bytes_written: 45299
             }
         );
     }
@@ -51,7 +51,7 @@ mod queue_tests {
                 reads: 211172,
                 writes: 6299,
                 bytes_read: 1699320,
-                bytes_written: 53299
+                bytes_written: 45299
             }
         );
     }

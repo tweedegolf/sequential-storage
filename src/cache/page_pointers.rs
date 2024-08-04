@@ -14,13 +14,13 @@ pub(crate) trait PagePointersCache: Debug {
         &mut self,
         flash_range: Range<u32>,
         item_address: u32,
-        item_header: &ItemHeader,
+        item_header: &ItemHeader<S>,
     );
     fn notice_item_erased<S: NorFlash>(
         &mut self,
         flash_range: Range<u32>,
         item_address: u32,
-        item_header: &ItemHeader,
+        item_header: &ItemHeader<S>,
     );
 
     fn notice_page_state(&mut self, page_index: usize, new_state: PageState);
@@ -89,11 +89,11 @@ impl<const PAGE_COUNT: usize> PagePointersCache for CachedPagePointers<PAGE_COUN
         &mut self,
         flash_range: Range<u32>,
         item_address: u32,
-        item_header: &ItemHeader,
+        item_header: &ItemHeader<S>,
     ) {
         let page_index = calculate_page_index::<S>(flash_range, item_address);
 
-        let next_item_address = item_header.next_item_address::<S>(item_address);
+        let next_item_address = item_header.next_item_address(item_address);
 
         // We only care about the furthest written item, so discard if this is an earlier item
         if let Some(first_item_after_written) = self.first_item_after_written(page_index) {
@@ -109,7 +109,7 @@ impl<const PAGE_COUNT: usize> PagePointersCache for CachedPagePointers<PAGE_COUN
         &mut self,
         flash_range: Range<u32>,
         item_address: u32,
-        item_header: &ItemHeader,
+        item_header: &ItemHeader<S>,
     ) {
         let page_index = calculate_page_index::<S>(flash_range.clone(), item_address);
 
@@ -120,7 +120,7 @@ impl<const PAGE_COUNT: usize> PagePointersCache for CachedPagePointers<PAGE_COUN
 
         if item_address == next_unerased_item {
             self.after_erased_pointers[page_index] =
-                NonZeroU32::new(item_header.next_item_address::<S>(item_address));
+                NonZeroU32::new(item_header.next_item_address(item_address));
         }
     }
 
@@ -155,7 +155,7 @@ impl PagePointersCache for UncachedPagePointers {
         &mut self,
         _flash_range: Range<u32>,
         _item_address: u32,
-        _item_header: &ItemHeader,
+        _item_header: &ItemHeader<S>,
     ) {
     }
 
@@ -163,7 +163,7 @@ impl PagePointersCache for UncachedPagePointers {
         &mut self,
         _flash_range: Range<u32>,
         _item_address: u32,
-        _item_header: &ItemHeader,
+        _item_header: &ItemHeader<S>,
     ) {
     }
 

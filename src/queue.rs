@@ -60,7 +60,6 @@ use crate::item::{find_next_free_item_spot, is_page_empty, Item, ItemHeader, Ite
 use self::{cache::CacheImpl, item::ItemUnborrowed};
 
 use super::*;
-use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 
 /// Push data into the queue in the given flash memory with the given range.
 /// The data can only be taken out with the [pop] function.
@@ -110,7 +109,7 @@ async fn push_inner<S: NorFlash>(
     // Data must fit in a single page
     if data.len() > u16::MAX as usize
         || data.len()
-            > calculate_page_size::<S>().saturating_sub(ItemHeader::data_address::<S>(0) as usize)
+            > calculate_page_size::<S>().saturating_sub(ItemHeader::<S>::data_address(0) as usize)
     {
         cache.unmark_dirty();
         return Err(Error::ItemTooBig);
@@ -242,7 +241,7 @@ pub async fn peek<'d, S: NorFlash>(
 /// You should not depend on that data.
 ///
 /// If the data buffer is not big enough an error is returned.
-pub async fn pop<'d, S: MultiwriteNorFlash>(
+pub async fn pop<'d, S: WordclearNorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl CacheImpl,
@@ -353,7 +352,7 @@ impl<'s, S: NorFlash, CI: CacheImpl> QueueIterator<'s, S, CI> {
     async fn next_inner(
         &mut self,
         data_buffer: &mut [u8],
-    ) -> Result<Option<(ItemUnborrowed, u32)>, Error<S::Error>> {
+    ) -> Result<Option<(ItemUnborrowed<S>, u32)>, Error<S::Error>> {
         let mut data_buffer = Some(data_buffer);
 
         if self.cache.is_dirty() {
@@ -421,7 +420,7 @@ impl<'s, S: NorFlash, CI: CacheImpl> QueueIterator<'s, S, CI> {
 
                 match maybe_item {
                     item::MaybeItem::Corrupted(header, db) => {
-                        let next_address = header.next_item_address::<S>(found_item_address);
+                        let next_address = header.next_item_address(found_item_address);
                         self.next_address = if next_address >= page_data_end_address {
                             NextAddress::PageAfter(current_page)
                         } else {
@@ -431,7 +430,7 @@ impl<'s, S: NorFlash, CI: CacheImpl> QueueIterator<'s, S, CI> {
                     }
                     item::MaybeItem::Erased(_, _) => unreachable!("Item is already erased"),
                     item::MaybeItem::Present(item) => {
-                        let next_address = item.header.next_item_address::<S>(found_item_address);
+                        let next_address = item.header.next_item_address(found_item_address);
                         self.next_address = if next_address >= page_data_end_address {
                             NextAddress::PageAfter(current_page)
                         } else {
@@ -453,7 +452,7 @@ impl<'s, S: NorFlash, CI: CacheImpl> QueueIterator<'s, S, CI> {
 pub struct QueueIteratorEntry<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> {
     iter: &'q mut QueueIterator<'s, S, CI>,
     address: u32,
-    item: Item<'d>,
+    item: Item<'d, S>,
 }
 
 impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> Deref for QueueIteratorEntry<'s, 'd, 'q, S, CI> {
@@ -482,7 +481,7 @@ impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'s, 'd, 'q, S, C
     /// future peeks won't find this data anymore.
     pub async fn pop(self) -> Result<&'d mut [u8], Error<S::Error>>
     where
-        S: MultiwriteNorFlash,
+        S: WordclearNorFlash,
     {
         let (header, data_buffer) = self.item.destruct();
         let ret = &mut data_buffer[..header.length as usize];
@@ -579,7 +578,7 @@ async fn find_max_fit_inner<S: NorFlash>(
     };
 
     cache.unmark_dirty();
-    Ok(ItemHeader::available_data_bytes::<S>(
+    Ok(ItemHeader::<S>::available_data_bytes(
         page_data_end_address - next_item_address,
     ))
 }
@@ -657,7 +656,7 @@ async fn space_left_inner<S: NorFlash>(
             }
         };
 
-        if ItemHeader::available_data_bytes::<S>(page_data_end_address - next_item_address)
+        if ItemHeader::<S>::available_data_bytes(page_data_end_address - next_item_address)
             .is_none()
         {
             // No data fits on this partial open page anymore.
@@ -1237,7 +1236,7 @@ mod tests {
                 avg_reads: 8.0188,
                 avg_writes: 1.0,
                 avg_bytes_read: 96.4224,
-                avg_bytes_written: 8.0
+                avg_bytes_written: 4.0
             }
         );
     }
@@ -1347,7 +1346,7 @@ mod tests {
                 avg_reads: 82.618,
                 avg_writes: 1.0,
                 avg_bytes_read: 567.9904,
-                avg_bytes_written: 8.0
+                avg_bytes_written: 4.0
             }
         );
     }
