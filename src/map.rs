@@ -530,6 +530,9 @@ async fn store_item_inner<'d, K: Key, S: NorFlash>(
 ///
 /// All items in flash have to be read and deserialized to find the items with the key.
 /// This is unlikely to be cached well.
+///
+/// Alternatively, e.g. when you don't have a [MultiwriteNorFlash] flash, you could store your value inside an Option
+/// and store the value `None` to mark it as erased.
 /// </div>
 ///
 /// <div class="warning">
@@ -564,7 +567,11 @@ pub async fn remove_item<K: Key, S: MultiwriteNorFlash>(
 /// new items are stored again.
 ///
 /// <div class="warning">
-/// This might be really slow!
+/// This might be really slow! This doesn't simply erase flash, but goes through all items and marks them as deleted.
+/// This is better for flash endurance.
+///
+/// You might want to simply erase the flash range, e.g. if your flash does not implement [MultiwriteNorFlash].
+/// Consider using the helper method for that: [crate::erase_all].
 /// </div>
 ///
 /// <div class="warning">
