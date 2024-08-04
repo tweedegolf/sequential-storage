@@ -97,8 +97,6 @@
 //! For your convenience there are premade implementations for the [Key] and [Value] traits.
 //!
 
-use embedded_storage_async::nor_flash::MultiwriteNorFlash;
-
 use crate::item::{find_next_free_item_spot, Item, ItemHeader, ItemIter};
 
 use self::{
@@ -161,7 +159,7 @@ async fn fetch_item_with_location<'d, K: Key, S: NorFlash>(
     cache: &mut impl PrivateKeyCacheImpl<K>,
     data_buffer: &'d mut [u8],
     search_key: &K,
-) -> Result<Option<(ItemUnborrowed, u32, Option<usize>)>, Error<S::Error>> {
+) -> Result<Option<(ItemUnborrowed<S>, u32, Option<usize>)>, Error<S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
     assert!(flash_range.end - flash_range.start >= S::ERASE_SIZE as u32 * 2);
@@ -415,7 +413,7 @@ async fn store_item_inner<'d, K: Key, S: NorFlash>(
             if item_data_length > u16::MAX as usize
                 || item_data_length
                     > calculate_page_size::<S>()
-                        .saturating_sub(ItemHeader::data_address::<S>(0) as usize)
+                        .saturating_sub(ItemHeader::<S>::data_address(0) as usize)
             {
                 cache.unmark_dirty();
                 return Err(Error::ItemTooBig);
@@ -543,7 +541,7 @@ async fn store_item_inner<'d, K: Key, S: NorFlash>(
 /// Also watch out for using integers. This function will take any integer and it's easy to pass the wrong type.
 ///
 /// </div>
-pub async fn remove_item<K: Key, S: MultiwriteNorFlash>(
+pub async fn remove_item<K: Key, S: WordclearNorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,
@@ -580,7 +578,7 @@ pub async fn remove_item<K: Key, S: MultiwriteNorFlash>(
 /// *multiple [Value] types. See the module-level docs for more information about this.*
 ///
 /// </div>
-pub async fn remove_all_items<K: Key, S: MultiwriteNorFlash>(
+pub async fn remove_all_items<K: Key, S: WordclearNorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,
@@ -594,7 +592,7 @@ pub async fn remove_all_items<K: Key, S: MultiwriteNorFlash>(
 }
 
 /// If `search_key` is None, then all items will be removed
-async fn remove_item_inner<K: Key, S: MultiwriteNorFlash>(
+async fn remove_item_inner<K: Key, S: WordclearNorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,
@@ -915,9 +913,7 @@ async fn migrate_items<K: Key, S: NorFlash>(
             found_item
                 .write(flash, flash_range.clone(), cache, next_page_write_address)
                 .await?;
-            next_page_write_address = found_item
-                .header
-                .next_item_address::<S>(next_page_write_address);
+            next_page_write_address = found_item.header.next_item_address(next_page_write_address);
         }
     }
 

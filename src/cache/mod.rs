@@ -96,7 +96,7 @@ pub(crate) trait PrivateCacheImpl: Invalidate {
         &mut self,
         flash_range: Range<u32>,
         item_address: u32,
-        item_header: &ItemHeader,
+        item_header: &ItemHeader<S>,
     ) {
         self.mark_dirty();
         self.page_pointers()
@@ -108,7 +108,7 @@ pub(crate) trait PrivateCacheImpl: Invalidate {
         &mut self,
         flash_range: Range<u32>,
         item_address: u32,
-        item_header: &ItemHeader,
+        item_header: &ItemHeader<S>,
     ) {
         self.mark_dirty();
         self.page_pointers()

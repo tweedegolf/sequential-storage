@@ -12,7 +12,7 @@ use core::{
     fmt::Debug,
     ops::{Deref, DerefMut, Range},
 };
-use embedded_storage_async::nor_flash::NorFlash;
+use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
 use map::SerializationError;
 
 #[cfg(feature = "arrayvec")]
@@ -31,6 +31,12 @@ pub mod mock_flash;
 /// Stm32 internal flash has 256-bit words, so 32 bytes.
 /// Many flashes have 4-byte or 1-byte words.
 const MAX_WORD_SIZE: usize = 32;
+
+// TODO: Move this to `embedded-storage`.
+/// Marker trait that guarantees that a word can be cleared to all 0s.
+pub trait WordclearNorFlash: NorFlash {}
+
+impl<T> WordclearNorFlash for T where T: MultiwriteNorFlash {}
 
 /// Resets the flash in the entire given flash range.
 ///
@@ -54,7 +60,7 @@ pub async fn erase_all<S: NorFlash>(
 /// The associated data of each item is additionally padded to a full flash word size, but that's not part of this number.  
 /// This means the full item length is `returned number + (data length).next_multiple_of(S::WORD_SIZE)`.
 pub const fn item_overhead_size<S: NorFlash>() -> u32 {
-    item::ItemHeader::data_address::<S>(0)
+    item::ItemHeader::<S>::data_address(0)
 }
 
 // Type representing buffer aligned to 4 byte boundary.
