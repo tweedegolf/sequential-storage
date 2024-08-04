@@ -4,7 +4,7 @@
 
 ## Unreleased
 
-- Added `Value` impls for `bool` and `Option<T: Value>`
+- Added `Value` impls for `bool`, `Option<T: Value>`, and `[T: Value; N]`
 
 ## 3.0.1 25-07-24
 

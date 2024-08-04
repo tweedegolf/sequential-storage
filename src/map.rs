@@ -97,6 +97,8 @@
 //! For your convenience there are premade implementations for the [Key] and [Value] traits.
 //!
 
+use core::mem::MaybeUninit;
+
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 
 use crate::item::{find_next_free_item_spot, Item, ItemHeader, ItemIter};
@@ -783,26 +785,6 @@ impl<'a> Value<'a> for &'a [u8] {
     }
 }
 
-impl<'a, const N: usize> Value<'a> for [u8; N] {
-    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        if buffer.len() < self.len() {
-            return Err(SerializationError::BufferTooSmall);
-        }
-
-        buffer[..self.len()].copy_from_slice(self);
-        Ok(self.len())
-    }
-
-    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, SerializationError>
-    where
-        Self: Sized,
-    {
-        buffer
-            .try_into()
-            .map_err(|_| SerializationError::BufferTooSmall)
-    }
-}
-
 impl<'a> Value<'a> for bool {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         <u8 as Value>::serialize_into(&(*self as u8), buffer)
@@ -834,6 +816,45 @@ impl<'a, T: Value<'a>> Value<'a> for Option<T> {
             Ok(Some(<T as Value>::deserialize_from(buffer)?))
         } else {
             Ok(None)
+        }
+    }
+}
+
+impl<'a, T: Value<'a>, const N: usize> Value<'a> for [T; N] {
+    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
+        let mut size = 0;
+        for v in self {
+            size += <T as Value>::serialize_into(v, buffer)?;
+        }
+
+        Ok(size)
+    }
+
+    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, SerializationError>
+    where
+        Self: Sized,
+    {
+        let mut array = MaybeUninit::<[T; N]>::uninit();
+
+        if N == 0 {
+            // SAFETY: This type is of zero size.
+            return Ok(unsafe { array.assume_init() });
+        }
+
+        let mut ptr = array.as_mut_ptr() as *mut T;
+
+        // SAFETY:
+        // 1. The pointers are all inside the array via knowing `N`.
+        // 2. `ptr.add(1)` does never point outside the array.
+        // 3. `MaybeUninit::assume_init` is upheld with all values being filled.
+        unsafe {
+            for _ in 0..N - 1 {
+                *ptr = <T as Value>::deserialize_from(buffer)?;
+                ptr = ptr.add(1);
+            }
+            *ptr = <T as Value>::deserialize_from(buffer)?;
+
+            Ok(array.assume_init())
         }
     }
 }
