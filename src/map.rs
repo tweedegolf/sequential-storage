@@ -97,6 +97,8 @@
 //! For your convenience there are premade implementations for the [Key] and [Value] traits.
 //!
 
+use core::mem::{size_of, MaybeUninit};
+
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 
 use crate::item::{find_next_free_item_spot, Item, ItemHeader, ItemIter};
@@ -693,7 +695,7 @@ macro_rules! impl_key_num {
     ($int:ty) => {
         impl Key for $int {
             fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-                let len = core::mem::size_of::<Self>();
+                let len = size_of::<Self>();
                 if buffer.len() < len {
                     return Err(SerializationError::BufferTooSmall);
                 }
@@ -702,19 +704,19 @@ macro_rules! impl_key_num {
             }
 
             fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), SerializationError> {
-                let len = core::mem::size_of::<Self>();
+                let len = size_of::<Self>();
                 if buffer.len() < len {
                     return Err(SerializationError::BufferTooSmall);
                 }
 
                 Ok((
                     Self::from_le_bytes(buffer[..len].try_into().unwrap()),
-                    core::mem::size_of::<Self>(),
+                    size_of::<Self>(),
                 ))
             }
 
             fn get_len(_buffer: &[u8]) -> Result<usize, SerializationError> {
-                Ok(core::mem::size_of::<Self>())
+                Ok(size_of::<Self>())
             }
         }
     };
@@ -772,6 +774,82 @@ pub trait Value<'a> {
         Self: Sized;
 }
 
+impl<'a> Value<'a> for bool {
+    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
+        <u8 as Value>::serialize_into(&(*self as u8), buffer)
+    }
+
+    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, SerializationError>
+    where
+        Self: Sized,
+    {
+        Ok(<u8 as Value>::deserialize_from(buffer)? != 0)
+    }
+}
+
+impl<'a, T: Value<'a>> Value<'a> for Option<T> {
+    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
+        if let Some(val) = self {
+            <bool as Value>::serialize_into(&true, buffer)?;
+            <T as Value>::serialize_into(val, buffer)
+        } else {
+            <bool as Value>::serialize_into(&false, buffer)
+        }
+    }
+
+    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, SerializationError>
+    where
+        Self: Sized,
+    {
+        if <bool as Value>::deserialize_from(buffer)? {
+            Ok(Some(<T as Value>::deserialize_from(buffer)?))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl<'a, T: Value<'a>, const N: usize> Value<'a> for [T; N] {
+    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
+        if buffer.len() < size_of::<T>() * N {
+            return Err(SerializationError::BufferTooSmall);
+        }
+
+        let mut size = 0;
+        for v in self {
+            size += <T as Value>::serialize_into(v, &mut buffer[size..])?;
+        }
+
+        Ok(size)
+    }
+
+    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, SerializationError>
+    where
+        Self: Sized,
+    {
+        let mut array = MaybeUninit::<[T; N]>::uninit();
+
+        if N == 0 {
+            // SAFETY: This type is of zero size.
+            return Ok(unsafe { array.assume_init() });
+        }
+
+        let ptr = array.as_mut_ptr() as *mut T;
+
+        // SAFETY:
+        // 1. The pointers are all inside the array via knowing `N`.
+        // 2. `ptr.add(1)` does never point outside the array.
+        // 3. `MaybeUninit::assume_init` is upheld with all values being filled.
+        unsafe {
+            for i in 0..N {
+                *ptr.add(i) = <T as Value>::deserialize_from(&buffer[i * size_of::<T>()..])?;
+            }
+
+            Ok(array.assume_init())
+        }
+    }
+}
+
 impl<'a> Value<'a> for &'a [u8] {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         if buffer.len() < self.len() {
@@ -787,26 +865,6 @@ impl<'a> Value<'a> for &'a [u8] {
         Self: Sized,
     {
         Ok(buffer)
-    }
-}
-
-impl<'a, const N: usize> Value<'a> for [u8; N] {
-    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        if buffer.len() < self.len() {
-            return Err(SerializationError::BufferTooSmall);
-        }
-
-        buffer[..self.len()].copy_from_slice(self);
-        Ok(self.len())
-    }
-
-    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, SerializationError>
-    where
-        Self: Sized,
-    {
-        buffer
-            .try_into()
-            .map_err(|_| SerializationError::BufferTooSmall)
     }
 }
 
@@ -1033,7 +1091,7 @@ mod tests {
             &mut cache::NoCache::new(),
             &mut data_buffer,
             &0u8,
-            &[5],
+            &[5u8],
         )
         .await
         .unwrap();
@@ -1043,7 +1101,7 @@ mod tests {
             &mut cache::NoCache::new(),
             &mut data_buffer,
             &0u8,
-            &[5, 6],
+            &[5u8, 6],
         )
         .await
         .unwrap();
@@ -1066,7 +1124,7 @@ mod tests {
             &mut cache::NoCache::new(),
             &mut data_buffer,
             &1u8,
-            &[2, 2, 2, 2, 2, 2],
+            &[2u8, 2, 2, 2, 2, 2],
         )
         .await
         .unwrap();
@@ -1455,7 +1513,7 @@ mod tests {
             &mut cache::NoCache::new(),
             &mut [0; 1024],
             &0u8,
-            &[0; 1024 - 4 * 2 - 8 - 1],
+            &[0u8; 1024 - 4 * 2 - 8 - 1],
         )
         .await
         .unwrap();
@@ -1467,7 +1525,7 @@ mod tests {
                 &mut cache::NoCache::new(),
                 &mut [0; 1024],
                 &0u8,
-                &[0; 1024 - 4 * 2 - 8 - 1 + 1],
+                &[0u8; 1024 - 4 * 2 - 8 - 1 + 1],
             )
             .await,
             Err(Error::ItemTooBig)
