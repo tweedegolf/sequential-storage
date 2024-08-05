@@ -4,7 +4,8 @@
 
 ## Unreleased
 
-- Added `Value` impls for `bool`, `Option<T: Value>`, and `[T: Value; N]`
+- *Breaking:* Added `Value` impls for `bool`, `Option<T: Value>`, and `[T: Value; N]`.
+  *This can break existing code because it changes type inference, be mindfull of that!*
 
 ## 3.0.1 25-07-24
 
