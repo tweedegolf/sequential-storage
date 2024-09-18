@@ -6,6 +6,7 @@
 
 - *Breaking:* Added `Value` impls for `bool`, `Option<T: Value>`, and `[T: Value; N]`.
   *This can break existing code because it changes type inference, be mindfull of that!*
+- Expose map item iterator, to load all items in one pass
 
 ## 3.0.1 25-07-24
 
