@@ -3,6 +3,7 @@
     "rust-analyzer.linkedProjects": [
         "Cargo.toml",
         "fuzz/Cargo.toml",
-        "example/Cargo.toml"
+        "example/Cargo.toml",
+        "host-tool/Cargo.toml"
     ]
 }
