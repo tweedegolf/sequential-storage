@@ -7,13 +7,15 @@
 // - flash erase size is quite big, aka, this is a paged flash
 // - flash write size is quite small, so it writes words and not full pages
 
-use cache::PrivateCacheImpl;
+use cache::{CacheImpl, PrivateCacheImpl};
 use core::{
     fmt::Debug,
     ops::{Deref, DerefMut, Range},
 };
 use embedded_storage_async::nor_flash::NorFlash;
+pub use item::ItemIter;
 use map::SerializationError;
+use queue::find_oldest_page;
 
 #[cfg(feature = "arrayvec")]
 mod arrayvec_impl;
@@ -31,6 +33,65 @@ pub mod mock_flash;
 /// Stm32 internal flash has 256-bit words, so 32 bytes.
 /// Many flashes have 4-byte or 1-byte words.
 const MAX_WORD_SIZE: usize = 32;
+
+/// Storage configuration
+pub struct Storage<'s, S: NorFlash, CI: CacheImpl> {
+    /// flash
+    pub flash: &'s mut S,
+    /// range
+    pub flash_range: Range<u32>,
+    /// cache
+    pub cache: &'s mut CI,
+}
+impl<'s, S: NorFlash, CI: CacheImpl> Storage<'s, S, CI> {
+    /// constructor
+    pub fn new(flash: &'s mut S, flash_range: Range<u32>, cache: &'s mut CI) -> Self {
+        Self {
+            flash,
+            flash_range,
+            cache,
+        }
+    }
+
+    /// return iterator for used page
+    pub async fn iter(&mut self) -> Result<PageIter, Error<S::Error>> {
+        let index = find_oldest_page(self.flash, self.flash_range.clone(), self.cache).await?;
+
+        Ok(PageIter { index })
+    }
+}
+/// An iterator-like interface to iterate over Closed and PartialOpen pages
+/// This goes from oldest to newest.
+pub struct PageIter {
+    index: usize,
+}
+impl PageIter {
+    /// return iterator for items in page
+    pub async fn next<'s, S: NorFlash, CI: CacheImpl>(
+        &mut self,
+        storage: &mut Storage<'s, S, CI>,
+    ) -> Result<Option<ItemIter>, Error<S::Error>> {
+        let r = match get_page_state(
+            storage.flash,
+            storage.flash_range.clone(),
+            storage.cache,
+            self.index,
+        )
+        .await
+        {
+            Ok(PageState::Closed) | Ok(PageState::PartialOpen) => Some(ItemIter::new(
+                calculate_page_address::<S>(storage.flash_range.clone(), self.index),
+                calculate_page_end_address::<S>(storage.flash_range.clone(), self.index),
+            )),
+            _ => None,
+        };
+        self.index += 1;
+        if self.index >= storage.flash_range.len() / S::ERASE_SIZE {
+            self.index = 0;
+        }
+        Ok(r)
+    }
+}
 
 /// Resets the flash in the entire given flash range.
 ///

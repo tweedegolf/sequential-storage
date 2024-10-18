@@ -506,17 +506,19 @@ pub async fn is_page_empty<S: NorFlash>(
     }
 }
 
+/// An iterator-like interface to iterate over items in page
 pub struct ItemIter {
     header: ItemHeaderIter,
 }
 
 impl ItemIter {
-    pub fn new(start_address: u32, end_address: u32) -> Self {
+    pub(crate) fn new(start_address: u32, end_address: u32) -> Self {
         Self {
             header: ItemHeaderIter::new(start_address, end_address),
         }
     }
 
+    /// iterator next
     pub async fn next<'m, S: NorFlash>(
         &mut self,
         flash: &mut S,
@@ -543,7 +545,7 @@ impl ItemIter {
 
 pub struct ItemHeaderIter {
     current_address: u32,
-    end_address: u32,
+    pub(crate) end_address: u32,
 }
 
 impl ItemHeaderIter {
