@@ -6,6 +6,7 @@
 
 - *Breaking:* Added `Value` impls for `bool`, `Option<T: Value>`, and `[T: Value; N]`.
   *This can break existing code because it changes type inference, be mindfull of that!*
+- *Breaking:* Queue iterators no longer take reference to the flash instance. Instead, iterator method signatures change to take a reference to the flash instance.
 
 ## 3.0.1 25-07-24
 

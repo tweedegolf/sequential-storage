@@ -235,7 +235,7 @@ fn fuzz(ops: Input, mut cache: impl CacheImpl + Debug) {
 
                 let mut popped_items = 0;
                 for (i, do_pop) in pop_sequence.iter().enumerate() {
-                    match block_on(iterator.next(&mut buf.0)) {
+                    match block_on(iterator.next(&mut flash, &mut buf.0)) {
                         Ok(Some(value)) => {
                             assert_eq!(
                                 &*value,
@@ -243,7 +243,7 @@ fn fuzz(ops: Input, mut cache: impl CacheImpl + Debug) {
                             );
 
                             if *do_pop {
-                                let popped = block_on(value.pop());
+                                let popped = block_on(value.pop(&mut flash));
 
                                 match popped {
                                     Ok(value) => {

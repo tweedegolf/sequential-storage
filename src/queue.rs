@@ -197,10 +197,10 @@ async fn push_inner<S: NorFlash>(
 /// The returned entry has a [QueueIteratorEntry::pop] function with which you can decide to pop the item
 /// after you've seen the contents.
 pub async fn iter<'s, S: NorFlash, CI: CacheImpl>(
-    flash: &'s mut S,
+    flash: &mut S,
     flash_range: Range<u32>,
     cache: &'s mut CI,
-) -> Result<QueueIterator<'s, S, CI>, Error<S::Error>> {
+) -> Result<QueueIterator<'s, CI>, Error<S::Error>> {
     // Note: Corruption repair is done in these functions already
     QueueIterator::new(flash, flash_range, cache).await
 }
@@ -224,7 +224,7 @@ pub async fn peek<'d, S: NorFlash>(
     // Note: Corruption repair is done in these functions already
     let mut iterator = iter(flash, flash_range, cache).await?;
 
-    let next_value = iterator.next(data_buffer).await?;
+    let next_value = iterator.next(flash, data_buffer).await?;
 
     match next_value {
         Some(entry) => Ok(Some(entry.into_buf())),
@@ -250,23 +250,22 @@ pub async fn pop<'d, S: MultiwriteNorFlash>(
 ) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
     let mut iterator = iter(flash, flash_range, cache).await?;
 
-    let next_value = iterator.next(data_buffer).await?;
+    let next_value = iterator.next(flash, data_buffer).await?;
 
     match next_value {
-        Some(entry) => Ok(Some(entry.pop().await?)),
+        Some(entry) => Ok(Some(entry.pop(flash).await?)),
         None => Ok(None),
     }
 }
 
 /// An iterator-like interface for peeking into data stored in flash with the option to pop it.
-pub struct QueueIterator<'s, S: NorFlash, CI: CacheImpl> {
-    flash: &'s mut S,
+pub struct QueueIterator<'s, CI: CacheImpl> {
     flash_range: Range<u32>,
     cache: &'s mut CI,
     next_address: NextAddress,
 }
 
-impl<'d, S: NorFlash, CI: CacheImpl> Debug for QueueIterator<'d, S, CI> {
+impl<'d, CI: CacheImpl> Debug for QueueIterator<'d, CI> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("QueueIterator")
             .field("current_address", &self.next_address)
@@ -280,9 +279,9 @@ enum NextAddress {
     PageAfter(usize),
 }
 
-impl<'s, S: NorFlash, CI: CacheImpl> QueueIterator<'s, S, CI> {
-    async fn new(
-        flash: &'s mut S,
+impl<'s, CI: CacheImpl> QueueIterator<'s, CI> {
+    async fn new<S: NorFlash>(
+        flash: &mut S,
         flash_range: Range<u32>,
         cache: &'s mut CI,
     ) -> Result<Self, Error<S::Error>> {
@@ -292,14 +291,13 @@ impl<'s, S: NorFlash, CI: CacheImpl> QueueIterator<'s, S, CI> {
         )?;
 
         Ok(Self {
-            flash,
             flash_range,
             cache,
             next_address: start_address,
         })
     }
 
-    async fn find_start_address(
+    async fn find_start_address<S: NorFlash>(
         flash: &mut S,
         flash_range: Range<u32>,
         cache: &mut CI,
@@ -332,13 +330,14 @@ impl<'s, S: NorFlash, CI: CacheImpl> QueueIterator<'s, S, CI> {
     /// If there are no more entries, None is returned.
     ///
     /// The `data_buffer` has to be large enough to be able to hold the largest item in flash.
-    pub async fn next<'d, 'q>(
+    pub async fn next<'d, 'q, S: NorFlash>(
         &'q mut self,
+        flash: &mut S,
         data_buffer: &'d mut [u8],
-    ) -> Result<Option<QueueIteratorEntry<'s, 'd, 'q, S, CI>>, Error<S::Error>> {
+    ) -> Result<Option<QueueIteratorEntry<'s, 'd, 'q, CI>>, Error<S::Error>> {
         let value = run_with_auto_repair!(
-            function = self.next_inner(data_buffer).await,
-            repair = try_repair(self.flash, self.flash_range.clone(), self.cache).await?
+            function = self.next_inner(flash, data_buffer).await,
+            repair = try_repair(flash, self.flash_range.clone(), self.cache).await?
         );
 
         value.map(|v| {
@@ -350,8 +349,9 @@ impl<'s, S: NorFlash, CI: CacheImpl> QueueIterator<'s, S, CI> {
         })
     }
 
-    async fn next_inner(
+    async fn next_inner<S: NorFlash>(
         &mut self,
+        flash: &mut S,
         data_buffer: &mut [u8],
     ) -> Result<Option<(ItemUnborrowed, u32)>, Error<S::Error>> {
         let mut data_buffer = Some(data_buffer);
@@ -365,21 +365,12 @@ impl<'s, S: NorFlash, CI: CacheImpl> QueueIterator<'s, S, CI> {
             let (current_page, current_address) = match self.next_address {
                 NextAddress::PageAfter(previous_page) => {
                     let next_page = next_page::<S>(self.flash_range.clone(), previous_page);
-                    if get_page_state(
-                        self.flash,
-                        self.flash_range.clone(),
-                        &mut self.cache,
-                        next_page,
-                    )
-                    .await?
-                    .is_open()
+                    if get_page_state(flash, self.flash_range.clone(), &mut self.cache, next_page)
+                        .await?
+                        .is_open()
                         || next_page
-                            == find_oldest_page(
-                                self.flash,
-                                self.flash_range.clone(),
-                                &mut self.cache,
-                            )
-                            .await?
+                            == find_oldest_page(flash, self.flash_range.clone(), &mut self.cache)
+                                .await?
                     {
                         self.cache.unmark_dirty();
                         return Ok(None);
@@ -406,13 +397,12 @@ impl<'s, S: NorFlash, CI: CacheImpl> QueueIterator<'s, S, CI> {
             // Search for the first item with data
             let mut it = ItemHeaderIter::new(current_address, page_data_end_address);
             // No need to worry about cache here since that has been dealt with at the creation of this iterator
-            if let (Some(found_item_header), found_item_address) = it
-                .traverse(self.flash, |header, _| header.crc.is_none())
-                .await?
+            if let (Some(found_item_header), found_item_address) =
+                it.traverse(flash, |header, _| header.crc.is_none()).await?
             {
                 let maybe_item = found_item_header
                     .read_item(
-                        self.flash,
+                        flash,
                         data_buffer.take().unwrap(),
                         found_item_address,
                         page_data_end_address,
@@ -450,13 +440,13 @@ impl<'s, S: NorFlash, CI: CacheImpl> QueueIterator<'s, S, CI> {
 }
 
 /// An entry in the iteration over the queue flash
-pub struct QueueIteratorEntry<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> {
-    iter: &'q mut QueueIterator<'s, S, CI>,
+pub struct QueueIteratorEntry<'s, 'd, 'q, CI: CacheImpl> {
+    iter: &'q mut QueueIterator<'s, CI>,
     address: u32,
     item: Item<'d>,
 }
 
-impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> Deref for QueueIteratorEntry<'s, 'd, 'q, S, CI> {
+impl<'s, 'd, 'q, CI: CacheImpl> Deref for QueueIteratorEntry<'s, 'd, 'q, CI> {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
@@ -464,13 +454,13 @@ impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> Deref for QueueIteratorEntry<'s, 'd
     }
 }
 
-impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> DerefMut for QueueIteratorEntry<'s, 'd, 'q, S, CI> {
+impl<'s, 'd, 'q, CI: CacheImpl> DerefMut for QueueIteratorEntry<'s, 'd, 'q, CI> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.item.data_mut()
     }
 }
 
-impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'s, 'd, 'q, S, CI> {
+impl<'s, 'd, 'q, CI: CacheImpl> QueueIteratorEntry<'s, 'd, 'q, CI> {
     /// Get a mutable reference to the data of this entry, but consume the entry too.
     /// This function has some relaxed lifetime constraints compared to the deref impls.
     pub fn into_buf(self) -> &'d mut [u8] {
@@ -480,7 +470,7 @@ impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'s, 'd, 'q, S, C
 
     /// Pop the data in flash that corresponds to this entry. This makes it so
     /// future peeks won't find this data anymore.
-    pub async fn pop(self) -> Result<&'d mut [u8], Error<S::Error>>
+    pub async fn pop<S>(self, flash: &mut S) -> Result<&'d mut [u8], Error<S::Error>>
     where
         S: MultiwriteNorFlash,
     {
@@ -489,7 +479,7 @@ impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'s, 'd, 'q, S, C
 
         header
             .erase_data(
-                self.iter.flash,
+                flash,
                 self.iter.flash_range.clone(),
                 &mut self.iter.cache,
                 self.address,
@@ -1110,13 +1100,13 @@ mod tests {
             let mut iterator = iter(&mut flash, flash_range.clone(), &mut cache)
                 .await
                 .unwrap();
-            peek_stats += start_snapshot.compare_to(iterator.flash.stats_snapshot());
+            peek_stats += start_snapshot.compare_to(flash.stats_snapshot());
             for i in 0..5 {
-                let start_snapshot = iterator.flash.stats_snapshot();
+                let start_snapshot = flash.stats_snapshot();
                 let data = [i as u8; 50];
                 assert_eq!(
                     iterator
-                        .next(&mut data_buffer)
+                        .next(&mut flash, &mut data_buffer)
                         .await
                         .unwrap()
                         .unwrap()
@@ -1125,31 +1115,31 @@ mod tests {
                     "At {i}"
                 );
                 peeks += 1;
-                peek_stats += start_snapshot.compare_to(iterator.flash.stats_snapshot());
+                peek_stats += start_snapshot.compare_to(flash.stats_snapshot());
             }
 
             let start_snapshot = flash.stats_snapshot();
             let mut iterator = iter(&mut flash, flash_range.clone(), &mut cache)
                 .await
                 .unwrap();
-            pop_stats += start_snapshot.compare_to(iterator.flash.stats_snapshot());
+            pop_stats += start_snapshot.compare_to(flash.stats_snapshot());
             for i in 0..5 {
-                let start_snapshot = iterator.flash.stats_snapshot();
+                let start_snapshot = flash.stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
                     iterator
-                        .next(&mut data_buffer)
+                        .next(&mut flash, &mut data_buffer)
                         .await
                         .unwrap()
                         .unwrap()
-                        .pop()
+                        .pop(&mut flash)
                         .await
                         .unwrap(),
                     &data,
                     "At {i}"
                 );
                 pops += 1;
-                pop_stats += start_snapshot.compare_to(iterator.flash.stats_snapshot());
+                pop_stats += start_snapshot.compare_to(flash.stats_snapshot());
             }
 
             for i in 20..25 {
@@ -1166,13 +1156,13 @@ mod tests {
             let mut iterator = iter(&mut flash, flash_range.clone(), &mut cache)
                 .await
                 .unwrap();
-            peek_stats += start_snapshot.compare_to(iterator.flash.stats_snapshot());
+            peek_stats += start_snapshot.compare_to(flash.stats_snapshot());
             for i in 5..25 {
-                let start_snapshot = iterator.flash.stats_snapshot();
+                let start_snapshot = flash.stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
                     iterator
-                        .next(&mut data_buffer)
+                        .next(&mut flash, &mut data_buffer)
                         .await
                         .unwrap()
                         .unwrap()
@@ -1181,31 +1171,31 @@ mod tests {
                     "At {i}"
                 );
                 peeks += 1;
-                peek_stats += start_snapshot.compare_to(iterator.flash.stats_snapshot());
+                peek_stats += start_snapshot.compare_to(flash.stats_snapshot());
             }
 
             let start_snapshot = flash.stats_snapshot();
             let mut iterator = iter(&mut flash, flash_range.clone(), &mut cache)
                 .await
                 .unwrap();
-            pop_stats += start_snapshot.compare_to(iterator.flash.stats_snapshot());
+            pop_stats += start_snapshot.compare_to(flash.stats_snapshot());
             for i in 5..25 {
-                let start_snapshot = iterator.flash.stats_snapshot();
+                let start_snapshot = flash.stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
                     iterator
-                        .next(&mut data_buffer)
+                        .next(&mut flash, &mut data_buffer)
                         .await
                         .unwrap()
                         .unwrap()
-                        .pop()
+                        .pop(&mut flash)
                         .await
                         .unwrap(),
                     &data,
                     "At {i}"
                 );
                 pops += 1;
-                pop_stats += start_snapshot.compare_to(iterator.flash.stats_snapshot());
+                pop_stats += start_snapshot.compare_to(flash.stats_snapshot());
             }
         }
 
