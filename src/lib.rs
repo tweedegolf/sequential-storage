@@ -17,6 +17,10 @@ use map::SerializationError;
 
 #[cfg(feature = "arrayvec")]
 mod arrayvec_impl;
+#[cfg(feature = "alloc")]
+mod alloc_impl;
+#[cfg(feature = "heapless")]
+mod heapless_impl;
 pub mod cache;
 mod item;
 pub mod map;
