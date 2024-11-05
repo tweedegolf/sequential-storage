@@ -133,8 +133,6 @@ impl<'a> Value<'a> for String {
 
 #[cfg(test)]
 mod tests {
-    use core::str::FromStr;
-
     use super::*;
 
     #[test]
