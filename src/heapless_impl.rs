@@ -140,7 +140,6 @@ impl<'a, const CAP: usize> Value<'a> for String<CAP> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use core::str::FromStr;

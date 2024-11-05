@@ -15,13 +15,13 @@ use core::{
 use embedded_storage_async::nor_flash::NorFlash;
 use map::SerializationError;
 
-#[cfg(feature = "arrayvec")]
-mod arrayvec_impl;
 #[cfg(feature = "alloc")]
 mod alloc_impl;
+#[cfg(feature = "arrayvec")]
+mod arrayvec_impl;
+pub mod cache;
 #[cfg(feature = "heapless")]
 mod heapless_impl;
-pub mod cache;
 mod item;
 pub mod map;
 pub mod queue;
