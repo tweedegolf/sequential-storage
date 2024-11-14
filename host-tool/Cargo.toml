@@ -1,0 +1,9 @@
+[package]
+name = "sequential-storage-tool"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+embedded-storage-async = "0.4.1"
+sequential-storage = { version = "3.0.1", path = "..", features = ["_test"] }
+tokio = { version = "1.40.0", features = ["full"]}

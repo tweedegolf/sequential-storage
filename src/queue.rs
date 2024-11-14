@@ -710,7 +710,7 @@ async fn find_youngest_page<S: NorFlash>(
     })
 }
 
-async fn find_oldest_page<S: NorFlash>(
+pub(crate) async fn find_oldest_page<S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
