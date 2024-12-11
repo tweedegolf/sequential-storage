@@ -31,8 +31,6 @@ std = []
 arrayvec = ["dep:arrayvec"]
 alloc = []
 heapless = ["dep:heapless"]
-# Enable the raw access of items. This feature is NOT bounded by the semver.
-raw_access = []
 _test = ["dep:futures", "dep:approx", "std", "arrayvec", "alloc", "heapless"]
 
 [lints.rust]

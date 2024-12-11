@@ -111,7 +111,27 @@ use self::{
 
 use super::*;
 
-/// Iterator which iterates all valid items
+/// Iterator which iterates all non-erased & non-corrupted items in the map.
+///
+/// The iterator will return the (Key, Value) tuple when calling `next()`.
+/// If the iterator ends, it will return `None`.
+///
+/// The following is a simple example of how to use the iterator:
+/// ```rust
+/// // Create the iterator
+/// let mut iterator = get_item_iter(&mut flash, flash_range.clone());
+///
+/// // Iterate through all items
+/// loop {
+///     // Suppose the Key and Value types are u8, u32
+///     if let Ok(Some(item)) = iterator.next::<u8, u32>(&mut buffer).await {
+///          // Do something with the item
+///     } else {
+///         // Iterator ends
+///         break;
+///     }
+/// }
+/// ```
 pub struct MapItemIter<'d, S: NorFlash> {
     flash: &'d mut S,
     flash_range: Range<u32>,
@@ -183,22 +203,11 @@ impl<'d, S: NorFlash> MapItemIter<'d, S> {
 }
 
 /// Get an iterator that iterates over all non-erased & non-corrupted items in the map.
-pub async fn get_next_item<'d, 'a, K: Key, V: Value<'a>, S: NorFlash>(
-    data_buffer: &'a mut [u8],
-    iter: &mut MapItemIter<'d, S>,
-) -> Result<Option<(K, V)>, Error<S::Error>>
-where
-    'd: 'a,
-{
-    iter.next(data_buffer).await
-}
-
-/// Get an iterator that iterates over all non-erased & non-corrupted items in the map.
 pub fn get_item_iter<'d, S: NorFlash>(
     flash: &'d mut S,
     flash_range: Range<u32>,
-) -> Result<MapItemIter<'d, S>, ()> {
-    Ok(MapItemIter {
+) -> MapItemIter<'d, S> {
+    MapItemIter {
         flash,
         flash_range: flash_range.clone(),
         current_page_index: 0,
@@ -206,7 +215,7 @@ pub fn get_item_iter<'d, S: NorFlash>(
             calculate_page_address::<S>(flash_range.clone(), 0),
             calculate_page_end_address::<S>(flash_range.clone(), 0),
         ),
-    })
+    }
 }
 
 /// Get the last stored value from the flash that is associated with the given key.
