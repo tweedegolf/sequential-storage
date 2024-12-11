@@ -97,10 +97,7 @@
 //! For your convenience there are premade implementations for the [Key] and [Value] traits.
 //!
 
-use core::{
-    marker::PhantomData,
-    mem::{size_of, MaybeUninit},
-};
+use core::mem::{size_of, MaybeUninit};
 
 use cache::NoCache;
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
@@ -114,87 +111,101 @@ use self::{
 
 use super::*;
 
-/// TODO: 1. gated by feature, 2. remove unwraps, 3. documentations
-pub struct MapItemIter<'d, K: Key + 'd, V: Value<'d> + 'd, S: NorFlash> {
+/// Iterator which iterates all valid items
+pub struct MapItemIter<'d, S: NorFlash> {
     flash: &'d mut S,
     flash_range: Range<u32>,
-    data_buffer: &'d mut [u8],
     current_page_index: usize,
     current_iter: ItemIter,
-    p: PhantomData<(K, V)>,
 }
 
-impl<'d, K: Key + 'd, V: Value<'d> + 'd, S: NorFlash> MapItemIter<'d, K, V, S> {
-    /// TODO: doc
-    pub async fn next(
+impl<'d, S: NorFlash> MapItemIter<'d, S> {
+    /// Get the next item in the iterator. Be careful that the given `data_buffer` should large enough to contain the serialized key and value.
+    pub async fn next<'a, K: Key, V: Value<'a>>(
         &mut self,
-        data_buffer: &'d mut [u8],
-    ) -> Result<Option<(K, &'d [u8])>, Error<S::Error>> {
-        loop {
-            let item_result = self.current_iter.next(self.flash, self.data_buffer).await?;
-            match item_result {
-                Some((item, _)) => {
-                    let (key, _) = K::deserialize_from(item.data())?;
-                    let (_, buf) = item.destruct();
-                    // FIXME: Have to use a different data buffer, because the item is borrowed
-                    data_buffer.copy_from_slice(buf);
-                    return Ok(Some((key, data_buffer)));
+        data_buffer: &'a mut [u8],
+    ) -> Result<Option<(K, V)>, Error<S::Error>> {
+        // Find the next item
+        let item = loop {
+            if let Some((item, _address)) = self.current_iter.next(self.flash, data_buffer).await? {
+                // We've found the next item, quit the loop
+                break item;
+            }
+
+            // The current page is done, we need to find the next page
+            // Find next page which is not open, update `self.current_iter`
+            loop {
+                self.current_page_index =
+                    next_page::<S>(self.flash_range.clone(), self.current_page_index);
+
+                // All pages are checked, there's nothing left so we return None
+                if self.current_page_index >= self.flash_range.len() / S::ERASE_SIZE
+                    || self.current_page_index == 0
+                {
+                    return Ok(None);
                 }
-                None => {
-                    // Current iter ends, try to create next iter for next page
-                    self.current_page_index += 1;
 
-                    // FIXME: The last page, does it mean the iterator ends?
-                    if self.current_page_index >= self.flash_range.len() / S::ERASE_SIZE {
-                        return Ok(None);
+                match get_page_state::<S>(
+                    self.flash,
+                    self.flash_range.clone(),
+                    &mut NoCache::new(),
+                    self.current_page_index,
+                )
+                .await
+                {
+                    Ok(PageState::Closed) | Ok(PageState::PartialOpen) => {
+                        self.current_iter = ItemIter::new(
+                            calculate_page_address::<S>(
+                                self.flash_range.clone(),
+                                self.current_page_index,
+                            ),
+                            calculate_page_end_address::<S>(
+                                self.flash_range.clone(),
+                                self.current_page_index,
+                            ),
+                        );
+                        break;
                     }
-
-                    // Find next valid page iter
-                    match get_page_state::<S>(
-                        self.flash,
-                        self.flash_range.clone(),
-                        &mut NoCache::new(),
-                        self.current_page_index,
-                    )
-                    .await
-                    {
-                        Ok(PageState::Closed) | Ok(PageState::PartialOpen) => {
-                            self.current_iter = ItemIter::new(
-                                calculate_page_address::<S>(
-                                    self.flash_range.clone(),
-                                    self.current_page_index,
-                                ),
-                                calculate_page_end_address::<S>(
-                                    self.flash_range.clone(),
-                                    self.current_page_index,
-                                ),
-                            );
-                            continue;
-                        }
-                        _ => return Ok(None),
-                    }
+                    _ => continue,
                 }
             }
-        }
+        };
+
+        let data_len = item.header.length as usize;
+        let (key, key_len) = K::deserialize_from(item.data())?;
+
+        Ok(Some((
+            key,
+            V::deserialize_from(&data_buffer[key_len..][..data_len - key_len])
+                .map_err(Error::SerializationError)?,
+        )))
     }
 }
 
-/// Get an iterator that iterates over all non-erased & non-corrupted items in the flash.
-pub async fn get_items<'d, K: Key + 'd, V: Value<'d> + 'd, S: NorFlash>(
+/// Get an iterator that iterates over all non-erased & non-corrupted items in the map.
+pub async fn get_next_item<'d, 'a, K: Key, V: Value<'a>, S: NorFlash>(
+    data_buffer: &'a mut [u8],
+    iter: &mut MapItemIter<'d, S>,
+) -> Result<Option<(K, V)>, Error<S::Error>>
+where
+    'd: 'a,
+{
+    iter.next(data_buffer).await
+}
+
+/// Get an iterator that iterates over all non-erased & non-corrupted items in the map.
+pub fn get_item_iter<'d, S: NorFlash>(
     flash: &'d mut S,
     flash_range: Range<u32>,
-    data_buffer: &'d mut [u8],
-) -> Result<MapItemIter<'d, K, V, S>, ()> {
+) -> Result<MapItemIter<'d, S>, ()> {
     Ok(MapItemIter {
         flash,
         flash_range: flash_range.clone(),
-        data_buffer,
         current_page_index: 0,
         current_iter: ItemIter::new(
             calculate_page_address::<S>(flash_range.clone(), 0),
             calculate_page_end_address::<S>(flash_range.clone(), 0),
         ),
-        p: PhantomData,
     })
 }
 
