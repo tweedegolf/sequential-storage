@@ -151,7 +151,6 @@ impl<'d, 'c, S: NorFlash, CI: CacheImpl> MapItemIter<'d, 'c, S, CI> {
         let item = loop {
             if let Some((item, _address)) = self.current_iter.next(self.flash, data_buffer).await? {
                 // We've found the next item, quit the loop
-
                 break item;
             }
 
@@ -209,58 +208,61 @@ impl<'d, 'c, S: NorFlash, CI: CacheImpl> MapItemIter<'d, 'c, S, CI> {
 /// so it's possible that the iterator returns items with the same key multiple times.
 /// Generally the last returned one is the `active` one.
 /// You should be very careful when using the map item iterator.
-/// 
+///
 /// If the iterator returns `Ok(None)`, the iterator has ended.
-pub async fn fetch_all_items<'d, 'c, S: NorFlash, CI: CacheImpl>(
+pub async fn fetch_all_items<'d, 'c, K: Key, S: NorFlash, CI: KeyCacheImpl<K>>(
     flash: &'d mut S,
     flash_range: Range<u32>,
     cache: &'c mut CI,
+    data_buffer: &mut [u8],
 ) -> Result<MapItemIter<'d, 'c, S, CI>, Error<S::Error>> {
     // Get the first page index.
     // The first page used by the map is the next page of the `PartialOpen` page or the last `Closed` page
-    let first_page = match find_first_page(
-        flash,
-        flash_range.clone(),
-        cache,
-        0,
-        PageState::PartialOpen,
-    )
-    .await?
-    {
-        Some(last_used_page) => {
-            // The next page of the `PartialOpen` page is the first page
-            next_page::<S>(flash_range.clone(), last_used_page)
-        },
-        None => {
-            // In the event that all pages are still open or the last used page was just closed, we search for the first open page.
-            // If the page one before that is closed, then that's the last used page.
-            if let Some(first_open_page) =
-                find_first_page(flash, flash_range.clone(), cache, 0, PageState::Open).await?
+    let first_page = run_with_auto_repair!(
+        function = {
+            match find_first_page(flash, flash_range.clone(), cache, 0, PageState::PartialOpen)
+                .await?
             {
-                let previous_page = previous_page::<S>(flash_range.clone(), first_open_page);
-                if get_page_state(flash, flash_range.clone(), cache, previous_page)
-                    .await?
-                    .is_closed()
-                {
-                    // The previous page is closed, so the first_open_page is what we want
-                    first_open_page
-                } else {
-                    // The page before the open page is not closed, so it must be open.
-                    // This means that all pages are open and that we don't have any items yet.
-                    cache.unmark_dirty();
-                    0
+                Some(last_used_page) => {
+                    // The next page of the `PartialOpen` page is the first page
+                    Ok(next_page::<S>(flash_range.clone(), last_used_page))
                 }
-            } else {
-                // There are no open pages, so everything must be closed.
-                // Something is up and this should never happen.
-                // To recover, we will just erase all the flash.
-                return Err(Error::Corrupted {
-                    #[cfg(feature = "_test")]
-                    backtrace: std::backtrace::Backtrace::capture(),
-                });
+                None => {
+                    // In the event that all pages are still open or the last used page was just closed, we search for the first open page.
+                    // If the page one before that is closed, then that's the last used page.
+                    if let Some(first_open_page) =
+                        find_first_page(flash, flash_range.clone(), cache, 0, PageState::Open)
+                            .await?
+                    {
+                        let previous_page =
+                            previous_page::<S>(flash_range.clone(), first_open_page);
+                        if get_page_state(flash, flash_range.clone(), cache, previous_page)
+                            .await?
+                            .is_closed()
+                        {
+                            // The previous page is closed, so the first_open_page is what we want
+                            Ok(first_open_page)
+                        } else {
+                            // The page before the open page is not closed, so it must be open.
+                            // This means that all pages are open and that we don't have any items yet.
+                            cache.unmark_dirty();
+                            Ok(0)
+                        }
+                    } else {
+                        // There are no open pages, so everything must be closed.
+                        // Something is up and this should never happen.
+                        // To recover, we will just erase all the flash.
+                        Err(Error::Corrupted {
+                            #[cfg(feature = "_test")]
+                            backtrace: std::backtrace::Backtrace::capture(),
+                        })
+                    }
+                }
             }
-        }
-    };
+        },
+        repair = try_repair::<K, _>(flash, flash_range.clone(), cache, data_buffer).await?
+    )?;
+
     Ok(MapItemIter {
         flash,
         flash_range: flash_range.clone(),
@@ -1718,18 +1720,51 @@ mod tests {
             .unwrap();
         }
 
-        let mut map_iter = fetch_all_items(&mut flash, flash_range.clone(), &mut cache)
+        // Save 10 times for key 1
+        for i in 0..10 {
+            store_item(
+                &mut flash,
+                flash_range.clone(),
+                &mut cache,
+                &mut data_buffer,
+                &1u8,
+                &vec![i; i as usize].as_slice(),
+            )
             .await
             .unwrap();
-
-        let mut count = 0;
-        while let Ok(Some((key, value))) = map_iter.next::<u8, &[u8]>(&mut data_buffer).await {
-            println!("{}: {:?}", key, value);
-            assert_eq!(value, vec![key; key as usize]);
-            count += 1;
         }
 
-        // Check total number of fetched items
-        assert_eq!(count, UPPER_BOUND);
+        let mut map_iter = fetch_all_items::<u8, _, _>(
+            &mut flash,
+            flash_range.clone(),
+            &mut cache,
+            &mut data_buffer,
+        )
+        .await
+        .unwrap();
+
+        let mut count = 0;
+        let mut last_value_buffer = [0u8; 64];
+        let mut last_value_length = 0;
+        while let Ok(Some((key, value))) = map_iter.next::<u8, &[u8]>(&mut data_buffer).await {
+            if key == 1 {
+                // This is the key we stored multiple times, record the last value
+                last_value_length = value.len();
+                last_value_buffer[..value.len()].copy_from_slice(value);
+            } else {
+                assert_eq!(value, vec![key; key as usize]);
+                count += 1;
+            }
+        }
+
+        // Check the
+        assert_eq!(last_value_length, 9);
+        assert_eq!(
+            &last_value_buffer[..last_value_length],
+            vec![9u8; 9].as_slice()
+        );
+
+        // Check total number of fetched items, +1 since we didn't count key 1
+        assert_eq!(count + 1, UPPER_BOUND);
     }
 }
