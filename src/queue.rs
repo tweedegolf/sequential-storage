@@ -1447,7 +1447,7 @@ mod tests {
             &mut flash,
             FLASH_RANGE,
             &mut cache::NoCache::new(),
-            &[0; 1024 - 4 * 2 - 8],
+            &AlignedBuf([0; 1024 - 4 * 2 - 8]),
             false,
         )
         .await
@@ -1458,7 +1458,7 @@ mod tests {
                 &mut flash,
                 FLASH_RANGE,
                 &mut cache::NoCache::new(),
-                &[0; 1024 - 4 * 2 - 8 + 1],
+                &AlignedBuf([0; 1024 - 4 * 2 - 8 + 1]),
                 false,
             )
             .await,
