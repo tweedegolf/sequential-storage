@@ -205,8 +205,11 @@ impl<'d, 'c, S: NorFlash, CI: CacheImpl> MapItemIter<'d, 'c, S, CI> {
 
 /// Get an iterator that iterates over all non-erased & non-corrupted items in the map.
 ///
-/// Note that the returned iterator might yield items in a different order than they were stored,
-/// and the only the last active item with a particular key will be yielded.
+/// Note: Because map doesn't erase the items when you insert a new one with the same key,
+/// so it's possible that the iterator returns items with the same key multiple times.
+/// Generally the last returned one is the `active` one.
+/// You should be very careful when using the map item iterator.
+/// 
 /// If the iterator returns `Ok(None)`, the iterator has ended.
 pub async fn fetch_all_items<'d, 'c, S: NorFlash, CI: CacheImpl>(
     flash: &'d mut S,
