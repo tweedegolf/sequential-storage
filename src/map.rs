@@ -208,12 +208,13 @@ impl<'d, 'c, S: NorFlash, CI: CacheImpl> MapItemIter<'d, 'c, S, CI> {
 /// Note that the returned iterator might yield items in a different order than they were stored,
 /// and the only the last active item with a particular key will be yielded.
 /// If the iterator returns `Ok(None)`, the iterator has ended.
-pub async fn fetch_item_stream<'d, 'c, S: NorFlash, CI: CacheImpl>(
+pub async fn fetch_all_items<'d, 'c, S: NorFlash, CI: CacheImpl>(
     flash: &'d mut S,
     flash_range: Range<u32>,
     cache: &'c mut CI,
 ) -> Result<MapItemIter<'d, 'c, S, CI>, Error<S::Error>> {
-    // Get the first page index
+    // Get the first page index.
+    // The first page used by the map is the next page of the `PartialOpen` page or the last `Closed` page
     let first_page = match find_first_page(
         flash,
         flash_range.clone(),
@@ -223,7 +224,10 @@ pub async fn fetch_item_stream<'d, 'c, S: NorFlash, CI: CacheImpl>(
     )
     .await?
     {
-        Some(first_page) => first_page,
+        Some(last_used_page) => {
+            // The next page of the `PartialOpen` page is the first page
+            next_page::<S>(flash_range.clone(), last_used_page)
+        },
         None => {
             // In the event that all pages are still open or the last used page was just closed, we search for the first open page.
             // If the page one before that is closed, then that's the last used page.
@@ -235,7 +239,8 @@ pub async fn fetch_item_stream<'d, 'c, S: NorFlash, CI: CacheImpl>(
                     .await?
                     .is_closed()
                 {
-                    previous_page
+                    // The previous page is closed, so the first_open_page is what we want
+                    first_open_page
                 } else {
                     // The page before the open page is not closed, so it must be open.
                     // This means that all pages are open and that we don't have any items yet.
@@ -1710,12 +1715,13 @@ mod tests {
             .unwrap();
         }
 
-        let mut map_iter = fetch_item_stream(&mut flash, flash_range.clone(), &mut cache)
+        let mut map_iter = fetch_all_items(&mut flash, flash_range.clone(), &mut cache)
             .await
             .unwrap();
 
         let mut count = 0;
         while let Ok(Some((key, value))) = map_iter.next::<u8, &[u8]>(&mut data_buffer).await {
+            println!("{}: {:?}", key, value);
             assert_eq!(value, vec![key; key as usize]);
             count += 1;
         }
