@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Added item iterator for map.
 - *Breaking:* Added `Value` impls for `bool`, `Option<T: Value>`, and `[T: Value; N]`.
   *This can break existing code because it changes type inference, be mindfull of that!*
 
