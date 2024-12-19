@@ -92,6 +92,7 @@
 //! If done incorrectly, the deserialize function of requested value type will see
 //! data it doesn't expect. In the best case it'll return an error, in a bad case it'll
 //! give bad invalid data and in the worst case the deserialization code panics.
+//! It is worth mentioning that `fetch_all_items` also requires that all items have the same type.
 //! So be careful.
 //!
 //! For your convenience there are premade implementations for the [Key] and [Value] traits.
@@ -114,22 +115,28 @@ use super::*;
 /// Iterator which iterates all non-erased & non-corrupted items in the map.
 ///
 /// The iterator will return the (Key, Value) tuple when calling `next()`.
-/// If the iterator ends, it will return `None`.
+/// If the iterator ends, it will return `Ok(None)`.
 ///
 /// The following is a simple example of how to use the iterator:
 /// ```rust
-/// // Create the iterator
-/// let mut iterator = get_item_iter(&mut flash, flash_range.clone(), &mut cache).await;
+/// // Create the iterator of map items
+/// let mut iterator = fetch_all_item::<u8, _, _>(
+///     &mut flash,
+///     flash_range.clone(),
+///     &mut cache,
+///     &mut buffer
+/// )
+/// .await
+/// .unwrap();
 ///
-/// // Iterate through all items
-/// loop {
-///     // Suppose the Key and Value types are u8, u32
-///     if let Ok(Some(item)) = iterator.next::<u8, u32>(&mut buffer).await {
-///          // Do something with the item
-///     } else {
-///         // Iterator ends
-///         break;
-///     }
+/// // Iterate through all items, suppose the Key and Value types are u8, u32
+/// while let Ok(Some((key, value))) = iterator
+///     .next::<u8, u32>(&mut buffer)
+///     .await
+/// {
+///     // Do somethinmg with the item.
+///     // Please note that for the same key there might be multiple items returned,
+///     // the last one is the current active one.
 /// }
 /// ```
 pub struct MapItemIter<'d, 'c, S: NorFlash, CI: CacheImpl> {
@@ -204,12 +211,45 @@ impl<'d, 'c, S: NorFlash, CI: CacheImpl> MapItemIter<'d, 'c, S, CI> {
 
 /// Get an iterator that iterates over all non-erased & non-corrupted items in the map.
 ///
-/// Note: Because map doesn't erase the items when you insert a new one with the same key,
+/// <div class="warning">
+/// You should be very careful when using the map item iterator:
+/// <ul>
+/// <li>
+/// Because map doesn't erase the items when you insert a new one with the same key,
 /// so it's possible that the iterator returns items with the same key multiple times.
 /// Generally the last returned one is the `active` one.
-/// You should be very careful when using the map item iterator.
+/// </li>
+/// <li>
+/// The iterator requires ALL items in the storage have the SAME type.
+/// If you have different types of items in your map, the iterator might return incorrect data or error.
+/// </li>
+/// </ul>
+/// </div>
 ///
-/// If the iterator returns `Ok(None)`, the iterator has ended.
+/// The following is a simple example of how to use the iterator:
+/// ```rust
+/// // Create the iterator of map items
+/// let mut iterator = fetch_all_item::<u8, _, _>(
+///     &mut flash,
+///     flash_range.clone(),
+///     &mut cache,
+///     &mut buffer
+/// )
+/// .await
+/// .unwrap();
+///
+/// // Iterate through all items, suppose the Key and Value types are u8, u32
+/// while let Ok(Some((key, value))) = iterator
+///     .next::<u8, u32>(&mut buffer)
+///     .await
+/// {
+///     // Do somethinmg with the item.
+///     // Please note that for the same key there might be multiple items returned,
+///     // the last one is the current active one.
+/// }
+/// ```
+///
+
 pub async fn fetch_all_items<'d, 'c, K: Key, S: NorFlash, CI: KeyCacheImpl<K>>(
     flash: &'d mut S,
     flash_range: Range<u32>,
