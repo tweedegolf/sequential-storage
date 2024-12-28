@@ -112,210 +112,6 @@ use self::{
 
 use super::*;
 
-/// Iterator which iterates all non-erased & non-corrupted items in the map.
-///
-/// The iterator will return the (Key, Value) tuple when calling `next()`.
-/// If the iterator ends, it will return `Ok(None)`.
-///
-/// The following is a simple example of how to use the iterator:
-/// ```rust
-/// // Create the iterator of map items
-/// let mut iterator = fetch_all_item::<u8, _, _>(
-///     &mut flash,
-///     flash_range.clone(),
-///     &mut cache,
-///     &mut buffer
-/// )
-/// .await
-/// .unwrap();
-///
-/// // Iterate through all items, suppose the Key and Value types are u8, u32
-/// while let Ok(Some((key, value))) = iterator
-///     .next::<u8, u32>(&mut buffer)
-///     .await
-/// {
-///     // Do somethinmg with the item.
-///     // Please note that for the same key there might be multiple items returned,
-///     // the last one is the current active one.
-/// }
-/// ```
-pub struct MapItemIter<'d, 'c, S: NorFlash, CI: CacheImpl> {
-    flash: &'d mut S,
-    flash_range: Range<u32>,
-    first_page: usize,
-    cache: &'c mut CI,
-    current_page_index: usize,
-    pub(crate) current_iter: ItemIter,
-}
-
-impl<'d, 'c, S: NorFlash, CI: CacheImpl> MapItemIter<'d, 'c, S, CI> {
-    /// Get the next item in the iterator. Be careful that the given `data_buffer` should large enough to contain the serialized key and value.
-    pub async fn next<'a, K: Key, V: Value<'a>>(
-        &mut self,
-        data_buffer: &'a mut [u8],
-    ) -> Result<Option<(K, V)>, Error<S::Error>> {
-        // Find the next item
-        let item = loop {
-            if let Some((item, _address)) = self.current_iter.next(self.flash, data_buffer).await? {
-                // We've found the next item, quit the loop
-                break item;
-            }
-
-            // The current page is done, we need to find the next page
-            // Find next page which is not open, update `self.current_iter`
-            loop {
-                self.current_page_index =
-                    next_page::<S>(self.flash_range.clone(), self.current_page_index);
-
-                // We've looped back to the first page, which means all pages are checked, there's nothing left so we return None
-                if self.current_page_index == self.first_page {
-                    return Ok(None);
-                }
-
-                match get_page_state::<S>(
-                    self.flash,
-                    self.flash_range.clone(),
-                    self.cache,
-                    self.current_page_index,
-                )
-                .await
-                {
-                    Ok(PageState::Closed) | Ok(PageState::PartialOpen) => {
-                        self.current_iter = ItemIter::new(
-                            calculate_page_address::<S>(
-                                self.flash_range.clone(),
-                                self.current_page_index,
-                            ) + S::WORD_SIZE as u32,
-                            calculate_page_end_address::<S>(
-                                self.flash_range.clone(),
-                                self.current_page_index,
-                            ) - S::WORD_SIZE as u32,
-                        );
-                        break;
-                    }
-                    _ => continue,
-                }
-            }
-        };
-
-        let data_len = item.header.length as usize;
-        let (key, key_len) = K::deserialize_from(item.data())?;
-
-        Ok(Some((
-            key,
-            V::deserialize_from(&data_buffer[key_len..][..data_len - key_len])
-                .map_err(Error::SerializationError)?,
-        )))
-    }
-}
-
-/// Get an iterator that iterates over all non-erased & non-corrupted items in the map.
-///
-/// <div class="warning">
-/// You should be very careful when using the map item iterator:
-/// <ul>
-/// <li>
-/// Because map doesn't erase the items when you insert a new one with the same key,
-/// so it's possible that the iterator returns items with the same key multiple times.
-/// Generally the last returned one is the `active` one.
-/// </li>
-/// <li>
-/// The iterator requires ALL items in the storage have the SAME type.
-/// If you have different types of items in your map, the iterator might return incorrect data or error.
-/// </li>
-/// </ul>
-/// </div>
-///
-/// The following is a simple example of how to use the iterator:
-/// ```rust
-/// // Create the iterator of map items
-/// let mut iterator = fetch_all_item::<u8, _, _>(
-///     &mut flash,
-///     flash_range.clone(),
-///     &mut cache,
-///     &mut buffer
-/// )
-/// .await
-/// .unwrap();
-///
-/// // Iterate through all items, suppose the Key and Value types are u8, u32
-/// while let Ok(Some((key, value))) = iterator
-///     .next::<u8, u32>(&mut buffer)
-///     .await
-/// {
-///     // Do somethinmg with the item.
-///     // Please note that for the same key there might be multiple items returned,
-///     // the last one is the current active one.
-/// }
-/// ```
-///
-
-pub async fn fetch_all_items<'d, 'c, K: Key, S: NorFlash, CI: KeyCacheImpl<K>>(
-    flash: &'d mut S,
-    flash_range: Range<u32>,
-    cache: &'c mut CI,
-    data_buffer: &mut [u8],
-) -> Result<MapItemIter<'d, 'c, S, CI>, Error<S::Error>> {
-    // Get the first page index.
-    // The first page used by the map is the next page of the `PartialOpen` page or the last `Closed` page
-    let first_page = run_with_auto_repair!(
-        function = {
-            match find_first_page(flash, flash_range.clone(), cache, 0, PageState::PartialOpen)
-                .await?
-            {
-                Some(last_used_page) => {
-                    // The next page of the `PartialOpen` page is the first page
-                    Ok(next_page::<S>(flash_range.clone(), last_used_page))
-                }
-                None => {
-                    // In the event that all pages are still open or the last used page was just closed, we search for the first open page.
-                    // If the page one before that is closed, then that's the last used page.
-                    if let Some(first_open_page) =
-                        find_first_page(flash, flash_range.clone(), cache, 0, PageState::Open)
-                            .await?
-                    {
-                        let previous_page =
-                            previous_page::<S>(flash_range.clone(), first_open_page);
-                        if get_page_state(flash, flash_range.clone(), cache, previous_page)
-                            .await?
-                            .is_closed()
-                        {
-                            // The previous page is closed, so the first_open_page is what we want
-                            Ok(first_open_page)
-                        } else {
-                            // The page before the open page is not closed, so it must be open.
-                            // This means that all pages are open and that we don't have any items yet.
-                            cache.unmark_dirty();
-                            Ok(0)
-                        }
-                    } else {
-                        // There are no open pages, so everything must be closed.
-                        // Something is up and this should never happen.
-                        // To recover, we will just erase all the flash.
-                        Err(Error::Corrupted {
-                            #[cfg(feature = "_test")]
-                            backtrace: std::backtrace::Backtrace::capture(),
-                        })
-                    }
-                }
-            }
-        },
-        repair = try_repair::<K, _>(flash, flash_range.clone(), cache, data_buffer).await?
-    )?;
-
-    Ok(MapItemIter {
-        flash,
-        flash_range: flash_range.clone(),
-        first_page,
-        cache,
-        current_page_index: first_page,
-        current_iter: ItemIter::new(
-            calculate_page_address::<S>(flash_range.clone(), first_page) + S::WORD_SIZE as u32,
-            calculate_page_end_address::<S>(flash_range.clone(), first_page) - S::WORD_SIZE as u32,
-        ),
-    })
-}
-
 /// Get the last stored value from the flash that is associated with the given key.
 /// If no value with the key is found, None is returned.
 ///
@@ -873,6 +669,248 @@ async fn remove_item_inner<K: Key, S: MultiwriteNorFlash>(
     cache.unmark_dirty();
 
     Ok(())
+}
+
+/// Iterator which iterates all non-erased & non-corrupted items in the map.
+///
+/// The iterator will return the (Key, Value) tuple when calling `next()`.
+/// If the iterator ends, it will return `Ok(None)`.
+///
+/// The following is a simple example of how to use the iterator:
+/// ```rust
+/// # use sequential_storage::map::fetch_all_items;
+/// # use sequential_storage::cache::NoCache;
+/// # use mock_flash::MockFlashBase;
+/// # use futures::executor::block_on;
+/// # type Flash = MockFlashBase<10, 1, 4096>;
+/// # mod mock_flash {
+/// #   include!("mock_flash.rs");
+/// # }
+/// # fn init_flash() -> Flash {
+/// #     Flash::new(mock_flash::WriteCountCheck::Twice, None, false)
+/// # }
+///
+/// # block_on(async {
+/// let mut flash = init_flash();
+/// let flash_range = 0x1000..0x3000;
+/// let mut data_buffer = [0; 128];
+/// let mut cache = NoCache::new();
+///
+/// // Create the iterator of map items
+/// let mut iterator = fetch_all_items::<u8, _, _>(
+///     &mut flash,
+///     flash_range.clone(),
+///     &mut cache,
+///     &mut data_buffer
+/// )
+/// .await
+/// .unwrap();
+///
+/// // Iterate through all items, suppose the Key and Value types are u8, u32
+/// while let Ok(Some((key, value))) = iterator
+///     .next::<u8, u32>(&mut data_buffer)
+///     .await
+/// {
+///     // Do somethinmg with the item.
+///     // Please note that for the same key there might be multiple items returned,
+///     // the last one is the current active one.
+///     println!("{key}:{value}");
+/// }
+/// # })
+/// ```
+pub struct MapItemIter<'d, 'c, S: NorFlash, CI: CacheImpl> {
+    flash: &'d mut S,
+    flash_range: Range<u32>,
+    first_page: usize,
+    cache: &'c mut CI,
+    current_page_index: usize,
+    pub(crate) current_iter: ItemIter,
+}
+
+impl<'d, 'c, S: NorFlash, CI: CacheImpl> MapItemIter<'d, 'c, S, CI> {
+    /// Get the next item in the iterator. Be careful that the given `data_buffer` should large enough to contain the serialized key and value.
+    pub async fn next<'a, K: Key, V: Value<'a>>(
+        &mut self,
+        data_buffer: &'a mut [u8],
+    ) -> Result<Option<(K, V)>, Error<S::Error>> {
+        // Find the next item
+        let item = loop {
+            if let Some((item, _address)) = self.current_iter.next(self.flash, data_buffer).await? {
+                // We've found the next item, quit the loop
+                break item;
+            }
+
+            // The current page is done, we need to find the next page
+            // Find next page which is not open, update `self.current_iter`
+            loop {
+                self.current_page_index =
+                    next_page::<S>(self.flash_range.clone(), self.current_page_index);
+
+                // We've looped back to the first page, which means all pages are checked, there's nothing left so we return None
+                if self.current_page_index == self.first_page {
+                    return Ok(None);
+                }
+
+                match get_page_state::<S>(
+                    self.flash,
+                    self.flash_range.clone(),
+                    self.cache,
+                    self.current_page_index,
+                )
+                .await
+                {
+                    Ok(PageState::Closed) | Ok(PageState::PartialOpen) => {
+                        self.current_iter = ItemIter::new(
+                            calculate_page_address::<S>(
+                                self.flash_range.clone(),
+                                self.current_page_index,
+                            ) + S::WORD_SIZE as u32,
+                            calculate_page_end_address::<S>(
+                                self.flash_range.clone(),
+                                self.current_page_index,
+                            ) - S::WORD_SIZE as u32,
+                        );
+                        break;
+                    }
+                    _ => continue,
+                }
+            }
+        };
+
+        let data_len = item.header.length as usize;
+        let (key, key_len) = K::deserialize_from(item.data())?;
+
+        Ok(Some((
+            key,
+            V::deserialize_from(&data_buffer[key_len..][..data_len - key_len])
+                .map_err(Error::SerializationError)?,
+        )))
+    }
+}
+
+/// Get an iterator that iterates over all non-erased & non-corrupted items in the map.
+///
+/// <div class="warning">
+/// You should be very careful when using the map item iterator:
+/// <ul>
+/// <li>
+/// Because map doesn't erase the items when you insert a new one with the same key,
+/// so it's possible that the iterator returns items with the same key multiple times.
+/// Generally the last returned one is the `active` one.
+/// </li>
+/// <li>
+/// The iterator requires ALL items in the storage have the SAME type.
+/// If you have different types of items in your map, the iterator might return incorrect data or error.
+/// </li>
+/// </ul>
+/// </div>
+///
+/// The following is a simple example of how to use the iterator:
+/// ```rust
+/// # use sequential_storage::map::fetch_all_items;
+/// # use sequential_storage::cache::NoCache;
+/// # use mock_flash::MockFlashBase;
+/// # use futures::executor::block_on;
+/// # type Flash = MockFlashBase<10, 1, 4096>;
+/// # mod mock_flash {
+/// #   include!("mock_flash.rs");
+/// # }
+/// # fn init_flash() -> Flash {
+/// #     Flash::new(mock_flash::WriteCountCheck::Twice, None, false)
+/// # }
+///
+/// # block_on(async {
+/// let mut flash = init_flash();
+/// let flash_range = 0x1000..0x3000;
+/// let mut data_buffer = [0; 128];
+/// let mut cache = NoCache::new();
+///
+/// // Create the iterator of map items
+/// let mut iterator = fetch_all_items::<u8, _, _>(
+///     &mut flash,
+///     flash_range.clone(),
+///     &mut cache,
+///     &mut data_buffer
+/// )
+/// .await
+/// .unwrap();
+///
+/// // Iterate through all items, suppose the Key and Value types are u8, u32
+/// while let Ok(Some((key, value))) = iterator
+///     .next::<u8, u32>(&mut data_buffer)
+///     .await
+/// {
+///     // Do somethinmg with the item.
+///     // Please note that for the same key there might be multiple items returned,
+///     // the last one is the current active one.
+/// }
+/// # })
+/// ```
+///
+pub async fn fetch_all_items<'d, 'c, K: Key, S: NorFlash, CI: KeyCacheImpl<K>>(
+    flash: &'d mut S,
+    flash_range: Range<u32>,
+    cache: &'c mut CI,
+    data_buffer: &mut [u8],
+) -> Result<MapItemIter<'d, 'c, S, CI>, Error<S::Error>> {
+    // Get the first page index.
+    // The first page used by the map is the next page of the `PartialOpen` page or the last `Closed` page
+    let first_page = run_with_auto_repair!(
+        function = {
+            match find_first_page(flash, flash_range.clone(), cache, 0, PageState::PartialOpen)
+                .await?
+            {
+                Some(last_used_page) => {
+                    // The next page of the `PartialOpen` page is the first page
+                    Ok(next_page::<S>(flash_range.clone(), last_used_page))
+                }
+                None => {
+                    // In the event that all pages are still open or the last used page was just closed, we search for the first open page.
+                    // If the page one before that is closed, then that's the last used page.
+                    if let Some(first_open_page) =
+                        find_first_page(flash, flash_range.clone(), cache, 0, PageState::Open)
+                            .await?
+                    {
+                        let previous_page =
+                            previous_page::<S>(flash_range.clone(), first_open_page);
+                        if get_page_state(flash, flash_range.clone(), cache, previous_page)
+                            .await?
+                            .is_closed()
+                        {
+                            // The previous page is closed, so the first_open_page is what we want
+                            Ok(first_open_page)
+                        } else {
+                            // The page before the open page is not closed, so it must be open.
+                            // This means that all pages are open and that we don't have any items yet.
+                            cache.unmark_dirty();
+                            Ok(0)
+                        }
+                    } else {
+                        // There are no open pages, so everything must be closed.
+                        // Something is up and this should never happen.
+                        // To recover, we will just erase all the flash.
+                        Err(Error::Corrupted {
+                            #[cfg(feature = "_test")]
+                            backtrace: std::backtrace::Backtrace::capture(),
+                        })
+                    }
+                }
+            }
+        },
+        repair = try_repair::<K, _>(flash, flash_range.clone(), cache, data_buffer).await?
+    )?;
+
+    Ok(MapItemIter {
+        flash,
+        flash_range: flash_range.clone(),
+        first_page,
+        cache,
+        current_page_index: first_page,
+        current_iter: ItemIter::new(
+            calculate_page_address::<S>(flash_range.clone(), first_page) + S::WORD_SIZE as u32,
+            calculate_page_end_address::<S>(flash_range.clone(), first_page) - S::WORD_SIZE as u32,
+        ),
+    })
 }
 
 /// Anything implementing this trait can be used as a key in the map functions.
