@@ -159,11 +159,11 @@ pub async fn fetch_item<'d, K: Key, V: Value<'d>, S: NorFlash>(
 
 /// Fetch the item, but with the item unborrowed, the address of the item and the length of the key
 #[allow(clippy::type_complexity)]
-async fn fetch_item_with_location<'d, K: Key, S: NorFlash>(
+async fn fetch_item_with_location<K: Key, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl PrivateKeyCacheImpl<K>,
-    data_buffer: &'d mut [u8],
+    data_buffer: &mut [u8],
     search_key: &K,
 ) -> Result<Option<(ItemUnborrowed, u32, Option<usize>)>, Error<S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
@@ -349,13 +349,13 @@ pub async fn store_item<'d, K: Key, V: Value<'d>, S: NorFlash>(
     )
 }
 
-async fn store_item_inner<'d, K: Key, S: NorFlash>(
+async fn store_item_inner<K: Key, S: NorFlash>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,
     data_buffer: &mut [u8],
     key: &K,
-    item: &dyn Value<'d>,
+    item: &dyn Value<'_>,
 ) -> Result<(), Error<S::Error>> {
     assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
     assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
@@ -727,7 +727,7 @@ pub struct MapItemIter<'d, 'c, S: NorFlash, CI: CacheImpl> {
     pub(crate) current_iter: ItemIter,
 }
 
-impl<'d, 'c, S: NorFlash, CI: CacheImpl> MapItemIter<'d, 'c, S, CI> {
+impl<S: NorFlash, CI: CacheImpl> MapItemIter<'_, '_, S, CI> {
     /// Get the next item in the iterator. Be careful that the given `data_buffer` should large enough to contain the serialized key and value.
     pub async fn next<'a, K: Key, V: Value<'a>>(
         &mut self,
@@ -1570,6 +1570,7 @@ mod tests {
         ];
 
         for _ in 0..100 {
+            #[allow(clippy::needless_range_loop)]
             for i in 0..24 {
                 store_item(
                     &mut flash,
@@ -1584,6 +1585,7 @@ mod tests {
             }
         }
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..24 {
             let item = fetch_item::<u16, &[u8], _>(
                 &mut flash,

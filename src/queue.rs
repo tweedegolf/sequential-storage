@@ -266,7 +266,7 @@ pub struct QueueIterator<'s, S: NorFlash, CI: CacheImpl> {
     next_address: NextAddress,
 }
 
-impl<'d, S: NorFlash, CI: CacheImpl> Debug for QueueIterator<'d, S, CI> {
+impl<S: NorFlash, CI: CacheImpl> Debug for QueueIterator<'_, S, CI> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("QueueIterator")
             .field("current_address", &self.next_address)
@@ -456,7 +456,7 @@ pub struct QueueIteratorEntry<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> {
     item: Item<'d>,
 }
 
-impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> Deref for QueueIteratorEntry<'s, 'd, 'q, S, CI> {
+impl<S: NorFlash, CI: CacheImpl> Deref for QueueIteratorEntry<'_, '_, '_, S, CI> {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
@@ -464,13 +464,13 @@ impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> Deref for QueueIteratorEntry<'s, 'd
     }
 }
 
-impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> DerefMut for QueueIteratorEntry<'s, 'd, 'q, S, CI> {
+impl<S: NorFlash, CI: CacheImpl> DerefMut for QueueIteratorEntry<'_, '_, '_, S, CI> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.item.data_mut()
     }
 }
 
-impl<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'s, 'd, 'q, S, CI> {
+impl<'d, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'_, 'd, '_, S, CI> {
     /// Get a mutable reference to the data of this entry, but consume the entry too.
     /// This function has some relaxed lifetime constraints compared to the deref impls.
     pub fn into_buf(self) -> &'d mut [u8] {

@@ -135,7 +135,7 @@ impl ItemHeader {
                         data_buffer,
                     }))
                 } else {
-                    return Ok(MaybeItem::Corrupted(self, data_buffer));
+                    Ok(MaybeItem::Corrupted(self, data_buffer))
                 }
             }
         }
@@ -302,7 +302,7 @@ impl<'d> Item<'d> {
     }
 }
 
-impl<'d> core::fmt::Debug for Item<'d> {
+impl core::fmt::Debug for Item<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Item")
             .field("header", &self.header)
@@ -377,7 +377,7 @@ pub enum MaybeItem<'d> {
     Present(Item<'d>),
 }
 
-impl<'d> core::fmt::Debug for MaybeItem<'d> {
+impl core::fmt::Debug for MaybeItem<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Corrupted(arg0, arg1) => f
