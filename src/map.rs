@@ -682,6 +682,7 @@ async fn remove_item_inner<K: Key, S: MultiwriteNorFlash>(
 /// # use sequential_storage::cache::NoCache;
 /// # use mock_flash::MockFlashBase;
 /// # use futures::executor::block_on;
+/// # use std::collections::HashMap;
 /// # type Flash = MockFlashBase<10, 1, 4096>;
 /// # mod mock_flash {
 /// #   include!("mock_flash.rs");
@@ -706,15 +707,18 @@ async fn remove_item_inner<K: Key, S: MultiwriteNorFlash>(
 /// .await
 /// .unwrap();
 ///
+/// let mut all_items = HashMap::new();
+///
 /// // Iterate through all items, suppose the Key and Value types are u8, u32
-/// while let Ok(Some((key, value))) = iterator
+/// while let Some((key, value)) = iterator
 ///     .next::<u8, u32>(&mut data_buffer)
 ///     .await
+///     .unwrap()
 /// {
 ///     // Do somethinmg with the item.
 ///     // Please note that for the same key there might be multiple items returned,
 ///     // the last one is the current active one.
-///     println!("{key}:{value}");
+///     all_items.insert(key, value);
 /// }
 /// # })
 /// ```
@@ -811,6 +815,7 @@ impl<S: NorFlash, CI: CacheImpl> MapItemIter<'_, '_, S, CI> {
 /// # use sequential_storage::cache::NoCache;
 /// # use mock_flash::MockFlashBase;
 /// # use futures::executor::block_on;
+/// # use std::collections::HashMap;
 /// # type Flash = MockFlashBase<10, 1, 4096>;
 /// # mod mock_flash {
 /// #   include!("mock_flash.rs");
@@ -835,14 +840,18 @@ impl<S: NorFlash, CI: CacheImpl> MapItemIter<'_, '_, S, CI> {
 /// .await
 /// .unwrap();
 ///
+/// let mut all_items = HashMap::new();
+///
 /// // Iterate through all items, suppose the Key and Value types are u8, u32
-/// while let Ok(Some((key, value))) = iterator
+/// while let Some((key, value)) = iterator
 ///     .next::<u8, u32>(&mut data_buffer)
 ///     .await
+///     .unwrap()
 /// {
 ///     // Do somethinmg with the item.
 ///     // Please note that for the same key there might be multiple items returned,
 ///     // the last one is the current active one.
+///     all_items.insert(key, value);
 /// }
 /// # })
 /// ```
@@ -1837,7 +1846,6 @@ mod tests {
             }
         }
 
-        // Check the
         assert_eq!(last_value_length, 9);
         assert_eq!(
             &last_value_buffer[..last_value_length],

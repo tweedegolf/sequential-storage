@@ -36,6 +36,7 @@ enum Op {
     Fetch(u8),
     Remove(u8),
     RemoveAll,
+    Iter,
 }
 
 #[derive(Arbitrary, Debug, Clone)]
@@ -263,7 +264,6 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                             }
                         }
                     }
-
                     Err(Error::Corrupted {
                         backtrace: _backtrace,
                     }) => {
@@ -273,6 +273,36 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                     }
                     Err(e) => panic!("{e:?}"),
                 }
+            }
+            Op::Iter => {
+                let mut iter = block_on(sequential_storage::map::fetch_all_items::<u8, _, _>(
+                    &mut flash,
+                    FLASH_RANGE,
+                    &mut cache,
+                    &mut buf.0,
+                ))
+                .unwrap();
+
+                let mut seen_items = HashMap::new();
+
+                loop {
+                    match block_on(iter.next::<u8, &[u8]>(&mut buf.0)) {
+                        Ok(None) => break,
+                        Ok(Some((key, val))) => {
+                            seen_items.insert(key, val.to_vec());
+                        }
+                        Err(Error::Corrupted {
+                            backtrace: _backtrace,
+                        }) => {
+                            #[cfg(fuzzing_repro)]
+                            eprintln!("Corrupted when removing! Originated from:\n{_backtrace:#}");
+                            panic!("Corrupted!");
+                        }
+                        Err(e) => panic!("{e:?}"),
+                    }
+                }
+
+                assert_eq!(seen_items, map);
             }
         }
     }
