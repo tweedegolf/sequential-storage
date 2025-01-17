@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+# 4.0.1 17-01-25
+
+- Swapped two checks so some fringe situations now rightly return corrupted data errors instead of wrongly user errors
+- Added random data input fuzzing
+  - You're still meant to run this crate on erased flash!
+
 # 4.0.0 28-12-24
 
 - Added item iterator for map.
