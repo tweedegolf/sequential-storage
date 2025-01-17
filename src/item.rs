@@ -110,11 +110,11 @@ impl ItemHeader {
             Some(header_crc) => {
                 let data_address = ItemHeader::data_address::<S>(address);
                 let read_len = round_up_to_alignment_usize::<S>(self.length as usize);
-                if data_buffer.len() < read_len {
-                    return Err(Error::BufferTooSmall(read_len));
-                }
                 if data_address + read_len as u32 > end_address {
                     return Ok(MaybeItem::Corrupted(self, data_buffer));
+                }
+                if data_buffer.len() < read_len {
+                    return Err(Error::BufferTooSmall(read_len));
                 }
 
                 flash
