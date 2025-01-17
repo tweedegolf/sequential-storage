@@ -155,10 +155,23 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
             while let (Some(header), item_address) = it.traverse(self, |_, _| false).await.unwrap()
             {
                 let next_item_address = header.next_item_address::<Self>(item_address);
-                let maybe_item = header
+                let maybe_item = match header
                     .read_item(self, &mut buf, item_address, page_data_end)
                     .await
-                    .unwrap();
+                {
+                    Ok(maybe_item) => maybe_item,
+                    Err(e) => {
+                        writeln!(
+                            s,
+                            "   Item COULD NOT BE READ at {item_address}..{next_item_address}"
+                        )
+                        .unwrap();
+
+                        println!("{s}");
+                        panic!("{e:?}");
+                    }
+                };
+
                 writeln!(
                     s,
                     "   Item {maybe_item:?} at {item_address}..{next_item_address}"
