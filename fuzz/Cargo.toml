@@ -36,3 +36,9 @@ doc = false
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing_repro)'] }
+
+[[bin]]
+name = "random-flash"
+path = "fuzz_targets/random-flash.rs"
+test = false
+doc = false
