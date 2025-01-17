@@ -56,7 +56,7 @@
 //!     &104729u32,
 //! ).await.unwrap();
 //!
-//! // When we ask for key 42, we not get back a Some with the correct value
+//! // When we ask for key 42, we now get back a Some with the correct value
 //!
 //! assert_eq!(
 //!     fetch_item::<u8, u32, _>(
