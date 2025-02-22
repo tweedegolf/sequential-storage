@@ -1,7 +1,7 @@
 [package]
 name = "example"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "029636e", features = ["task-arena-size-32768", "arch-cortex-m", "executor-thread", "defmt"] }

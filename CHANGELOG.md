@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Move to edition 2024
+
 # 4.0.1 17-01-25
 
 - Swapped two checks so some fringe situations now rightly return corrupted data errors instead of wrongly user errors

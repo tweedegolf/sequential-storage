@@ -1,7 +1,7 @@
 [package]
 name = "sequential-storage"
 version = "4.0.1"
-edition = "2021"
+edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "A crate for storing data in flash with minimal erase cycles."
 homepage = "https://github.com/tweedegolf/sequential-storage"
