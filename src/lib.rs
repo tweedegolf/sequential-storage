@@ -225,7 +225,7 @@ async fn get_page_state<S: NorFlash>(
             return Err(Error::Corrupted {
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
-            })
+            });
         }
         (false, false) => PageState::Open,
     };

@@ -33,11 +33,7 @@ impl<KEY: Eq, const KEYS: usize> CachedKeyPointers<KEY, KEYS> {
             .filter_map(|(index, val)| val.as_ref().map(|val| (index, val)))
             .find_map(
                 |(index, (known_key, _))| {
-                    if key == known_key {
-                        Some(index)
-                    } else {
-                        None
-                    }
+                    if key == known_key { Some(index) } else { None }
                 },
             )
     }

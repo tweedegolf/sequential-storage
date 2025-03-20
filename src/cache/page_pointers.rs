@@ -3,7 +3,7 @@ use core::{fmt::Debug, num::NonZeroU32, ops::Range};
 use embedded_storage_async::nor_flash::NorFlash;
 
 use crate::{
-    calculate_page_address, calculate_page_index, item::ItemHeader, NorFlashExt, PageState,
+    NorFlashExt, PageState, calculate_page_address, calculate_page_index, item::ItemHeader,
 };
 
 pub(crate) trait PagePointersCache: Debug {
