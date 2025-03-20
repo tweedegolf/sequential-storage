@@ -482,10 +482,17 @@ trait NorFlashExt {
 }
 
 impl<S: NorFlash> NorFlashExt for S {
-    const WORD_SIZE: usize = if Self::WRITE_SIZE > Self::READ_SIZE {
-        Self::WRITE_SIZE
-    } else {
-        Self::READ_SIZE
+    const WORD_SIZE: usize = {
+        assert!(
+            Self::WRITE_SIZE % Self::READ_SIZE == 0,
+            "Only flash with read and write sizes that are multiple of each other are supported"
+        );
+
+        if Self::WRITE_SIZE > Self::READ_SIZE {
+            Self::WRITE_SIZE
+        } else {
+            Self::READ_SIZE
+        }
     };
 }
 
