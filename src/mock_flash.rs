@@ -116,8 +116,8 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
     #[cfg(any(test, feature = "_test"))]
     /// Print all items in flash to the returned string
     pub async fn print_items(&mut self) -> String {
-        use crate::cache::NoCache;
         use crate::NorFlashExt;
+        use crate::cache::NoCache;
         use std::fmt::Write;
 
         let mut buf = [0; 1024 * 16];

@@ -4,7 +4,7 @@ use core::{fmt::Debug, ops::Range};
 
 use embedded_storage_async::nor_flash::NorFlash;
 
-use crate::{item::ItemHeader, map::Key, PageState};
+use crate::{PageState, item::ItemHeader, map::Key};
 
 use self::{
     key_pointers::{CachedKeyPointers, KeyPointersCache, UncachedKeyPointers},

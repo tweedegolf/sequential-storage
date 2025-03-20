@@ -3,10 +3,10 @@ mod queue_tests {
     use core::ops::Range;
 
     use crate::{
+        AlignedBuf,
         cache::{CacheImpl, NoCache, PagePointerCache, PageStateCache},
         mock_flash::{self, FlashStatsResult, WriteCountCheck},
         queue::{peek, pop, push},
-        AlignedBuf,
     };
 
     use futures_test::test;
@@ -109,10 +109,10 @@ mod map_tests {
     use core::ops::Range;
 
     use crate::{
+        AlignedBuf,
         cache::{KeyCacheImpl, KeyPointerCache, NoCache, PagePointerCache, PageStateCache},
         map::{fetch_item, store_item},
         mock_flash::{self, FlashStatsResult, WriteCountCheck},
-        AlignedBuf,
     };
 
     use futures_test::test;

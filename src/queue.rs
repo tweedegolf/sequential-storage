@@ -55,7 +55,7 @@
 //! # });
 //! ```
 
-use crate::item::{find_next_free_item_spot, is_page_empty, Item, ItemHeader, ItemHeaderIter};
+use crate::item::{Item, ItemHeader, ItemHeaderIter, find_next_free_item_spot, is_page_empty};
 
 use self::{cache::CacheImpl, item::ItemUnborrowed};
 

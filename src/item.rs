@@ -27,10 +27,10 @@ use core::ops::Range;
 use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
 
 use crate::{
-    cache::PrivateCacheImpl, calculate_page_address, calculate_page_end_address,
-    calculate_page_index, get_page_state, round_down_to_alignment, round_down_to_alignment_usize,
-    round_up_to_alignment, round_up_to_alignment_usize, AlignedBuf, Error, NorFlashExt, PageState,
-    MAX_WORD_SIZE,
+    AlignedBuf, Error, MAX_WORD_SIZE, NorFlashExt, PageState, cache::PrivateCacheImpl,
+    calculate_page_address, calculate_page_end_address, calculate_page_index, get_page_state,
+    round_down_to_alignment, round_down_to_alignment_usize, round_up_to_alignment,
+    round_up_to_alignment_usize,
 };
 
 #[derive(Debug, Clone)]

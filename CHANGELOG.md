@@ -5,6 +5,7 @@
 ## Unreleased
 
 - Move to edition 2024
+- Add a const assert to make sure flash `WRITE_SIZE` and `READ_SIZE` are multiples of each other
 
 # 4.0.1 17-01-25
 

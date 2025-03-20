@@ -98,12 +98,12 @@
 //! For your convenience there are premade implementations for the [Key] and [Value] traits.
 //!
 
-use core::mem::{size_of, MaybeUninit};
+use core::mem::{MaybeUninit, size_of};
 
 use cache::CacheImpl;
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 
-use crate::item::{find_next_free_item_spot, Item, ItemHeader, ItemIter};
+use crate::item::{Item, ItemHeader, ItemIter, find_next_free_item_spot};
 
 use self::{
     cache::{KeyCacheImpl, PrivateKeyCacheImpl},
@@ -1642,16 +1642,18 @@ mod tests {
         for j in (0..24).rev() {
             // Are all things still in flash that we expect?
             for i in 0..=j {
-                assert!(fetch_item::<u8, &[u8], _>(
-                    &mut flash,
-                    FLASH_RANGE,
-                    &mut cache::NoCache::new(),
-                    &mut data_buffer,
-                    &i
-                )
-                .await
-                .unwrap()
-                .is_some());
+                assert!(
+                    fetch_item::<u8, &[u8], _>(
+                        &mut flash,
+                        FLASH_RANGE,
+                        &mut cache::NoCache::new(),
+                        &mut data_buffer,
+                        &i
+                    )
+                    .await
+                    .unwrap()
+                    .is_some()
+                );
             }
 
             // Remove the item
@@ -1667,28 +1669,32 @@ mod tests {
 
             // Are all things still in flash that we expect?
             for i in 0..j {
-                assert!(fetch_item::<u8, &[u8], _>(
+                assert!(
+                    fetch_item::<u8, &[u8], _>(
+                        &mut flash,
+                        FLASH_RANGE,
+                        &mut cache::NoCache::new(),
+                        &mut data_buffer,
+                        &i
+                    )
+                    .await
+                    .unwrap()
+                    .is_some()
+                );
+            }
+
+            assert!(
+                fetch_item::<u8, &[u8], _>(
                     &mut flash,
                     FLASH_RANGE,
                     &mut cache::NoCache::new(),
                     &mut data_buffer,
-                    &i
+                    &j
                 )
                 .await
                 .unwrap()
-                .is_some());
-            }
-
-            assert!(fetch_item::<u8, &[u8], _>(
-                &mut flash,
-                FLASH_RANGE,
-                &mut cache::NoCache::new(),
-                &mut data_buffer,
-                &j
-            )
-            .await
-            .unwrap()
-            .is_none());
+                .is_none()
+            );
         }
     }
 
@@ -1720,16 +1726,18 @@ mod tests {
 
         // Sanity check that we can find all the keys we just added.
         for key in 0..24u8 {
-            assert!(fetch_item::<u8, &[u8], _>(
-                &mut flash,
-                FLASH_RANGE,
-                &mut cache::NoCache::new(),
-                &mut data_buffer,
-                &key
-            )
-            .await
-            .unwrap()
-            .is_some());
+            assert!(
+                fetch_item::<u8, &[u8], _>(
+                    &mut flash,
+                    FLASH_RANGE,
+                    &mut cache::NoCache::new(),
+                    &mut data_buffer,
+                    &key
+                )
+                .await
+                .unwrap()
+                .is_some()
+            );
         }
 
         // Remove all the items
@@ -1744,16 +1752,18 @@ mod tests {
 
         // Verify that none of the keys are present in flash.
         for key in 0..24 {
-            assert!(fetch_item::<u8, &[u8], _>(
-                &mut flash,
-                FLASH_RANGE,
-                &mut cache::NoCache::new(),
-                &mut data_buffer,
-                &key
-            )
-            .await
-            .unwrap()
-            .is_none());
+            assert!(
+                fetch_item::<u8, &[u8], _>(
+                    &mut flash,
+                    FLASH_RANGE,
+                    &mut cache::NoCache::new(),
+                    &mut data_buffer,
+                    &key
+                )
+                .await
+                .unwrap()
+                .is_none()
+            );
         }
     }
 

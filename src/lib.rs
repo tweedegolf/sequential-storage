@@ -225,7 +225,7 @@ async fn get_page_state<S: NorFlash>(
             return Err(Error::Corrupted {
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
-            })
+            });
         }
         (false, false) => PageState::Open,
     };
@@ -482,10 +482,17 @@ trait NorFlashExt {
 }
 
 impl<S: NorFlash> NorFlashExt for S {
-    const WORD_SIZE: usize = if Self::WRITE_SIZE > Self::READ_SIZE {
-        Self::WRITE_SIZE
-    } else {
-        Self::READ_SIZE
+    const WORD_SIZE: usize = {
+        assert!(
+            Self::WRITE_SIZE % Self::READ_SIZE == 0,
+            "Only flash with read and write sizes that are multiple of each other are supported"
+        );
+
+        if Self::WRITE_SIZE > Self::READ_SIZE {
+            Self::WRITE_SIZE
+        } else {
+            Self::READ_SIZE
+        }
     };
 }
 
