@@ -62,29 +62,39 @@ impl ItemHeader {
             return Ok(None);
         }
 
-        flash
-            .read(address, header_slice)
-            .await
-            .map_err(|e| Error::Storage {
-                value: e,
-                #[cfg(feature = "_test")]
-                backtrace: std::backtrace::Backtrace::capture(),
-            })?;
+        let mut retry = false;
+        loop {
+            flash
+                .read(address, header_slice)
+                .await
+                .map_err(|e| Error::Storage {
+                    value: e,
+                    #[cfg(feature = "_test")]
+                    backtrace: std::backtrace::Backtrace::capture(),
+                })?;
 
-        if header_slice.iter().all(|b| *b == 0xFF) {
-            // What we read was fully erased bytes, so there's no header here
-            return Ok(None);
-        }
+            if header_slice.iter().all(|b| *b == 0xFF) {
+                // What we read was fully erased bytes, so there's no header here
+                return Ok(None);
+            }
 
-        let length_crc =
-            u16::from_le_bytes(header_slice[Self::LENGTH_CRC_FIELD].try_into().unwrap());
-        let calculated_length_crc = crc16(&header_slice[Self::LENGTH_FIELD]);
+            let length_crc =
+                u16::from_le_bytes(header_slice[Self::LENGTH_CRC_FIELD].try_into().unwrap());
+            let calculated_length_crc = crc16(&header_slice[Self::LENGTH_FIELD]);
 
-        if calculated_length_crc != length_crc {
-            return Err(Error::Corrupted {
-                #[cfg(feature = "_test")]
-                backtrace: std::backtrace::Backtrace::capture(),
-            });
+            if calculated_length_crc != length_crc {
+                if retry {
+                    return Err(Error::Corrupted {
+                        #[cfg(feature = "_test")]
+                        backtrace: std::backtrace::Backtrace::capture(),
+                    });
+                } else {
+                    retry = true;
+                    continue;
+                }
+            }
+
+            break;
         }
 
         Ok(Some(Self {
@@ -117,25 +127,32 @@ impl ItemHeader {
                     return Err(Error::BufferTooSmall(read_len));
                 }
 
-                flash
-                    .read(data_address, &mut data_buffer[..read_len])
-                    .await
-                    .map_err(|e| Error::Storage {
-                        value: e,
-                        #[cfg(feature = "_test")]
-                        backtrace: std::backtrace::Backtrace::capture(),
-                    })?;
+                let mut retry = false;
+                loop {
+                    flash
+                        .read(data_address, &mut data_buffer[..read_len])
+                        .await
+                        .map_err(|e| Error::Storage {
+                            value: e,
+                            #[cfg(feature = "_test")]
+                            backtrace: std::backtrace::Backtrace::capture(),
+                        })?;
 
-                let data = &data_buffer[..self.length as usize];
-                let data_crc = adapted_crc32(data);
+                    let data = &data_buffer[..self.length as usize];
+                    let data_crc = adapted_crc32(data);
 
-                if data_crc == header_crc {
-                    Ok(MaybeItem::Present(Item {
-                        header: self,
-                        data_buffer,
-                    }))
-                } else {
-                    Ok(MaybeItem::Corrupted(self, data_buffer))
+                    break if data_crc == header_crc {
+                        Ok(MaybeItem::Present(Item {
+                            header: self,
+                            data_buffer,
+                        }))
+                    } else {
+                        if !retry {
+                            retry = true;
+                            continue;
+                        }
+                        Ok(MaybeItem::Corrupted(self, data_buffer))
+                    };
                 }
             }
         }
@@ -587,7 +604,7 @@ impl ItemHeaderIter {
                     return Ok((None, self.current_address));
                 }
                 Err(Error::Corrupted { .. }) => {
-                    self.current_address = ItemHeader::data_address::<S>(self.current_address);
+                    self.current_address += S::WORD_SIZE as u32;
                 }
                 Err(e) => return Err(e),
             }

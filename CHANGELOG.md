@@ -7,6 +7,7 @@
 - Move to edition 2024
 - Add a const assert to make sure flash `WRITE_SIZE` and `READ_SIZE` are multiples of each other
 - Impl the core error trait for the error types
+- Retry reading flash when CRCs are not equal to aid with SPI errors
 
 ## 4.0.1 17-01-25
 
