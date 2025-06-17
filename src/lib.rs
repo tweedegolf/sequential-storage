@@ -443,8 +443,7 @@ where
     }
 }
 
-#[cfg(feature = "std")]
-impl<S> std::error::Error for Error<S> where S: std::error::Error {}
+impl<S> core::error::Error for Error<S> where S: core::fmt::Display + core::fmt::Debug {}
 
 /// Round up the the given number to align with the wordsize of the flash.
 /// If the number is already aligned, it is not changed.
