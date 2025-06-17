@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## 4.0.2 17-06-25
+
 - Move to edition 2024
 - Add a const assert to make sure flash `WRITE_SIZE` and `READ_SIZE` are multiples of each other
 - Impl the core error trait for the error types
