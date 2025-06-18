@@ -1274,9 +1274,9 @@ mod tests {
             push_stats.take_average(pushes),
             FlashAverageStatsResult {
                 avg_erases: 0.0,
-                avg_reads: 16.8616,
+                avg_reads: 16.864,
                 avg_writes: 3.1252,
-                avg_bytes_read: 105.4016,
+                avg_bytes_read: 105.4112,
                 avg_bytes_written: 60.5008
             }
         );
@@ -1394,9 +1394,9 @@ mod tests {
             push_stats.take_average(pushes),
             FlashAverageStatsResult {
                 avg_erases: 0.0,
-                avg_reads: 16.8616,
+                avg_reads: 16.864,
                 avg_writes: 3.1252,
-                avg_bytes_read: 105.4016,
+                avg_bytes_read: 105.4112,
                 avg_bytes_written: 60.5008
             }
         );

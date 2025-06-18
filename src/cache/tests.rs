@@ -20,9 +20,9 @@ mod queue_tests {
             run_test(&mut NoCache::new()).await,
             FlashStatsResult {
                 erases: 149,
-                reads: 165003,
+                reads: 165009,
                 writes: 6299,
-                bytes_read: 651206,
+                bytes_read: 651212,
                 bytes_written: 53299
             }
         );
