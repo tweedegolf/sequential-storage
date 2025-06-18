@@ -8,6 +8,7 @@ homepage = "https://github.com/tweedegolf/sequential-storage"
 repository = "https://github.com/tweedegolf/sequential-storage"
 readme = "README.md"
 keywords = ["no_std", "embedded", "flash", "storage"]
+rust-version = "1.87"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
