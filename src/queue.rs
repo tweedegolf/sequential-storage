@@ -742,8 +742,22 @@ async fn find_youngest_page<S: NorFlash>(
         return Ok(last_used_page);
     }
 
-    // We have no partial open page. Search for an open page to start in
-    let first_open_page = find_first_page(flash, flash_range, cache, 0, PageState::Open).await?;
+    // We have no partial open page. Search for a closed page to anker ourselves to
+    let first_closed_page =
+        find_first_page(flash, flash_range.clone(), cache, 0, PageState::Closed).await?;
+
+    let first_open_page = match first_closed_page {
+        Some(anchor) => {
+            // We have at least one closed page
+            // The first one after is the page we need to use
+            find_first_page(flash, flash_range, cache, anchor, PageState::Open).await?
+        }
+        None => {
+            // No closed pages and no partial open pages, so all pages should be open
+            // Might as well start at page 0
+            Some(0)
+        }
+    };
 
     if let Some(first_open_page) = first_open_page {
         return Ok(first_open_page);
