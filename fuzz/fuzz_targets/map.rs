@@ -114,7 +114,7 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                     }
                     Err(Error::FullStorage) => {}
                     Err(Error::Storage {
-                        value: MockFlashError::EarlyShutoff(_),
+                        value: MockFlashError::EarlyShutoff(_, _),
                         backtrace: _backtrace,
                     }) => {
                         match block_on(sequential_storage::map::fetch_item::<u8, &[u8], _>(
@@ -165,7 +165,7 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                         assert_eq!(None, map.get(&key));
                     }
                     Err(Error::Storage {
-                        value: MockFlashError::EarlyShutoff(_),
+                        value: MockFlashError::EarlyShutoff(_, _),
                         backtrace: _backtrace,
                     }) => {
                         #[cfg(fuzzing_repro)]
@@ -193,7 +193,7 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                         map.remove(&key);
                     }
                     Err(Error::Storage {
-                        value: MockFlashError::EarlyShutoff(_),
+                        value: MockFlashError::EarlyShutoff(_, _),
                         backtrace: _backtrace,
                     }) => {
                         // Check if the item is still there. It might or it might not and either is fine
@@ -238,7 +238,7 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                         map.clear();
                     }
                     Err(Error::Storage {
-                        value: MockFlashError::EarlyShutoff(_),
+                        value: MockFlashError::EarlyShutoff(_, _),
                         backtrace: _backtrace,
                     }) => {
                         for key in map.keys().copied().collect::<Vec<_>>() {

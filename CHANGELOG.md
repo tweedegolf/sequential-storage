@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Fixed queue regression introduced in 2.0.0. It used to erase pages opportunistically for better performance.
+  This was missed in a refactor. This feature is back now and unlocks a boatload of performance.
+
 ## 4.0.2 17-06-25
 
 - Move to edition 2024

@@ -92,16 +92,16 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
         }
     }
 
-    fn check_shutoff(&mut self, address: u32, _operation: &str) -> Result<(), MockFlashError> {
+    fn check_shutoff(&mut self, address: u32, operation: Operation) -> Result<(), MockFlashError> {
         if let Some(bytes_until_shutoff) = self.bytes_until_shutoff.as_mut() {
             if let Some(next) = bytes_until_shutoff.checked_sub(1) {
                 *bytes_until_shutoff = next;
                 Ok(())
             } else {
                 #[cfg(fuzzing_repro)]
-                eprintln!("!!! Shutoff at {address} while doing '{_operation}' !!!");
+                eprintln!("!!! Shutoff at {address} while doing '{operation:?}' !!!");
                 self.bytes_until_shutoff = None;
-                Err(MockFlashError::EarlyShutoff(address))
+                Err(MockFlashError::EarlyShutoff(address, operation))
             }
         } else {
             Ok(())
@@ -297,7 +297,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
         }
 
         for index in from..to {
-            self.check_shutoff(index as u32, "erase")?;
+            self.check_shutoff(index as u32, Operation::Erase)?;
             self.as_bytes_mut()[index] = u8::MAX;
 
             if index % BYTES_PER_WORD == 0 {
@@ -328,7 +328,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
             .zip(range.step_by(BYTES_PER_WORD))
         {
             for (byte_index, byte) in source_word.iter().enumerate() {
-                self.check_shutoff((address + byte_index) as u32, "write")?;
+                self.check_shutoff((address + byte_index) as u32, Operation::Write)?;
 
                 if byte_index == 0 {
                     let word_writable = &mut self.writable[address / BYTES_PER_WORD];
@@ -371,7 +371,7 @@ pub enum MockFlashError {
     /// Location not writeable.
     NotWritable(u32),
     /// We got a shutoff
-    EarlyShutoff(u32),
+    EarlyShutoff(u32, Operation),
 }
 
 impl NorFlashError for MockFlashError {
@@ -380,7 +380,7 @@ impl NorFlashError for MockFlashError {
             MockFlashError::OutOfBounds => NorFlashErrorKind::OutOfBounds,
             MockFlashError::NotAligned => NorFlashErrorKind::NotAligned,
             MockFlashError::NotWritable(_) => NorFlashErrorKind::Other,
-            MockFlashError::EarlyShutoff(_) => NorFlashErrorKind::Other,
+            MockFlashError::EarlyShutoff(_, _) => NorFlashErrorKind::Other,
         }
     }
 }
@@ -549,4 +549,12 @@ impl approx::RelativeEq for FlashAverageStatsResult {
                 .avg_bytes_written
                 .relative_eq(&other.avg_bytes_written, epsilon, max_relative)
     }
+}
+
+#[allow(missing_docs)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Operation {
+    Read,
+    Write,
+    Erase,
 }

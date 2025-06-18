@@ -93,6 +93,9 @@ async fn try_general_repair<S: NorFlash>(
         }
     }
 
+    #[cfg(fuzzing_repro)]
+    eprintln!("General repair has been called");
+
     Ok(())
 }
 

@@ -19,10 +19,10 @@ mod queue_tests {
         assert_eq!(
             run_test(&mut NoCache::new()).await,
             FlashStatsResult {
-                erases: 146,
-                reads: 594934,
+                erases: 149,
+                reads: 165009,
                 writes: 6299,
-                bytes_read: 2766058,
+                bytes_read: 651212,
                 bytes_written: 53299
             }
         );
@@ -33,10 +33,10 @@ mod queue_tests {
         assert_eq!(
             run_test(&mut PageStateCache::<NUM_PAGES>::new()).await,
             FlashStatsResult {
-                erases: 146,
-                reads: 308740,
+                erases: 149,
+                reads: 68037,
                 writes: 6299,
-                bytes_read: 2479864,
+                bytes_read: 554240,
                 bytes_written: 53299
             }
         );
@@ -47,10 +47,10 @@ mod queue_tests {
         assert_eq!(
             run_test(&mut PagePointerCache::<NUM_PAGES>::new()).await,
             FlashStatsResult {
-                erases: 146,
-                reads: 211172,
+                erases: 149,
+                reads: 9959,
                 writes: 6299,
-                bytes_read: 1699320,
+                bytes_read: 89616,
                 bytes_written: 53299
             }
         );

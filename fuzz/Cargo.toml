@@ -8,12 +8,12 @@ edition = "2021"
 cargo-fuzz = true
 
 [dependencies]
-libfuzzer-sys = "0.4"
+libfuzzer-sys = "0.4.9"
 sequential-storage = { path = "..", features = ["_test"] }
-arbitrary = { version = "1.2.2", features = ["derive"] }
-rand = "0.8.5"
-rand_pcg = "0.3.1"
-futures = { version = "0.3.30", features = ["executor"] }
+arbitrary = { version = "1.4.1", features = ["derive"] }
+rand = "0.9.1"
+rand_pcg = "0.9.0"
+futures = { version = "0.3.31", features = ["executor"] }
 
 # Prevent this from interfering with workspaces
 [workspace]
