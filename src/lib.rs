@@ -485,10 +485,7 @@ trait NorFlashExt {
 
 impl<S: NorFlash> NorFlashExt for S {
     const WORD_SIZE: usize = {
-        assert!(
-            Self::WRITE_SIZE % Self::READ_SIZE == 0,
-            "Only flash with read and write sizes that are multiple of each other are supported"
-        );
+        assert_read_write_sizes(Self::WRITE_SIZE, Self::READ_SIZE);
 
         if Self::WRITE_SIZE > Self::READ_SIZE {
             Self::WRITE_SIZE
@@ -496,6 +493,14 @@ impl<S: NorFlash> NorFlashExt for S {
             Self::READ_SIZE
         }
     };
+}
+
+#[track_caller]
+const fn assert_read_write_sizes(write_size: usize, read_size: usize) {
+    assert!(
+        write_size.is_multiple_of(read_size) || read_size.is_multiple_of(write_size),
+        "Only flash with read and write sizes that are multiple of each other are supported"
+    );
 }
 
 macro_rules! run_with_auto_repair {
@@ -698,5 +703,13 @@ mod tests {
             .unwrap(),
             None
         );
+    }
+
+    #[test]
+    async fn read_write_sizes() {
+        assert_read_write_sizes(1, 1);
+        assert_read_write_sizes(1, 4);
+        assert_read_write_sizes(4, 4);
+        assert_read_write_sizes(4, 1);
     }
 }
