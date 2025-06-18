@@ -6,7 +6,7 @@ use libfuzzer_sys::fuzz_target;
 use rand::{Rng, SeedableRng};
 use sequential_storage::{
     cache::{CacheImpl, NoCache, PagePointerCache, PageStateCache},
-    mock_flash::{MockFlashBase, MockFlashError, WriteCountCheck},
+    mock_flash::{MockFlashBase, MockFlashError, Operation, WriteCountCheck},
     Error,
 };
 use std::{collections::VecDeque, fmt::Debug, ops::Range};
@@ -79,7 +79,9 @@ fn fuzz(ops: Input, mut cache: impl CacheImpl + Debug) {
 
         match &mut op {
             Op::Push(op) => {
-                let val: Vec<u8> = (0..op.value_len as usize % 16).map(|_| rng.gen()).collect();
+                let val: Vec<u8> = (0..op.value_len as usize % 16)
+                    .map(|_| rng.random())
+                    .collect();
 
                 let max_fit = match block_on(sequential_storage::queue::find_max_fit(
                     &mut flash,
@@ -124,7 +126,7 @@ fn fuzz(ops: Input, mut cache: impl CacheImpl + Debug) {
                         }
                     }
                     Err(Error::Storage {
-                        value: MockFlashError::EarlyShutoff(address),
+                        value: MockFlashError::EarlyShutoff(address, _),
                         backtrace: _backtrace,
                     }) => {
                         // We need to check if it managed to write
@@ -164,7 +166,7 @@ fn fuzz(ops: Input, mut cache: impl CacheImpl + Debug) {
                         );
                     }
                     Err(Error::Storage {
-                        value: MockFlashError::EarlyShutoff(address),
+                        value: MockFlashError::EarlyShutoff(address, operation),
                         backtrace: _backtrace,
                     }) => {
                         #[cfg(fuzzing_repro)]
@@ -172,9 +174,11 @@ fn fuzz(ops: Input, mut cache: impl CacheImpl + Debug) {
                             "Early shutoff when popping (single)! Originated from:\n{_backtrace:#}"
                         );
 
-                        if !matches!(block_on(flash.get_item_presence(address)), Some(true)) {
-                            // The item is no longer readable here
-                            order.pop_front();
+                        if operation != Operation::Erase {
+                            if !matches!(block_on(flash.get_item_presence(address)), Some(true)) {
+                                // The item is no longer readable here
+                                order.pop_front();
+                            }
                         }
                     }
                     Err(Error::Corrupted {
@@ -201,6 +205,17 @@ fn fuzz(ops: Input, mut cache: impl CacheImpl + Debug) {
                             value.map(|b| &b[..]),
                             order.front().as_ref().map(|target| target.as_slice())
                         );
+                    }
+                    Err(Error::Storage {
+                        value: MockFlashError::EarlyShutoff(_, Operation::Erase),
+                        backtrace: _backtrace,
+                    }) => {
+                        #[cfg(fuzzing_repro)]
+                        eprintln!(
+                                "Early shutoff when getting next iterator entry! Originated from:\n{_backtrace:#}"
+                            );
+
+                        break;
                     }
                     Err(Error::Corrupted {
                         backtrace: _backtrace,
@@ -243,6 +258,9 @@ fn fuzz(ops: Input, mut cache: impl CacheImpl + Debug) {
                             );
 
                             if *do_pop {
+                                #[cfg(fuzzing_repro)]
+                                eprintln!("Popping item at address: {}", value.address());
+
                                 let popped = block_on(value.pop());
 
                                 match popped {
@@ -268,7 +286,7 @@ fn fuzz(ops: Input, mut cache: impl CacheImpl + Debug) {
                                         panic!("Corrupted!");
                                     }
                                     Err(Error::Storage {
-                                        value: MockFlashError::EarlyShutoff(address),
+                                        value: MockFlashError::EarlyShutoff(address, operation),
                                         backtrace: _backtrace,
                                     }) => {
                                         #[cfg(fuzzing_repro)]
@@ -276,12 +294,14 @@ fn fuzz(ops: Input, mut cache: impl CacheImpl + Debug) {
                                             "Early shutoff when popping iterator entry! Originated from:\n{_backtrace:#}"
                                         );
 
-                                        if !matches!(
-                                            block_on(flash.get_item_presence(address)),
-                                            Some(true)
-                                        ) {
-                                            // The item is no longer readable here
-                                            order.remove(i - popped_items).unwrap();
+                                        if operation != Operation::Erase {
+                                            if !matches!(
+                                                block_on(flash.get_item_presence(address)),
+                                                Some(true)
+                                            ) {
+                                                // The item is no longer readable here
+                                                order.remove(i - popped_items).unwrap();
+                                            }
                                         }
 
                                         break;
@@ -293,6 +313,25 @@ fn fuzz(ops: Input, mut cache: impl CacheImpl + Debug) {
                         Ok(None) => {
                             assert_eq!(None, order.get(i as usize - popped_items));
                         }
+                        Err(Error::Storage {
+                            value: MockFlashError::EarlyShutoff(address, operation),
+                            backtrace: _backtrace,
+                        }) => {
+                            #[cfg(fuzzing_repro)]
+                            eprintln!(
+                                "Early shutoff when getting next iterator entry! Originated from:\n{_backtrace:#}"
+                            );
+
+                            if operation != Operation::Erase {
+                                if !matches!(block_on(flash.get_item_presence(address)), Some(true))
+                                {
+                                    // The item is no longer readable here
+                                    order.remove(i - popped_items).unwrap();
+                                }
+                            }
+
+                            break;
+                        }
                         Err(Error::Corrupted {
                             backtrace: _backtrace,
                         }) => {
@@ -302,7 +341,7 @@ fn fuzz(ops: Input, mut cache: impl CacheImpl + Debug) {
                             );
                             panic!("Corrupted!");
                         }
-                        Err(e) => panic!("Error iterating queue: {e:?}"),
+                        Err(e) => panic!("Error iterating queue: {e:#?}"),
                     }
                 }
             }

@@ -258,12 +258,21 @@ pub async fn pop<'d, S: MultiwriteNorFlash>(
     }
 }
 
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+enum PreviousItemStates {
+    AllPopped,
+    AllButCurrentPopped,
+    Unpopped,
+}
+
 /// An iterator-like interface for peeking into data stored in flash with the option to pop it.
 pub struct QueueIterator<'s, S: NorFlash, CI: CacheImpl> {
     flash: &'s mut S,
     flash_range: Range<u32>,
     cache: &'s mut CI,
     next_address: NextAddress,
+    previous_item_states: PreviousItemStates,
+    oldest_page: usize,
 }
 
 impl<S: NorFlash, CI: CacheImpl> Debug for QueueIterator<'_, S, CI> {
@@ -274,7 +283,7 @@ impl<S: NorFlash, CI: CacheImpl> Debug for QueueIterator<'_, S, CI> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 enum NextAddress {
     Address(u32),
     PageAfter(usize),
@@ -293,9 +302,16 @@ impl<'s, S: NorFlash, CI: CacheImpl> QueueIterator<'s, S, CI> {
 
         Ok(Self {
             flash,
-            flash_range,
+            flash_range: flash_range.clone(),
             cache,
             next_address: start_address,
+            previous_item_states: PreviousItemStates::AllPopped,
+            oldest_page: match start_address {
+                NextAddress::Address(address) => {
+                    calculate_page_index::<S>(flash_range.clone(), address)
+                }
+                NextAddress::PageAfter(index) => next_page::<S>(flash_range.clone(), index),
+            },
         })
     }
 
@@ -336,6 +352,12 @@ impl<'s, S: NorFlash, CI: CacheImpl> QueueIterator<'s, S, CI> {
         &'q mut self,
         data_buffer: &'d mut [u8],
     ) -> Result<Option<QueueIteratorEntry<'s, 'd, 'q, S, CI>>, Error<S::Error>> {
+        // We continue from a place where the current item wasn't popped
+        // That means that from now on, the next item will have unpopped items behind it
+        if self.previous_item_states == PreviousItemStates::AllButCurrentPopped {
+            self.previous_item_states = PreviousItemStates::Unpopped;
+        }
+
         let value = run_with_auto_repair!(
             function = self.next_inner(data_buffer).await,
             repair = try_repair(self.flash, self.flash_range.clone(), self.cache).await?
@@ -373,16 +395,23 @@ impl<'s, S: NorFlash, CI: CacheImpl> QueueIterator<'s, S, CI> {
                     )
                     .await?
                     .is_open()
-                        || next_page
-                            == find_oldest_page(
-                                self.flash,
-                                self.flash_range.clone(),
-                                &mut self.cache,
-                            )
-                            .await?
+                        || next_page == self.oldest_page
                     {
                         self.cache.unmark_dirty();
                         return Ok(None);
+                    }
+
+                    // We now know the previous page was left because there were no items on there anymore
+                    // If we know all those items were popped, we can proactively open the previous page
+                    // This is amazing for performance
+                    if self.previous_item_states == PreviousItemStates::AllPopped {
+                        open_page(
+                            self.flash,
+                            self.flash_range.clone(),
+                            self.cache,
+                            previous_page,
+                        )
+                        .await?;
                     }
 
                     let current_address =
@@ -437,6 +466,12 @@ impl<'s, S: NorFlash, CI: CacheImpl> QueueIterator<'s, S, CI> {
                         } else {
                             NextAddress::Address(next_address)
                         };
+
+                        // Record that the current item hasn't been popped (yet)
+                        if self.previous_item_states == PreviousItemStates::AllPopped {
+                            self.previous_item_states = PreviousItemStates::AllButCurrentPopped;
+                        }
+
                         // Return the item we found
                         self.cache.unmark_dirty();
                         return Ok(Some((item.unborrow(), found_item_address)));
@@ -487,6 +522,11 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'_, 'd, '_, S, CI> {
         let (header, data_buffer) = self.item.destruct();
         let ret = &mut data_buffer[..header.length as usize];
 
+        // We're popping ourself, so if all previous but us were popped, then now all are popped again
+        if self.iter.previous_item_states == PreviousItemStates::AllButCurrentPopped {
+            self.iter.previous_item_states = PreviousItemStates::AllPopped;
+        }
+
         header
             .erase_data(
                 self.iter.flash,
@@ -498,6 +538,12 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'_, 'd, '_, S, CI> {
 
         self.iter.cache.unmark_dirty();
         Ok(ret)
+    }
+
+    /// Get the flash address of the item
+    #[cfg(feature = "_test")]
+    pub fn address(&self) -> u32 {
+        self.address
     }
 }
 
@@ -1213,30 +1259,30 @@ mod tests {
         approx::assert_relative_eq!(
             push_stats.take_average(pushes),
             FlashAverageStatsResult {
-                avg_erases: 0.0612,
-                avg_reads: 17.902,
+                avg_erases: 0.0,
+                avg_reads: 16.8616,
                 avg_writes: 3.1252,
-                avg_bytes_read: 113.7248,
+                avg_bytes_read: 105.4016,
                 avg_bytes_written: 60.5008
             }
         );
         approx::assert_relative_eq!(
             peek_stats.take_average(peeks),
             FlashAverageStatsResult {
-                avg_erases: 0.0,
-                avg_reads: 8.0188,
+                avg_erases: 0.0052,
+                avg_reads: 3.8656,
                 avg_writes: 0.0,
-                avg_bytes_read: 96.4224,
+                avg_bytes_read: 70.4256,
                 avg_bytes_written: 0.0
             }
         );
         approx::assert_relative_eq!(
             pop_stats.take_average(pops),
             FlashAverageStatsResult {
-                avg_erases: 0.0,
-                avg_reads: 8.0188,
+                avg_erases: 0.0572,
+                avg_reads: 3.7772,
                 avg_writes: 1.0,
-                avg_bytes_read: 96.4224,
+                avg_bytes_read: 69.7184,
                 avg_bytes_written: 8.0
             }
         );
@@ -1333,20 +1379,20 @@ mod tests {
         approx::assert_relative_eq!(
             push_stats.take_average(pushes),
             FlashAverageStatsResult {
-                avg_erases: 0.0612,
-                avg_reads: 17.902,
+                avg_erases: 0.0,
+                avg_reads: 16.8616,
                 avg_writes: 3.1252,
-                avg_bytes_read: 113.7248,
+                avg_bytes_read: 105.4016,
                 avg_bytes_written: 60.5008
             }
         );
         approx::assert_relative_eq!(
             pop_stats.take_average(pops),
             FlashAverageStatsResult {
-                avg_erases: 0.0,
-                avg_reads: 82.618,
+                avg_erases: 0.0624,
+                avg_reads: 23.5768,
                 avg_writes: 1.0,
-                avg_bytes_read: 567.9904,
+                avg_bytes_read: 180.512,
                 avg_bytes_written: 8.0
             }
         );
