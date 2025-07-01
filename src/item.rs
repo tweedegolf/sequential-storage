@@ -24,10 +24,10 @@
 use core::num::NonZeroU32;
 use core::ops::Range;
 
-use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
+use unified_storage::Storage;
 
 use crate::{
-    AlignedBuf, Error, MAX_WORD_SIZE, NorFlashExt, PageState, cache::PrivateCacheImpl,
+    AlignedBuf, Error, MAX_WORD_SIZE, StorageExt, PageState, cache::PrivateCacheImpl,
     calculate_page_address, calculate_page_end_address, calculate_page_index, get_page_state,
     round_down_to_alignment, round_down_to_alignment_usize, round_up_to_alignment,
     round_up_to_alignment_usize,
@@ -50,7 +50,7 @@ impl ItemHeader {
     /// Read the header from the flash at the given address.
     ///
     /// If the item doesn't exist or doesn't fit between the address and the end address, none is returned.
-    pub async fn read_new<S: NorFlash>(
+    pub async fn read_new<S: Storage>(
         flash: &mut S,
         address: u32,
         end_address: u32,
@@ -108,7 +108,7 @@ impl ItemHeader {
         }))
     }
 
-    pub async fn read_item<'d, S: NorFlash>(
+    pub async fn read_item<'d, S: Storage>(
         self,
         flash: &mut S,
         data_buffer: &'d mut [u8],
@@ -158,7 +158,7 @@ impl ItemHeader {
         }
     }
 
-    async fn write<S: NorFlash>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
+    async fn write<S: Storage>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
         let mut buffer = AlignedBuf([0xFF; MAX_WORD_SIZE]);
 
         buffer[Self::DATA_CRC_FIELD]
@@ -181,7 +181,7 @@ impl ItemHeader {
     }
 
     /// Erase this item by setting the crc to none and overwriting the header with it
-    pub async fn erase_data<S: MultiwriteNorFlash>(
+    pub async fn erase_data<S: Storage>(
         mut self,
         flash: &mut S,
         flash_range: Range<u32>,
@@ -195,19 +195,19 @@ impl ItemHeader {
     }
 
     /// Get the address of the start of the data for this item
-    pub const fn data_address<S: NorFlash>(address: u32) -> u32 {
+    pub const fn data_address<S: Storage>(address: u32) -> u32 {
         address + round_up_to_alignment::<S>(Self::LENGTH as u32)
     }
 
     /// Get the location of the next item in flash
-    pub const fn next_item_address<S: NorFlash>(&self, address: u32) -> u32 {
+    pub const fn next_item_address<S: Storage>(&self, address: u32) -> u32 {
         let data_address = ItemHeader::data_address::<S>(address);
         data_address + round_up_to_alignment::<S>(self.length as u32)
     }
 
     /// Calculates the amount of bytes available for data.
     /// Essentially, it's the given amount minus the header and minus some alignment padding.
-    pub const fn available_data_bytes<S: NorFlash>(total_available: u32) -> Option<u32> {
+    pub const fn available_data_bytes<S: Storage>(total_available: u32) -> Option<u32> {
         let data_start = Self::data_address::<S>(0);
         let data_end = round_down_to_alignment::<S>(total_available);
 
@@ -234,7 +234,7 @@ impl<'d> Item<'d> {
         (self.header, self.data_buffer)
     }
 
-    pub async fn write_new<S: NorFlash>(
+    pub async fn write_new<S: Storage>(
         flash: &mut S,
         flash_range: Range<u32>,
         cache: &mut impl PrivateCacheImpl,
@@ -251,7 +251,7 @@ impl<'d> Item<'d> {
         Ok(header)
     }
 
-    async fn write_raw<S: NorFlash>(
+    async fn write_raw<S: Storage>(
         flash: &mut S,
         flash_range: Range<u32>,
         cache: &mut impl PrivateCacheImpl,
@@ -293,7 +293,7 @@ impl<'d> Item<'d> {
         Ok(())
     }
 
-    pub async fn write<S: NorFlash>(
+    pub async fn write<S: Storage>(
         &self,
         flash: &mut S,
         flash_range: Range<u32>,
@@ -350,7 +350,7 @@ impl ItemUnborrowed {
 /// Scans through the items to find the first spot that is free to store a new item.
 ///
 /// - `end_address` is exclusive.
-pub async fn find_next_free_item_spot<S: NorFlash>(
+pub async fn find_next_free_item_spot<S: Storage>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
@@ -487,7 +487,7 @@ fn crc32_with_initial(data: &[u8], initial: u32) -> u32 {
 ///
 /// The page state can optionally be given if it's already known.
 /// In that case the state will not be checked again.
-pub async fn is_page_empty<S: NorFlash>(
+pub async fn is_page_empty<S: Storage>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
@@ -534,7 +534,7 @@ impl ItemIter {
         }
     }
 
-    pub async fn next<'m, S: NorFlash>(
+    pub async fn next<'m, S: Storage>(
         &mut self,
         flash: &mut S,
         data_buffer: &'m mut [u8],
@@ -572,7 +572,7 @@ impl ItemHeaderIter {
     }
 
     /// Fetch next item
-    pub async fn next<S: NorFlash>(
+    pub async fn next<S: Storage>(
         &mut self,
         flash: &mut S,
     ) -> Result<(Option<ItemHeader>, u32), Error<S::Error>> {
@@ -583,7 +583,7 @@ impl ItemHeaderIter {
     /// the element is skipped and traversal continues.
     ///
     /// If the end of the headers is reached, a `None` item header is returned.
-    pub async fn traverse<S: NorFlash>(
+    pub async fn traverse<S: Storage>(
         &mut self,
         flash: &mut S,
         callback: impl Fn(&ItemHeader, u32) -> bool,

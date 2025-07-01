@@ -101,7 +101,7 @@
 use core::mem::{MaybeUninit, size_of};
 
 use cache::CacheImpl;
-use embedded_storage_async::nor_flash::MultiwriteNorFlash;
+use unified_storage::WriteBehavior;
 
 use crate::item::{Item, ItemHeader, ItemIter, find_next_free_item_spot};
 
@@ -111,6 +111,30 @@ use self::{
 };
 
 use super::*;
+
+/// Checks the storage for the requirements to be used as a host for the map
+pub const fn assert_storage<S: Storage>(flash_range: Range<u32>) {
+    // Check alignment
+    assert!(flash_range.start.is_multiple_of(S::ERASE_SIZE as u32));
+    assert!(flash_range.end.is_multiple_of(S::ERASE_SIZE as u32));
+    // Check we have at least 2 sectors
+    assert!(flash_range.end - flash_range.start >= S::ERASE_SIZE as u32 * 2);
+
+    const {
+        // Check if we're dealing with NAND or NOR
+        assert!(S::ERASE_SIZE >= S::WORD_SIZE * 3);
+        // Check if we can support this word size with our buffers
+        assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
+
+        assert!(matches!(
+            S::WRITE_BEHAVIOR,
+            WriteBehavior::TwiceSecondZero
+                | WriteBehavior::TwiceAnd
+                | WriteBehavior::InfiniteAnd
+                | WriteBehavior::InfiniteDirect
+        ));
+    }
+}
 
 /// Get the last stored value from the flash that is associated with the given key.
 /// If no value with the key is found, None is returned.
@@ -126,13 +150,15 @@ use super::*;
 /// Also watch out for using integers. This function will take any integer and it's easy to pass the wrong type.
 ///
 /// </div>
-pub async fn fetch_item<'d, K: Key, V: Value<'d>, S: NorFlash>(
+pub async fn fetch_item<'d, K: Key, V: Value<'d>, S: Storage>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,
     data_buffer: &'d mut [u8],
     search_key: &K,
 ) -> Result<Option<V>, Error<S::Error>> {
+    assert_storage::<S>(flash_range.clone());
+
     let result = run_with_auto_repair!(
         function = {
             fetch_item_with_location(flash, flash_range.clone(), cache, data_buffer, search_key)
@@ -159,20 +185,13 @@ pub async fn fetch_item<'d, K: Key, V: Value<'d>, S: NorFlash>(
 
 /// Fetch the item, but with the item unborrowed, the address of the item and the length of the key
 #[allow(clippy::type_complexity)]
-async fn fetch_item_with_location<K: Key, S: NorFlash>(
+async fn fetch_item_with_location<K: Key, S: Storage>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl PrivateKeyCacheImpl<K>,
     data_buffer: &mut [u8],
     search_key: &K,
 ) -> Result<Option<(ItemUnborrowed, u32, Option<usize>)>, Error<S::Error>> {
-    assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
-    assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
-    assert!(flash_range.end - flash_range.start >= S::ERASE_SIZE as u32 * 2);
-
-    assert!(S::ERASE_SIZE >= S::WORD_SIZE * 3);
-    assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
-
     if cache.is_dirty() {
         cache.invalidate_cache_state();
     }
@@ -334,7 +353,7 @@ async fn fetch_item_with_location<K: Key, S: NorFlash>(
 /// Also watch out for using integers. This function will take any integer and it's easy to pass the wrong type.
 ///
 /// </div>
-pub async fn store_item<'d, K: Key, V: Value<'d>, S: NorFlash>(
+pub async fn store_item<'d, K: Key, V: Value<'d>, S: Storage>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,
@@ -342,6 +361,8 @@ pub async fn store_item<'d, K: Key, V: Value<'d>, S: NorFlash>(
     key: &K,
     item: &V,
 ) -> Result<(), Error<S::Error>> {
+    assert_storage::<S>(flash_range.clone());
+
     run_with_auto_repair!(
         function =
             store_item_inner(flash, flash_range.clone(), cache, data_buffer, key, item).await,
@@ -349,7 +370,7 @@ pub async fn store_item<'d, K: Key, V: Value<'d>, S: NorFlash>(
     )
 }
 
-async fn store_item_inner<K: Key, S: NorFlash>(
+async fn store_item_inner<K: Key, S: Storage>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,
@@ -357,14 +378,6 @@ async fn store_item_inner<K: Key, S: NorFlash>(
     key: &K,
     item: &dyn Value<'_>,
 ) -> Result<(), Error<S::Error>> {
-    assert_eq!(flash_range.start % S::ERASE_SIZE as u32, 0);
-    assert_eq!(flash_range.end % S::ERASE_SIZE as u32, 0);
-
-    assert!(flash_range.end - flash_range.start >= S::ERASE_SIZE as u32 * 2);
-
-    assert!(S::ERASE_SIZE >= S::WORD_SIZE * 3);
-    assert!(S::WORD_SIZE <= MAX_WORD_SIZE);
-
     if cache.is_dirty() {
         cache.invalidate_cache_state();
     }
@@ -535,7 +548,7 @@ async fn store_item_inner<K: Key, S: NorFlash>(
 /// All items in flash have to be read and deserialized to find the items with the key.
 /// This is unlikely to be cached well.
 ///
-/// Alternatively, e.g. when you don't have a [MultiwriteNorFlash] flash, you could store your value inside an Option
+/// Alternatively, e.g. when you don't have a multiwrite [Storage] flash, you could store your value inside an Option
 /// and store the value `None` to mark it as erased.
 /// </div>
 ///
@@ -547,13 +560,15 @@ async fn store_item_inner<K: Key, S: NorFlash>(
 /// Also watch out for using integers. This function will take any integer and it's easy to pass the wrong type.
 ///
 /// </div>
-pub async fn remove_item<K: Key, S: MultiwriteNorFlash>(
+pub async fn remove_item<K: Key, S: Storage>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,
     data_buffer: &mut [u8],
     search_key: &K,
 ) -> Result<(), Error<S::Error>> {
+    assert_storage::<S>(flash_range.clone());
+
     run_with_auto_repair!(
         function = remove_item_inner::<K, _>(
             flash,
@@ -574,7 +589,7 @@ pub async fn remove_item<K: Key, S: MultiwriteNorFlash>(
 /// This might be really slow! This doesn't simply erase flash, but goes through all items and marks them as deleted.
 /// This is better for flash endurance.
 ///
-/// You might want to simply erase the flash range, e.g. if your flash does not implement [MultiwriteNorFlash].
+/// You might want to simply erase the flash range, e.g. if your flash does not implement [Storage].
 /// Consider using the helper method for that: [crate::erase_all].
 /// </div>
 ///
@@ -584,12 +599,14 @@ pub async fn remove_item<K: Key, S: MultiwriteNorFlash>(
 /// *multiple [Value] types. See the module-level docs for more information about this.*
 ///
 /// </div>
-pub async fn remove_all_items<K: Key, S: MultiwriteNorFlash>(
+pub async fn remove_all_items<K: Key, S: Storage>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,
     data_buffer: &mut [u8],
 ) -> Result<(), Error<S::Error>> {
+    assert_storage::<S>(flash_range.clone());
+
     run_with_auto_repair!(
         function =
             remove_item_inner::<K, _>(flash, flash_range.clone(), cache, data_buffer, None).await,
@@ -598,7 +615,7 @@ pub async fn remove_all_items<K: Key, S: MultiwriteNorFlash>(
 }
 
 /// If `search_key` is None, then all items will be removed
-async fn remove_item_inner<K: Key, S: MultiwriteNorFlash>(
+async fn remove_item_inner<K: Key, S: Storage>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,
@@ -722,7 +739,7 @@ async fn remove_item_inner<K: Key, S: MultiwriteNorFlash>(
 /// }
 /// # })
 /// ```
-pub struct MapItemIter<'d, 'c, S: NorFlash, CI: CacheImpl> {
+pub struct MapItemIter<'d, 'c, S: Storage, CI: CacheImpl> {
     flash: &'d mut S,
     flash_range: Range<u32>,
     first_page: usize,
@@ -731,7 +748,7 @@ pub struct MapItemIter<'d, 'c, S: NorFlash, CI: CacheImpl> {
     pub(crate) current_iter: ItemIter,
 }
 
-impl<S: NorFlash, CI: CacheImpl> MapItemIter<'_, '_, S, CI> {
+impl<S: Storage, CI: CacheImpl> MapItemIter<'_, '_, S, CI> {
     /// Get the next item in the iterator. Be careful that the given `data_buffer` should large enough to contain the serialized key and value.
     pub async fn next<'a, K: Key, V: Value<'a>>(
         &mut self,
@@ -856,12 +873,14 @@ impl<S: NorFlash, CI: CacheImpl> MapItemIter<'_, '_, S, CI> {
 /// # })
 /// ```
 ///
-pub async fn fetch_all_items<'d, 'c, K: Key, S: NorFlash, CI: KeyCacheImpl<K>>(
+pub async fn fetch_all_items<'d, 'c, K: Key, S: Storage, CI: KeyCacheImpl<K>>(
     flash: &'d mut S,
     flash_range: Range<u32>,
     cache: &'c mut CI,
     data_buffer: &mut [u8],
 ) -> Result<MapItemIter<'d, 'c, S, CI>, Error<S::Error>> {
+    assert_storage::<S>(flash_range.clone());
+
     // Get the first page index.
     // The first page used by the map is the next page of the `PartialOpen` page or the last `Closed` page
     let first_page = run_with_auto_repair!(
@@ -1182,7 +1201,7 @@ impl core::fmt::Display for SerializationError {
     }
 }
 
-async fn migrate_items<K: Key, S: NorFlash>(
+async fn migrate_items<K: Key, S: Storage>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl PrivateKeyCacheImpl<K>,
@@ -1247,7 +1266,7 @@ async fn migrate_items<K: Key, S: NorFlash>(
 /// If this function or the function call after this crate returns [Error::Corrupted], then it's unlikely
 /// that the state can be recovered. To at least make everything function again at the cost of losing the data,
 /// erase the flash range.
-async fn try_repair<K: Key, S: NorFlash>(
+async fn try_repair<K: Key, S: Storage>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl KeyCacheImpl<K>,

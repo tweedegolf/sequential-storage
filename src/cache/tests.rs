@@ -1,108 +1,108 @@
-#[cfg(test)]
-mod queue_tests {
-    use core::ops::Range;
+// #[cfg(test)]
+// mod queue_tests {
+//     use core::ops::Range;
 
-    use crate::{
-        AlignedBuf,
-        cache::{CacheImpl, NoCache, PagePointerCache, PageStateCache},
-        mock_flash::{self, FlashStatsResult, WriteCountCheck},
-        queue::{peek, pop, push},
-    };
+//     use crate::{
+//         AlignedBuf,
+//         cache::{CacheImpl, NoCache, PagePointerCache, PageStateCache},
+//         mock_flash::{self, FlashStatsResult, WriteCountCheck},
+//         queue::{peek, pop, push},
+//     };
 
-    use futures_test::test;
+//     use futures_test::test;
 
-    const NUM_PAGES: usize = 4;
-    const LOOP_COUNT: usize = 2000;
+//     const NUM_PAGES: usize = 4;
+//     const LOOP_COUNT: usize = 2000;
 
-    #[test]
-    async fn no_cache() {
-        assert_eq!(
-            run_test(&mut NoCache::new()).await,
-            FlashStatsResult {
-                erases: 149,
-                reads: 165009,
-                writes: 6299,
-                bytes_read: 651212,
-                bytes_written: 53299
-            }
-        );
-    }
+//     #[test]
+//     async fn no_cache() {
+//         assert_eq!(
+//             run_test(&mut NoCache::new()).await,
+//             FlashStatsResult {
+//                 erases: 149,
+//                 reads: 165009,
+//                 writes: 6299,
+//                 bytes_read: 651212,
+//                 bytes_written: 53299
+//             }
+//         );
+//     }
 
-    #[test]
-    async fn page_state_cache() {
-        assert_eq!(
-            run_test(&mut PageStateCache::<NUM_PAGES>::new()).await,
-            FlashStatsResult {
-                erases: 149,
-                reads: 68037,
-                writes: 6299,
-                bytes_read: 554240,
-                bytes_written: 53299
-            }
-        );
-    }
+//     #[test]
+//     async fn page_state_cache() {
+//         assert_eq!(
+//             run_test(&mut PageStateCache::<NUM_PAGES>::new()).await,
+//             FlashStatsResult {
+//                 erases: 149,
+//                 reads: 68037,
+//                 writes: 6299,
+//                 bytes_read: 554240,
+//                 bytes_written: 53299
+//             }
+//         );
+//     }
 
-    #[test]
-    async fn page_pointer_cache() {
-        assert_eq!(
-            run_test(&mut PagePointerCache::<NUM_PAGES>::new()).await,
-            FlashStatsResult {
-                erases: 149,
-                reads: 9959,
-                writes: 6299,
-                bytes_read: 89616,
-                bytes_written: 53299
-            }
-        );
-    }
+//     #[test]
+//     async fn page_pointer_cache() {
+//         assert_eq!(
+//             run_test(&mut PagePointerCache::<NUM_PAGES>::new()).await,
+//             FlashStatsResult {
+//                 erases: 149,
+//                 reads: 9959,
+//                 writes: 6299,
+//                 bytes_read: 89616,
+//                 bytes_written: 53299
+//             }
+//         );
+//     }
 
-    async fn run_test(cache: &mut impl CacheImpl) -> FlashStatsResult {
-        let mut flash =
-            mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true);
-        const FLASH_RANGE: Range<u32> = 0x00..0x400;
-        let mut data_buffer = AlignedBuf([0; 1024]);
+//     async fn run_test(cache: &mut impl CacheImpl) -> FlashStatsResult {
+//         let mut flash =
+//             mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true);
+//         const FLASH_RANGE: Range<u32> = 0x00..0x400;
+//         let mut data_buffer = AlignedBuf([0; 1024]);
 
-        let start_snapshot = flash.stats_snapshot();
+//         let start_snapshot = flash.stats_snapshot();
 
-        for i in 0..LOOP_COUNT {
-            println!("{i}");
-            let data = vec![i as u8; i % 20 + 1];
+//         for i in 0..LOOP_COUNT {
+//             println!("{i}");
+//             let data = vec![i as u8; i % 20 + 1];
 
-            println!("PUSH");
-            push(&mut flash, FLASH_RANGE, cache, &data, true)
-                .await
-                .unwrap();
-            assert_eq!(
-                peek(&mut flash, FLASH_RANGE, cache, &mut data_buffer)
-                    .await
-                    .unwrap()
-                    .unwrap(),
-                &data,
-                "At {i}"
-            );
-            println!("POP");
-            assert_eq!(
-                pop(&mut flash, FLASH_RANGE, cache, &mut data_buffer)
-                    .await
-                    .unwrap()
-                    .unwrap(),
-                &data,
-                "At {i}"
-            );
-            println!("PEEK");
-            assert_eq!(
-                peek(&mut flash, FLASH_RANGE, cache, &mut data_buffer)
-                    .await
-                    .unwrap(),
-                None,
-                "At {i}"
-            );
-            println!("DONE");
-        }
+//             println!("PUSH");
+//             push(&mut flash, FLASH_RANGE, cache, &data, true)
+//                 .await
+//                 .unwrap();
+//             assert_eq!(
+//                 peek(&mut flash, FLASH_RANGE, cache, &mut data_buffer)
+//                     .await
+//                     .unwrap()
+//                     .unwrap(),
+//                 &data,
+//                 "At {i}"
+//             );
+//             println!("POP");
+//             assert_eq!(
+//                 pop(&mut flash, FLASH_RANGE, cache, &mut data_buffer)
+//                     .await
+//                     .unwrap()
+//                     .unwrap(),
+//                 &data,
+//                 "At {i}"
+//             );
+//             println!("PEEK");
+//             assert_eq!(
+//                 peek(&mut flash, FLASH_RANGE, cache, &mut data_buffer)
+//                     .await
+//                     .unwrap(),
+//                 None,
+//                 "At {i}"
+//             );
+//             println!("DONE");
+//         }
 
-        start_snapshot.compare_to(flash.stats_snapshot())
-    }
-}
+//         start_snapshot.compare_to(flash.stats_snapshot())
+//     }
+// }
 
 #[cfg(test)]
 mod map_tests {

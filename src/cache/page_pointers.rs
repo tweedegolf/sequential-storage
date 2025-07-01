@@ -1,22 +1,22 @@
 use core::{fmt::Debug, num::NonZeroU32, ops::Range};
 
-use embedded_storage_async::nor_flash::NorFlash;
+use unified_storage::Storage;
 
 use crate::{
-    NorFlashExt, PageState, calculate_page_address, calculate_page_index, item::ItemHeader,
+    StorageExt, PageState, calculate_page_address, calculate_page_index, item::ItemHeader,
 };
 
 pub(crate) trait PagePointersCache: Debug {
     fn first_item_after_erased(&self, page_index: usize) -> Option<u32>;
     fn first_item_after_written(&self, page_index: usize) -> Option<u32>;
 
-    fn notice_item_written<S: NorFlash>(
+    fn notice_item_written<S: Storage>(
         &mut self,
         flash_range: Range<u32>,
         item_address: u32,
         item_header: &ItemHeader,
     );
-    fn notice_item_erased<S: NorFlash>(
+    fn notice_item_erased<S: Storage>(
         &mut self,
         flash_range: Range<u32>,
         item_address: u32,
@@ -85,7 +85,7 @@ impl<const PAGE_COUNT: usize> PagePointersCache for CachedPagePointers<PAGE_COUN
         self.after_written_pointers[page_index].map(|val| val.get())
     }
 
-    fn notice_item_written<S: NorFlash>(
+    fn notice_item_written<S: Storage>(
         &mut self,
         flash_range: Range<u32>,
         item_address: u32,
@@ -105,7 +105,7 @@ impl<const PAGE_COUNT: usize> PagePointersCache for CachedPagePointers<PAGE_COUN
         self.after_written_pointers[page_index] = NonZeroU32::new(next_item_address);
     }
 
-    fn notice_item_erased<S: NorFlash>(
+    fn notice_item_erased<S: Storage>(
         &mut self,
         flash_range: Range<u32>,
         item_address: u32,
@@ -151,7 +151,7 @@ impl PagePointersCache for UncachedPagePointers {
         None
     }
 
-    fn notice_item_written<S: NorFlash>(
+    fn notice_item_written<S: Storage>(
         &mut self,
         _flash_range: Range<u32>,
         _item_address: u32,
@@ -159,7 +159,7 @@ impl PagePointersCache for UncachedPagePointers {
     ) {
     }
 
-    fn notice_item_erased<S: NorFlash>(
+    fn notice_item_erased<S: Storage>(
         &mut self,
         _flash_range: Range<u32>,
         _item_address: u32,

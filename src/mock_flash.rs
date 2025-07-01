@@ -1,7 +1,5 @@
 use core::ops::{Add, AddAssign, Range};
-use embedded_storage_async::nor_flash::{
-    ErrorType, MultiwriteNorFlash, NorFlash, NorFlashError, NorFlashErrorKind, ReadNorFlash,
-};
+use unified_storage::Storage;
 
 /// State of a word in the flash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,7 +114,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
     #[cfg(any(test, feature = "_test"))]
     /// Print all items in flash to the returned string
     pub async fn print_items(&mut self) -> String {
-        use crate::NorFlashExt;
+        use crate::StorageExt;
         use crate::cache::NoCache;
         use std::fmt::Write;
 
@@ -190,7 +188,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
     /// - If true, the item is present and fine.
     /// - If false, the item is corrupt or erased.
     pub async fn get_item_presence(&mut self, target_item_address: u32) -> Option<bool> {
-        use crate::NorFlashExt;
+        use crate::StorageExt;
 
         if !Self::FULL_FLASH_RANGE.contains(&target_item_address) {
             return None;
@@ -237,16 +235,26 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
     }
 }
 
-impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> ErrorType
+impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> Storage
     for MockFlashBase<PAGES, BYTES_PER_WORD, PAGE_WORDS>
 {
     type Error = MockFlashError;
-}
 
-impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> ReadNorFlash
-    for MockFlashBase<PAGES, BYTES_PER_WORD, PAGE_WORDS>
-{
     const READ_SIZE: usize = BYTES_PER_WORD;
+
+    const WRITE_SIZE: usize = BYTES_PER_WORD;
+
+    const ERASE_SIZE: usize = Self::PAGE_BYTES;
+
+    const ERASE_VALUE: u8 = 0xFF;
+
+    const WRITE_BEHAVIOR: unified_storage::WriteBehavior = unified_storage::WriteBehavior::TwiceAnd;
+
+    const RELIABILITY: unified_storage::Reliability = unified_storage::Reliability::MediumDegrading;
+
+    fn capacity(&self) -> usize {
+        Self::CAPACITY_BYTES
+    }
 
     async fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
         self.current_stats.reads += 1;
@@ -262,23 +270,6 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> R
 
         Ok(())
     }
-
-    fn capacity(&self) -> usize {
-        Self::CAPACITY_BYTES
-    }
-}
-
-impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> MultiwriteNorFlash
-    for MockFlashBase<PAGES, BYTES_PER_WORD, PAGE_WORDS>
-{
-}
-
-impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> NorFlash
-    for MockFlashBase<PAGES, BYTES_PER_WORD, PAGE_WORDS>
-{
-    const WRITE_SIZE: usize = BYTES_PER_WORD;
-
-    const ERASE_SIZE: usize = Self::PAGE_BYTES;
 
     async fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
         self.current_stats.erases += 1;
@@ -359,6 +350,10 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
 
         Ok(())
     }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 /// Errors reported by mock flash.
@@ -372,17 +367,6 @@ pub enum MockFlashError {
     NotWritable(u32),
     /// We got a shutoff
     EarlyShutoff(u32, Operation),
-}
-
-impl NorFlashError for MockFlashError {
-    fn kind(&self) -> NorFlashErrorKind {
-        match self {
-            MockFlashError::OutOfBounds => NorFlashErrorKind::OutOfBounds,
-            MockFlashError::NotAligned => NorFlashErrorKind::NotAligned,
-            MockFlashError::NotWritable(_) => NorFlashErrorKind::Other,
-            MockFlashError::EarlyShutoff(_, _) => NorFlashErrorKind::Other,
-        }
-    }
 }
 
 /// The mode the write counter works in

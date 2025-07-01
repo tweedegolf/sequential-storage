@@ -12,8 +12,8 @@ use core::{
     fmt::Debug,
     ops::{Deref, DerefMut, Range},
 };
-use embedded_storage_async::nor_flash::NorFlash;
 use map::SerializationError;
+use unified_storage::Storage;
 
 #[cfg(feature = "alloc")]
 mod alloc_impl;
@@ -24,7 +24,7 @@ pub mod cache;
 mod heapless_impl;
 mod item;
 pub mod map;
-pub mod queue;
+// pub mod queue;
 
 #[cfg(any(test, doctest, feature = "_test"))]
 /// An in-memory flash type that can be used for mocking.
@@ -39,7 +39,7 @@ const MAX_WORD_SIZE: usize = 32;
 /// Resets the flash in the entire given flash range.
 ///
 /// This is just a thin helper function as it just calls the flash's erase function.
-pub async fn erase_all<S: NorFlash>(
+pub async fn erase_all<S: Storage>(
     flash: &mut S,
     flash_range: Range<u32>,
 ) -> Result<(), Error<S::Error>> {
@@ -57,7 +57,7 @@ pub async fn erase_all<S: NorFlash>(
 ///
 /// The associated data of each item is additionally padded to a full flash word size, but that's not part of this number.  
 /// This means the full item length is `returned number + (data length).next_multiple_of(S::WORD_SIZE)`.
-pub const fn item_overhead_size<S: NorFlash>() -> u32 {
+pub const fn item_overhead_size<S: Storage>() -> u32 {
     item::ItemHeader::data_address::<S>(0)
 }
 
@@ -77,7 +77,7 @@ impl<const SIZE: usize> DerefMut for AlignedBuf<SIZE> {
     }
 }
 
-async fn try_general_repair<S: NorFlash>(
+async fn try_general_repair<S: Storage>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
@@ -102,7 +102,7 @@ async fn try_general_repair<S: NorFlash>(
 /// Find the first page that is in the given page state.
 ///
 /// The search starts at starting_page_index (and wraps around back to 0 if required)
-async fn find_first_page<S: NorFlash>(
+async fn find_first_page<S: Storage>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
@@ -119,7 +119,7 @@ async fn find_first_page<S: NorFlash>(
 }
 
 /// Get all pages in the flash range from the given start to end (that might wrap back to 0)
-fn get_pages<S: NorFlash>(
+fn get_pages<S: Storage>(
     flash_range: Range<u32>,
     starting_page_index: usize,
 ) -> impl DoubleEndedIterator<Item = usize> {
@@ -131,13 +131,13 @@ fn get_pages<S: NorFlash>(
 }
 
 /// Get the next page index (wrapping around to 0 if required)
-fn next_page<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> usize {
+fn next_page<S: Storage>(flash_range: Range<u32>, page_index: usize) -> usize {
     let page_count = flash_range.len() / S::ERASE_SIZE;
     (page_index + 1) % page_count
 }
 
 /// Get the previous page index (wrapping around to the biggest page if required)
-fn previous_page<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> usize {
+fn previous_page<S: Storage>(flash_range: Range<u32>, page_index: usize) -> usize {
     let page_count = flash_range.len() / S::ERASE_SIZE;
 
     match page_index.checked_sub(1) {
@@ -147,11 +147,11 @@ fn previous_page<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> usi
 }
 
 /// Calculate the first address of the given page
-const fn calculate_page_address<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> u32 {
+const fn calculate_page_address<S: Storage>(flash_range: Range<u32>, page_index: usize) -> u32 {
     flash_range.start + (S::ERASE_SIZE * page_index) as u32
 }
 /// Calculate the last address (exclusive) of the given page
-const fn calculate_page_end_address<S: NorFlash>(
+const fn calculate_page_end_address<S: Storage>(
     flash_range: Range<u32>,
     page_index: usize,
 ) -> u32 {
@@ -159,11 +159,11 @@ const fn calculate_page_end_address<S: NorFlash>(
 }
 /// Get the page index from any address located inside that page
 #[allow(unused)]
-const fn calculate_page_index<S: NorFlash>(flash_range: Range<u32>, address: u32) -> usize {
+const fn calculate_page_index<S: Storage>(flash_range: Range<u32>, address: u32) -> usize {
     (address - flash_range.start) as usize / S::ERASE_SIZE
 }
 
-const fn calculate_page_size<S: NorFlash>() -> usize {
+const fn calculate_page_size<S: Storage>() -> usize {
     // Page minus the two page status words
     S::ERASE_SIZE - S::WORD_SIZE * 2
 }
@@ -172,7 +172,7 @@ const fn calculate_page_size<S: NorFlash>() -> usize {
 const MARKER: u8 = 0;
 
 /// Get the state of the page located at the given index
-async fn get_page_state<S: NorFlash>(
+async fn get_page_state<S: Storage>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
@@ -240,7 +240,7 @@ async fn get_page_state<S: NorFlash>(
 }
 
 /// Erase the page to open it again
-async fn open_page<S: NorFlash>(
+async fn open_page<S: Storage>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
@@ -264,7 +264,7 @@ async fn open_page<S: NorFlash>(
 }
 
 /// Fully closes a page by writing both the start and end marker
-async fn close_page<S: NorFlash>(
+async fn close_page<S: Storage>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
@@ -297,7 +297,7 @@ async fn close_page<S: NorFlash>(
 }
 
 /// Partially close a page by writing the start marker
-async fn partial_close_page<S: NorFlash>(
+async fn partial_close_page<S: Storage>(
     flash: &mut S,
     flash_range: Range<u32>,
     cache: &mut impl PrivateCacheImpl,
@@ -450,7 +450,7 @@ impl<S> core::error::Error for Error<S> where S: core::fmt::Display + core::fmt:
 
 /// Round up the the given number to align with the wordsize of the flash.
 /// If the number is already aligned, it is not changed.
-const fn round_up_to_alignment<S: NorFlash>(value: u32) -> u32 {
+const fn round_up_to_alignment<S: Storage>(value: u32) -> u32 {
     let alignment = S::WORD_SIZE as u32;
     match value % alignment {
         0 => value,
@@ -460,30 +460,30 @@ const fn round_up_to_alignment<S: NorFlash>(value: u32) -> u32 {
 
 /// Round up the the given number to align with the wordsize of the flash.
 /// If the number is already aligned, it is not changed.
-const fn round_up_to_alignment_usize<S: NorFlash>(value: usize) -> usize {
+const fn round_up_to_alignment_usize<S: Storage>(value: usize) -> usize {
     round_up_to_alignment::<S>(value as u32) as usize
 }
 
 /// Round down the the given number to align with the wordsize of the flash.
 /// If the number is already aligned, it is not changed.
-const fn round_down_to_alignment<S: NorFlash>(value: u32) -> u32 {
+const fn round_down_to_alignment<S: Storage>(value: u32) -> u32 {
     let alignment = S::WORD_SIZE as u32;
     (value / alignment) * alignment
 }
 
 /// Round down the the given number to align with the wordsize of the flash.
 /// If the number is already aligned, it is not changed.
-const fn round_down_to_alignment_usize<S: NorFlash>(value: usize) -> usize {
+const fn round_down_to_alignment_usize<S: Storage>(value: usize) -> usize {
     round_down_to_alignment::<S>(value as u32) as usize
 }
 
 /// Extension trait to get the overall word size, which is the largest of the write and read word size
-trait NorFlashExt {
+trait StorageExt {
     /// The largest of the write and read word size
     const WORD_SIZE: usize;
 }
 
-impl<S: NorFlash> NorFlashExt for S {
+impl<S: Storage> StorageExt for S {
     const WORD_SIZE: usize = {
         assert_read_write_sizes(Self::WRITE_SIZE, Self::READ_SIZE);
 

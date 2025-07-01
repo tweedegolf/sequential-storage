@@ -13,7 +13,7 @@ rust-version = "1.87"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-embedded-storage-async = "0.4.1"
+unified-storage = { path = "../unified-storage" }
 defmt = { version = "0.3", optional = true }
 futures = { version = "0.3.30", features = ["executor"], optional = true }
 approx = { version = "0.5.1", optional = true }

@@ -2,7 +2,7 @@
 
 use core::{fmt::Debug, ops::Range};
 
-use embedded_storage_async::nor_flash::NorFlash;
+use unified_storage::Storage;
 
 use crate::{PageState, item::ItemHeader, map::Key};
 
@@ -92,7 +92,7 @@ pub(crate) trait PrivateCacheImpl: Invalidate {
     }
 
     /// Let the cache know that an item has been written to flash
-    fn notice_item_written<S: NorFlash>(
+    fn notice_item_written<S: Storage>(
         &mut self,
         flash_range: Range<u32>,
         item_address: u32,
@@ -104,7 +104,7 @@ pub(crate) trait PrivateCacheImpl: Invalidate {
     }
 
     /// Let the cache know that an item has been erased from flash
-    fn notice_item_erased<S: NorFlash>(
+    fn notice_item_erased<S: Storage>(
         &mut self,
         flash_range: Range<u32>,
         item_address: u32,
