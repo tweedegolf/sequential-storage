@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Added `Key` implementation for the unit type `()` for easy storage of a single value
+
 ## 4.0.3 18-06-25
 
 - Fixed queue regression introduced in 2.0.0. It used to erase pages opportunistically for better performance.
