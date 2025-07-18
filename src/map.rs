@@ -1008,6 +1008,16 @@ impl<const N: usize> Key for [u8; N] {
     }
 }
 
+impl Key for () {
+    fn serialize_into(&self, _buffer: &mut [u8]) -> Result<usize, SerializationError> {
+        Ok(0)
+    }
+
+    fn deserialize_from(_buffer: &[u8]) -> Result<(Self, usize), SerializationError> {
+        Ok(((), 0))
+    }
+}
+
 /// The trait that defines how map values are serialized and deserialized.
 ///
 /// It also carries a lifetime so that zero-copy deserialization is supported.
@@ -1864,5 +1874,57 @@ mod tests {
 
         // Check total number of fetched items, +1 since we didn't count key 1
         assert_eq!(count + 1, UPPER_BOUND);
+    }
+
+    #[test]
+    async fn store_unit_key() {
+        let mut flash = MockFlashBig::default();
+        let flash_range = 0x000..0x1000;
+
+        let mut data_buffer = AlignedBuf([0; 128]);
+
+        let item = fetch_item::<(), &[u8], _>(
+            &mut flash,
+            flash_range.clone(),
+            &mut cache::NoCache::new(),
+            &mut data_buffer,
+            &(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(item, None);
+
+        store_item(
+            &mut flash,
+            flash_range.clone(),
+            &mut cache::NoCache::new(),
+            &mut data_buffer,
+            &(),
+            &[5u8],
+        )
+        .await
+        .unwrap();
+        store_item(
+            &mut flash,
+            flash_range.clone(),
+            &mut cache::NoCache::new(),
+            &mut data_buffer,
+            &(),
+            &[5u8, 6],
+        )
+        .await
+        .unwrap();
+
+        let item = fetch_item::<(), &[u8], _>(
+            &mut flash,
+            flash_range.clone(),
+            &mut cache::NoCache::new(),
+            &mut data_buffer,
+            &(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(item, &[5, 6]);
     }
 }
