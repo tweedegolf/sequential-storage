@@ -286,7 +286,7 @@ fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
                 let mut seen_items = HashMap::new();
 
                 loop {
-                    match block_on(iter.next::<u8, &[u8]>(&mut buf.0)) {
+                    match block_on(iter.next::<&[u8]>(&mut buf.0)) {
                         Ok(None) => break,
                         Ok(Some((key, val))) => {
                             seen_items.insert(key, val.to_vec());

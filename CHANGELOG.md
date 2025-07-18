@@ -5,6 +5,7 @@
 ## Unreleased
 
 - Added `Key` implementation for the unit type `()` for easy storage of a single value
+- *Breaking:* Changed API for map `fetch_all_items` such that the `Key` is captured in `MapItemIter`.
 
 ## 4.0.3 18-06-25
 

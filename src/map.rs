@@ -98,7 +98,10 @@
 //! For your convenience there are premade implementations for the [Key] and [Value] traits.
 //!
 
-use core::mem::{MaybeUninit, size_of};
+use core::{
+    marker::PhantomData,
+    mem::{MaybeUninit, size_of},
+};
 
 use cache::CacheImpl;
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
@@ -711,7 +714,7 @@ async fn remove_item_inner<K: Key, S: MultiwriteNorFlash>(
 ///
 /// // Iterate through all items, suppose the Key and Value types are u8, u32
 /// while let Some((key, value)) = iterator
-///     .next::<u8, u32>(&mut data_buffer)
+///     .next::<u32>(&mut data_buffer)
 ///     .await
 ///     .unwrap()
 /// {
@@ -722,18 +725,19 @@ async fn remove_item_inner<K: Key, S: MultiwriteNorFlash>(
 /// }
 /// # })
 /// ```
-pub struct MapItemIter<'d, 'c, S: NorFlash, CI: CacheImpl> {
+pub struct MapItemIter<'d, 'c, K: Key, S: NorFlash, CI: CacheImpl> {
     flash: &'d mut S,
     flash_range: Range<u32>,
     first_page: usize,
     cache: &'c mut CI,
     current_page_index: usize,
     pub(crate) current_iter: ItemIter,
+    _key: PhantomData<K>,
 }
 
-impl<S: NorFlash, CI: CacheImpl> MapItemIter<'_, '_, S, CI> {
+impl<K: Key, S: NorFlash, CI: CacheImpl> MapItemIter<'_, '_, K, S, CI> {
     /// Get the next item in the iterator. Be careful that the given `data_buffer` should large enough to contain the serialized key and value.
-    pub async fn next<'a, K: Key, V: Value<'a>>(
+    pub async fn next<'a, V: Value<'a>>(
         &mut self,
         data_buffer: &'a mut [u8],
     ) -> Result<Option<(K, V)>, Error<S::Error>> {
@@ -844,7 +848,7 @@ impl<S: NorFlash, CI: CacheImpl> MapItemIter<'_, '_, S, CI> {
 ///
 /// // Iterate through all items, suppose the Key and Value types are u8, u32
 /// while let Some((key, value)) = iterator
-///     .next::<u8, u32>(&mut data_buffer)
+///     .next::<u32>(&mut data_buffer)
 ///     .await
 ///     .unwrap()
 /// {
@@ -861,7 +865,7 @@ pub async fn fetch_all_items<'d, 'c, K: Key, S: NorFlash, CI: KeyCacheImpl<K>>(
     flash_range: Range<u32>,
     cache: &'c mut CI,
     data_buffer: &mut [u8],
-) -> Result<MapItemIter<'d, 'c, S, CI>, Error<S::Error>> {
+) -> Result<MapItemIter<'d, 'c, K, S, CI>, Error<S::Error>> {
     // Get the first page index.
     // The first page used by the map is the next page of the `PartialOpen` page or the last `Closed` page
     let first_page = run_with_auto_repair!(
@@ -919,6 +923,7 @@ pub async fn fetch_all_items<'d, 'c, K: Key, S: NorFlash, CI: KeyCacheImpl<K>>(
             calculate_page_address::<S>(flash_range.clone(), first_page) + S::WORD_SIZE as u32,
             calculate_page_end_address::<S>(flash_range.clone(), first_page) - S::WORD_SIZE as u32,
         ),
+        _key: PhantomData,
     })
 }
 
@@ -1855,7 +1860,7 @@ mod tests {
         let mut count = 0;
         let mut last_value_buffer = [0u8; 64];
         let mut last_value_length = 0;
-        while let Ok(Some((key, value))) = map_iter.next::<u8, &[u8]>(&mut data_buffer).await {
+        while let Ok(Some((key, value))) = map_iter.next::<&[u8]>(&mut data_buffer).await {
             if key == 1 {
                 // This is the key we stored multiple times, record the last value
                 last_value_length = value.len();
