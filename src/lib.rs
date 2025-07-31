@@ -434,7 +434,10 @@ where
         match self {
             Error::Storage { value, .. } => write!(f, "Storage error: {value}"),
             Error::FullStorage => write!(f, "Storage is full"),
+            #[cfg(not(feature = "_test"))]
             Error::Corrupted { .. } => write!(f, "Storage is corrupted"),
+            #[cfg(feature = "_test")]
+            Error::Corrupted { backtrace } => write!(f, "Storage is corrupted\n{backtrace}"),
             Error::BufferTooBig => write!(f, "A provided buffer was to big to be used"),
             Error::BufferTooSmall(needed) => write!(
                 f,

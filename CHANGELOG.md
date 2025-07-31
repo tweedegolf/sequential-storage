@@ -6,6 +6,7 @@
 
 - Added `Key` implementation for the unit type `()` for easy storage of a single value
 - *Breaking:* Changed API for map `fetch_all_items` such that the `Key` is captured in `MapItemIter`.
+- Fixed some logic so queue can be used on a single page. (It's still recommended to use at least 2 pages for both the queue and the map)
 
 ## 4.0.3 18-06-25
 

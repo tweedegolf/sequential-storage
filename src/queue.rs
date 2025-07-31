@@ -140,8 +140,11 @@ async fn push_inner<S: NorFlash>(
     if next_address.is_none() {
         // No cap left on this page, move to the next page
         let next_page = next_page::<S>(flash_range.clone(), current_page);
-        match get_page_state(flash, flash_range.clone(), cache, next_page).await? {
-            PageState::Open => {
+        let next_page_state = get_page_state(flash, flash_range.clone(), cache, next_page).await?;
+        let single_page = next_page == current_page;
+
+        match (next_page_state, single_page) {
+            (PageState::Open, _) => {
                 close_page(flash, flash_range.clone(), cache, current_page).await?;
                 partial_close_page(flash, flash_range.clone(), cache, next_page).await?;
                 next_address = Some(
@@ -149,25 +152,33 @@ async fn push_inner<S: NorFlash>(
                         + S::WORD_SIZE as u32,
                 );
             }
-            state @ PageState::Closed => {
+            (PageState::Closed, _) | (PageState::PartialOpen, true) => {
                 let next_page_data_start_address =
                     calculate_page_address::<S>(flash_range.clone(), next_page)
                         + S::WORD_SIZE as u32;
 
                 if !allow_overwrite_old_data
-                    && !is_page_empty(flash, flash_range.clone(), cache, next_page, Some(state))
-                        .await?
+                    && !is_page_empty(
+                        flash,
+                        flash_range.clone(),
+                        cache,
+                        next_page,
+                        Some(next_page_state),
+                    )
+                    .await?
                 {
                     cache.unmark_dirty();
                     return Err(Error::FullStorage);
                 }
 
                 open_page(flash, flash_range.clone(), cache, next_page).await?;
-                close_page(flash, flash_range.clone(), cache, current_page).await?;
+                if !single_page {
+                    close_page(flash, flash_range.clone(), cache, current_page).await?;
+                }
                 partial_close_page(flash, flash_range.clone(), cache, next_page).await?;
                 next_address = Some(next_page_data_start_address);
             }
-            PageState::PartialOpen => {
+            (PageState::PartialOpen, false) => {
                 // This should never happen
                 return Err(Error::Corrupted {
                     #[cfg(feature = "_test")]
@@ -1524,5 +1535,30 @@ mod tests {
             .await,
             Err(Error::ItemTooBig)
         );
+    }
+
+    #[test]
+    async fn push_on_single_page() {
+        let mut flash =
+            mock_flash::MockFlashBase::<1, 4, 256>::new(WriteCountCheck::Twice, None, true);
+        const FLASH_RANGE: Range<u32> = 0x000..0x400;
+
+        for _ in 0..100 {
+            match push(
+                &mut flash,
+                FLASH_RANGE,
+                &mut cache::NoCache::new(),
+                &[0, 1, 2, 3, 4],
+                true,
+            )
+            .await
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    println!("{}", flash.print_items().await);
+                    panic!("{e}");
+                }
+            }
+        }
     }
 }
