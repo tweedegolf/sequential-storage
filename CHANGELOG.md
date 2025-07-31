@@ -4,10 +4,14 @@
 
 ## Unreleased
 
+## 5.0.0 31-07-25
+
 - Added `Key` implementation for the unit type `()` for easy storage of a single value
 - *Breaking:* Changed API for map `fetch_all_items` such that the `Key` is captured in `MapItemIter`.
 - Fixed some logic so queue can be used on a single page. (It's still recommended to use at least 2 pages for both the queue and the map)
 - Add some extra logic to catch more crc collisions
+
+This release is 'disk'-compatible with 4.0
 
 ## 4.0.3 18-06-25
 
@@ -33,6 +37,8 @@
 - Added item iterator for map.
 - *Breaking:* Added `Value` impls for `bool`, `Option<T: Value>`, and `[T: Value; N]`.
   *This can break existing code because it changes type inference, be mindfull of that!*
+
+This release is 'disk'-compatible with 3.0
 
 ## 3.0.1 25-07-24
 
