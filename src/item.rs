@@ -97,7 +97,7 @@ impl ItemHeader {
             break;
         }
 
-        Ok(Some(Self {
+        let header = Self {
             length: u16::from_le_bytes(header_slice[Self::LENGTH_FIELD].try_into().unwrap()),
             crc: {
                 match u32::from_le_bytes(header_slice[Self::DATA_CRC_FIELD].try_into().unwrap()) {
@@ -105,7 +105,19 @@ impl ItemHeader {
                     value => Some(NonZeroU32::new(value).unwrap()),
                 }
             },
-        }))
+        };
+
+        if header.next_item_address::<S>(address) > end_address {
+            // We have a header here that's claims it's larger than is possible
+            // This is never written. So either it's a bug or there's a CRC collision
+            // Let's assume the latter
+            return Err(Error::Corrupted {
+                #[cfg(feature = "_test")]
+                backtrace: std::backtrace::Backtrace::capture(),
+            });
+        }
+
+        Ok(Some(header))
     }
 
     pub async fn read_item<'d, S: NorFlash>(
