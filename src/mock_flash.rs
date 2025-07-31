@@ -1,4 +1,7 @@
-use core::ops::{Add, AddAssign, Range};
+use core::{
+    fmt::Display,
+    ops::{Add, AddAssign, Range},
+};
 use embedded_storage_async::nor_flash::{
     ErrorType, MultiwriteNorFlash, NorFlash, NorFlashError, NorFlashErrorKind, ReadNorFlash,
 };
@@ -372,6 +375,12 @@ pub enum MockFlashError {
     NotWritable(u32),
     /// We got a shutoff
     EarlyShutoff(u32, Operation),
+}
+
+impl Display for MockFlashError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{self:?}")
+    }
 }
 
 impl NorFlashError for MockFlashError {
