@@ -336,7 +336,7 @@ async fn partial_close_page<S: NorFlash>(
 
 /// The state of a page
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt-10", derive(defmt::Format))]
 enum PageState {
     /// This page was fully written and has now been sealed
     Closed,
@@ -376,7 +376,7 @@ impl PageState {
 /// The main error type
 #[non_exhaustive]
 #[derive(Debug)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt-10", derive(defmt::Format))]
 pub enum Error<S> {
     /// An error in the storage (flash)
     Storage {

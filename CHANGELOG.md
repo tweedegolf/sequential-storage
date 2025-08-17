@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- *Breaking:* The feature `defmt-03` has been renamed `defmt-10` to avoid a future breaking change.
+
 ## 5.0.0 31-07-25
 
 - Added `Key` implementation for the unit type `()` for easy storage of a single value
