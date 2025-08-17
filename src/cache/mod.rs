@@ -164,7 +164,7 @@ impl<KEY: Key, T: PrivateKeyCacheImpl<KEY>> PrivateKeyCacheImpl<KEY> for &mut T 
 }
 
 #[derive(Debug)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt-10", derive(defmt::Format))]
 pub(crate) struct DirtTracker {
     /// Managed from the library code.
     ///
@@ -199,7 +199,7 @@ impl DirtTracker {
 /// This type of cache doesn't have to be kept around and may be constructed on every api call.
 /// You could simply pass `&mut NoCache::new()` every time.
 #[derive(Debug)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt-10", derive(defmt::Format))]
 pub struct NoCache {
     page_states: UncachedPageStates,
     page_pointers: UncachedPagePointers,
@@ -268,7 +268,7 @@ impl<KEY: Key> PrivateKeyCacheImpl<KEY> for NoCache {
 ///
 /// Make sure the page count is correct. If the number is lower than the actual amount, the code will panic at some point.
 #[derive(Debug)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt-10", derive(defmt::Format))]
 pub struct PageStateCache<const PAGE_COUNT: usize> {
     dirt_tracker: DirtTracker,
     page_states: CachedPageStates<PAGE_COUNT>,
@@ -342,7 +342,7 @@ impl<KEY: Key, const PAGE_COUNT: usize> PrivateKeyCacheImpl<KEY> for PageStateCa
 ///
 /// Make sure the page count is correct. If the number is lower than the actual amount, the code will panic at some point.
 #[derive(Debug)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt-10", derive(defmt::Format))]
 pub struct PagePointerCache<const PAGE_COUNT: usize> {
     dirt_tracker: DirtTracker,
     page_states: CachedPageStates<PAGE_COUNT>,
@@ -421,7 +421,7 @@ impl<KEY: Key, const PAGE_COUNT: usize> PrivateKeyCacheImpl<KEY> for PagePointer
 /// the chance of a cache hit.
 /// The keys are cached in a fifo and any time its location is updated in cache it's added to the front.
 #[derive(Debug)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt-10", derive(defmt::Format))]
 pub struct KeyPointerCache<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> {
     dirt_tracker: DirtTracker,
     page_states: CachedPageStates<PAGE_COUNT>,

@@ -14,7 +14,7 @@ rust-version = "1.87"
 
 [dependencies]
 embedded-storage-async = "0.4.1"
-defmt = { version = "0.3", optional = true }
+defmt = { version = "1.0.1", optional = true }
 futures = { version = "0.3.30", features = ["executor"], optional = true }
 approx = { version = "0.5.1", optional = true }
 arrayvec = { version = "0.7.4", default-features = false, optional = true }
@@ -26,7 +26,7 @@ futures = { version = "0.3.30", features = ["executor"] }
 futures-test = "0.3.30"
 
 [features]
-defmt-03 = ["dep:defmt"]
+defmt-10 = ["dep:defmt"]
 std = []
 # Enable the implementation of the map Key trait for ArrayVec and ArrayString
 arrayvec = ["dep:arrayvec"]

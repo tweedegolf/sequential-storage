@@ -29,7 +29,7 @@ pub(crate) trait PagePointersCache: Debug {
 
 // Use NoneZeroU32 because we never store 0's in here (because of the first page marker)
 // and so Option can make use of the niche so we save bytes
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt-10", derive(defmt::Format))]
 pub(crate) struct CachedPagePointers<const PAGE_COUNT: usize> {
     after_erased_pointers: [Option<NonZeroU32>; PAGE_COUNT],
     after_written_pointers: [Option<NonZeroU32>; PAGE_COUNT],
@@ -139,7 +139,7 @@ impl<const PAGE_COUNT: usize> PagePointersCache for CachedPagePointers<PAGE_COUN
 }
 
 #[derive(Debug, Default)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt-10", derive(defmt::Format))]
 pub(crate) struct UncachedPagePointers;
 
 impl PagePointersCache for UncachedPagePointers {
