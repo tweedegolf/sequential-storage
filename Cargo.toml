@@ -38,3 +38,6 @@ _test = ["dep:futures", "dep:approx", "std", "arrayvec", "alloc", "heapless"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing_repro)'] }
+
+[package.metadata.docs.rs]
+features = ["arrayvec", "alloc", "heapless", "heapless-09"]
