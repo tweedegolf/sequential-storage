@@ -5,6 +5,7 @@
 ## Unreleased
 
 - Fixed the `Value` implementation for `Option<T>` so it now serializes and deserializes properly
+- Add optional heapless v0.9 support
 
 ## 5.0.0 31-07-25
 

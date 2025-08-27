@@ -22,6 +22,8 @@ mod arrayvec_impl;
 pub mod cache;
 #[cfg(feature = "heapless")]
 mod heapless_impl;
+#[cfg(feature = "heapless-09")]
+mod heapless_09_impl;
 mod item;
 pub mod map;
 pub mod queue;
