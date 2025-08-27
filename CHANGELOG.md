@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Fixed the `Value` implementation for `Option<T>` so it now serializes and deserializes properly
+
 ## 5.0.0 31-07-25
 
 - Added `Key` implementation for the unit type `()` for easy storage of a single value

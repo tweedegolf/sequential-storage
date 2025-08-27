@@ -1059,7 +1059,7 @@ impl<'a, T: Value<'a>> Value<'a> for Option<T> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         if let Some(val) = self {
             <bool as Value>::serialize_into(&true, buffer)?;
-            <T as Value>::serialize_into(val, buffer)
+            <T as Value>::serialize_into(val, &mut buffer[1..]).map(|len| len + 1)
         } else {
             <bool as Value>::serialize_into(&false, buffer)
         }
@@ -1070,7 +1070,7 @@ impl<'a, T: Value<'a>> Value<'a> for Option<T> {
         Self: Sized,
     {
         if <bool as Value>::deserialize_from(buffer)? {
-            Ok(Some(<T as Value>::deserialize_from(buffer)?))
+            Ok(Some(<T as Value>::deserialize_from(&buffer[1..])?))
         } else {
             Ok(None)
         }
@@ -1931,5 +1931,20 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(item, &[5, 6]);
+    }
+
+    #[test]
+    async fn option_value() {
+        let mut buffer = [0; 2];
+
+        assert_eq!(Some(42u8).serialize_into(&mut buffer), Ok(2));
+        assert_eq!(Option::<u8>::deserialize_from(&buffer), Ok(Some(42u8)));
+        assert_eq!(buffer, [1, 42]);
+
+        let mut buffer = [0; 1];
+
+        assert_eq!(Option::<u8>::None.serialize_into(&mut buffer), Ok(1));
+        assert_eq!(Option::<u8>::deserialize_from(&buffer), Ok(None));
+        assert_eq!(buffer, [0]);
     }
 }
