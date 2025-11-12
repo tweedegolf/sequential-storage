@@ -6,12 +6,12 @@ use alloc::{string::String, vec::Vec};
 
 impl Key for Vec<u8> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        if buffer.len() < self.len() + 2 {
-            return Err(SerializationError::BufferTooSmall);
-        }
-
         if self.len() > u16::MAX as usize {
             return Err(SerializationError::InvalidData);
+        }
+
+        if buffer.len() < self.len() + 2 {
+            return Err(SerializationError::BufferTooSmall);
         }
 
         buffer[..2].copy_from_slice(&(self.len() as u16).to_le_bytes());
@@ -67,12 +67,12 @@ impl<'a> Value<'a> for Vec<u8> {
 
 impl Key for String {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        if buffer.len() < self.len() + 2 {
-            return Err(SerializationError::BufferTooSmall);
-        }
-
         if self.len() > u16::MAX as usize {
             return Err(SerializationError::InvalidData);
+        }
+
+        if buffer.len() < self.len() + 2 {
+            return Err(SerializationError::BufferTooSmall);
         }
 
         buffer[..2].copy_from_slice(&(self.len() as u16).to_le_bytes());
