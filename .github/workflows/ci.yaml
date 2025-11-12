@@ -77,7 +77,7 @@ jobs:
         working-directory: ./example
         run: |
           echo 'RESULT<<EOF' >> $GITHUB_OUTPUT
-          cargo size --release >> $GITHUB_OUTPUT
+          RUSTFLAGS='-Zunstable-options -Cpanic=immediate-abort' cargo size --release >> $GITHUB_OUTPUT
           echo 'EOF' >> $GITHUB_OUTPUT
         id: new-size
       - name: Save binary
