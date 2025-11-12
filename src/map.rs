@@ -98,10 +98,7 @@
 //! For your convenience there are premade implementations for the [Key] and [Value] traits.
 //!
 
-use core::{
-    marker::PhantomData,
-    mem::{MaybeUninit, size_of},
-};
+use core::{marker::PhantomData, mem::size_of};
 
 use cache::CacheImpl;
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
@@ -1082,70 +1079,6 @@ impl<'a, T: Value<'a>> Value<'a> for Option<T> {
     }
 }
 
-impl<'a, T: Value<'a>, const N: usize> Value<'a> for [T; N] {
-    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        if buffer.len() < size_of::<T>() * N {
-            return Err(SerializationError::BufferTooSmall);
-        }
-
-        let mut size = 0;
-        for v in self {
-            size += <T as Value>::serialize_into(v, &mut buffer[size..])?;
-        }
-
-        Ok(size)
-    }
-
-    fn deserialize_from(buffer: &'a [u8]) -> Result<(Self, usize), SerializationError>
-    where
-        Self: Sized,
-    {
-        let mut array = MaybeUninit::<[T; N]>::uninit();
-
-        if N == 0 {
-            // SAFETY: This type is of zero size.
-            return Ok((unsafe { array.assume_init() }, 0));
-        }
-
-        let elems = uninit_array_elems_mut(&mut array);
-
-        let mut filled = 0;
-        let mut total_read = 0;
-        for i in 0..N {
-            match <T as Value>::deserialize_from(&buffer[i * size_of::<T>()..]) {
-                Ok((value, read)) => {
-                    total_read += read;
-                    elems[i].write(value);
-                    filled += 1;
-                }
-                Err(e) => {
-                    for elem in &mut elems[0..filled] {
-                        // SAFETY: elements[0..filled] have been initialized.
-                        unsafe {
-                            elem.assume_init_drop();
-                        }
-                    }
-                    return Err(e);
-                }
-            }
-        }
-
-        // SAFETY: All array elements have been initialized.
-        Ok((unsafe { array.assume_init() }, total_read))
-    }
-}
-
-/// Convert a maybe uninitialized array to an array of maybe uninitialized values.
-///
-/// Implemented as function to ensure the lifetime of the input is carried over to the new reference.
-fn uninit_array_elems_mut<T, const N: usize>(
-    array: &mut MaybeUninit<[T; N]>,
-) -> &mut [MaybeUninit<T>; N] {
-    // SAFETY: We convert from &mut MaybeUninit<[T; N]> to &mut [MaybeUninit<T>; N].
-    // These types have identical layout and are both potentially entirely unitialized.
-    unsafe { core::mem::transmute(array) }
-}
-
 impl<'a> Value<'a> for &'a [u8] {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         if buffer.len() < self.len() {
@@ -1165,21 +1098,55 @@ impl<'a> Value<'a> for &'a [u8] {
 }
 
 macro_rules! impl_map_item_num {
-    ($int:ty) => {
-        impl<'a> Value<'a> for $int {
+    ($num:ty) => {
+        impl<'a> Value<'a> for $num {
             fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-                buffer[..core::mem::size_of::<Self>()].copy_from_slice(&self.to_le_bytes());
-                Ok(core::mem::size_of::<Self>())
+                let size = size_of::<Self>();
+                if buffer.len() < size {
+                    Err(SerializationError::BufferTooSmall)
+                } else {
+                    buffer[..size].copy_from_slice(&self.to_le_bytes());
+                    Ok(size)
+                }
             }
 
             fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), SerializationError> {
-                let size = core::mem::size_of::<Self>();
+                let size = size_of::<Self>();
                 let value = Self::from_le_bytes(
                     buffer[..size]
                         .try_into()
                         .map_err(|_| SerializationError::BufferTooSmall)?,
                 );
                 Ok((value, size))
+            }
+        }
+
+        // Also implement `Value` for arrays of numbers.
+        impl<'a, const N: usize> Value<'a> for [$num; N] {
+            fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
+                let elem_size = size_of::<$num>();
+                if buffer.len() < elem_size * N {
+                    return Err(SerializationError::BufferTooSmall);
+                }
+                for i in 0..N {
+                    buffer[i * elem_size..][..elem_size].copy_from_slice(&self[i].to_le_bytes())
+                }
+                Ok(elem_size * N)
+            }
+
+            fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), SerializationError> {
+                let elem_size = size_of::<$num>();
+                if buffer.len() < elem_size * N {
+                    return Err(SerializationError::BufferTooSmall);
+                }
+
+                let mut array = [0 as $num; N];
+                for i in 0..N {
+                    array[i] = <$num>::from_le_bytes(
+                        buffer[i * elem_size..][..elem_size].try_into().unwrap(),
+                    )
+                }
+                Ok((array, elem_size * N))
             }
         }
     };
@@ -1976,5 +1943,27 @@ mod tests {
         assert_eq!(Option::<u8>::None.serialize_into(&mut buffer), Ok(1));
         assert_eq!(Option::<u8>::deserialize_from(&buffer), Ok((None, 1)));
         assert_eq!(buffer, [0]);
+    }
+
+    #[test]
+    async fn array_value() {
+        let mut buffer = [0; 3];
+        assert_eq!(Value::serialize_into(&[1u8, 2, 3], &mut buffer), Ok(3));
+        assert_eq!(buffer, [1, 2, 3]);
+        assert_eq!(
+            <[u8; 3] as Value>::deserialize_from(&buffer),
+            Ok(([1, 2, 3], 3))
+        );
+
+        let mut buffer = [0; 4];
+        assert_eq!(
+            Value::serialize_into(&[0x1234u16, 0x5678], &mut buffer),
+            Ok(4)
+        );
+        assert_eq!(buffer, [0x34, 0x12, 0x78, 0x56]);
+        assert_eq!(
+            <[u16; 2]>::deserialize_from(&buffer),
+            Ok(([0x1234, 0x5678], 4))
+        );
     }
 }
