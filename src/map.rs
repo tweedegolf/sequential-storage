@@ -1109,11 +1109,25 @@ impl<'a, T: Value<'a>, const N: usize> Value<'a> for [T; N] {
 
         let elems = uninit_array_elems_mut(&mut array);
 
+        let mut filled = 0;
         let mut total_read = 0;
         for i in 0..N {
-            let (value, read) = <T as Value>::deserialize_from(&buffer[i * size_of::<T>()..])?;
-            total_read += read;
-            elems[i].write(value);
+            match <T as Value>::deserialize_from(&buffer[i * size_of::<T>()..]) {
+                Ok((value, read)) => {
+                    total_read += read;
+                    elems[i].write(value);
+                    filled += 1;
+                }
+                Err(e) => {
+                    for elem in &mut elems[0..filled] {
+                        // SAFETY: elements[0..filled] have been initialized.
+                        unsafe {
+                            elem.assume_init_drop();
+                        }
+                    }
+                    return Err(e);
+                }
+            }
         }
 
         // SAFETY: All array elements have been initialized.
