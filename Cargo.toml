@@ -1,6 +1,6 @@
 [package]
 name = "sequential-storage"
-version = "5.0.1"
+version = "6.0.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "A crate for storing data in flash with minimal erase cycles."

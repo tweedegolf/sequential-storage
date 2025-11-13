@@ -6,16 +6,16 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "029636e", features = ["task-arena-size-32768", "arch-cortex-m", "executor-thread", "defmt"] }
-embassy-nrf = { git = "https://github.com/embassy-rs/embassy.git", rev = "029636e", features = ["defmt", "nrf52840"] }
-embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", rev = "029636e", default-features = false }
+embassy-executor = { version = "0.9.1", features = ["arch-cortex-m", "executor-thread", "defmt"] }
+embassy-nrf = { version = "0.8.0", features = ["defmt", "nrf52840"] }
+embassy-embedded-hal = { version = "0.5.0", default-features = false }
 
 defmt = "1.0.1"
 defmt-rtt = "1.0.0"
 
 cortex-m = { version = "0.7.6", features = ["inline-asm", "critical-section-single-core"] }
 cortex-m-rt = "0.7.0"
-panic-probe = { version = "0.3", features = ["print-defmt"] }
+panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 embedded-storage = "0.3.1"
 embedded-storage-async = "0.4.1"
 
