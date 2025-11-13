@@ -51,8 +51,6 @@ jobs:
     permissions:
       actions: read
       pull-requests: write
-    env:
-      RUSTFLAGS: "-Zunstable-options -Cpanic=immediate-abort"
     steps:
       - uses: dtolnay/rust-toolchain@nightly
       - uses: actions/cache@v3
