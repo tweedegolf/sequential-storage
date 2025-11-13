@@ -70,6 +70,14 @@ impl<T, const N: usize> List<T, N> {
             Self::BS(v) => v,
         }
     }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Arr(a) => N,
+            #[cfg(feature = "alloc")]
+            List::BS(bs) => bs.len(),
+        }
+    }
 }
 
 impl<T, const N: usize> core::ops::Index<usize> for List<T, N> {

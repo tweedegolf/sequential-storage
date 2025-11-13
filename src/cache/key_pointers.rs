@@ -52,8 +52,9 @@ impl<KEY: Eq, const KEYS: usize> CachedKeyPointers<KEY, KEYS> {
     }
 
     fn insert_front(&mut self, value: (KEY, NonZeroU32)) {
-        self.key_pointers[KEYS - 1] = Some(value);
-        move_to_front(self.key_pointers.as_mut_slice(), KEYS - 1);
+        let keys = self.key_pointers.len();
+        self.key_pointers[keys - 1] = Some(value);
+        move_to_front(self.key_pointers.as_mut_slice(), keys - 1);
     }
 }
 
