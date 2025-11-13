@@ -1,6 +1,6 @@
 [package]
 name = "sequential-storage"
-version = "5.0.0"
+version = "5.0.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "A crate for storing data in flash with minimal erase cycles."
@@ -19,6 +19,7 @@ futures = { version = "0.3.30", features = ["executor"], optional = true }
 approx = { version = "0.5.1", optional = true }
 arrayvec = { version = "0.7.4", default-features = false, optional = true }
 heapless = { version = "0.8.0", optional = true }
+heapless-09 = { package = "heapless", version = "0.9.0", optional = true }
 
 [dev-dependencies]
 approx = "0.5.1"
@@ -32,7 +33,11 @@ std = []
 arrayvec = ["dep:arrayvec"]
 alloc = []
 heapless = ["dep:heapless"]
+heapless-09 = ["dep:heapless-09"]
 _test = ["dep:futures", "dep:approx", "std", "arrayvec", "alloc", "heapless"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing_repro)'] }
+
+[package.metadata.docs.rs]
+features = ["arrayvec", "alloc", "heapless", "heapless-09"]

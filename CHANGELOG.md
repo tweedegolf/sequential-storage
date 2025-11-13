@@ -6,6 +6,11 @@
 
 - *Breaking:* The feature `defmt-03` has been renamed `defmt-10` to avoid a future breaking change.
 
+## 5.0.1 27-08-25
+
+- Fixed the `Value` implementation for `Option<T>` so it now serializes and deserializes properly
+- Add optional heapless v0.9 support
+
 ## 5.0.0 31-07-25
 
 - Added `Key` implementation for the unit type `()` for easy storage of a single value

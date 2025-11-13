@@ -98,10 +98,7 @@
 //! For your convenience there are premade implementations for the [Key] and [Value] traits.
 //!
 
-use core::{
-    marker::PhantomData,
-    mem::{MaybeUninit, size_of},
-};
+use core::{marker::PhantomData, mem::size_of};
 
 use cache::CacheImpl;
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
@@ -154,10 +151,10 @@ pub async fn fetch_item<'d, K: Key, V: Value<'d>, S: NorFlash>(
         None => K::get_len(&data_buffer[..data_len])?,
     };
 
-    Ok(Some(
+    let (value, _size) =
         V::deserialize_from(&data_buffer[item_key_len..][..data_len - item_key_len])
-            .map_err(Error::SerializationError)?,
-    ))
+            .map_err(Error::SerializationError)?;
+    Ok(Some(value))
 }
 
 /// Fetch the item, but with the item unborrowed, the address of the item and the length of the key
@@ -787,12 +784,10 @@ impl<K: Key, S: NorFlash, CI: CacheImpl> MapItemIter<'_, '_, K, S, CI> {
 
         let data_len = item.header.length as usize;
         let (key, key_len) = K::deserialize_from(item.data())?;
+        let (value, _value_len) = V::deserialize_from(&data_buffer[..data_len][key_len..])
+            .map_err(Error::SerializationError)?;
 
-        Ok(Some((
-            key,
-            V::deserialize_from(&data_buffer[key_len..][..data_len - key_len])
-                .map_err(Error::SerializationError)?,
-        )))
+        Ok(Some((key, value)))
     }
 }
 
@@ -1037,7 +1032,9 @@ pub trait Value<'a> {
     /// The buffer will be the same length as the serialize function returned for this value. Though note that the length
     /// is written from flash, so bitflips can affect that (though the length is separately crc-protected) and the key deserialization might
     /// return a wrong length.
-    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, SerializationError>
+    ///
+    /// Returns the decoded value and the amount of bytes used from the buffer.
+    fn deserialize_from(buffer: &'a [u8]) -> Result<(Self, usize), SerializationError>
     where
         Self: Sized;
 }
@@ -1047,73 +1044,37 @@ impl<'a> Value<'a> for bool {
         <u8 as Value>::serialize_into(&(*self as u8), buffer)
     }
 
-    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, SerializationError>
+    fn deserialize_from(buffer: &'a [u8]) -> Result<(Self, usize), SerializationError>
     where
         Self: Sized,
     {
-        Ok(<u8 as Value>::deserialize_from(buffer)? != 0)
+        let (value, size) = <u8 as Value>::deserialize_from(buffer)?;
+        Ok((value != 0, size))
     }
 }
 
 impl<'a, T: Value<'a>> Value<'a> for Option<T> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         if let Some(val) = self {
-            <bool as Value>::serialize_into(&true, buffer)?;
-            <T as Value>::serialize_into(val, buffer)
+            let mut size = 0;
+            size += <bool as Value>::serialize_into(&true, buffer)?;
+            size += <T as Value>::serialize_into(val, &mut buffer[size..])?;
+            Ok(size)
         } else {
             <bool as Value>::serialize_into(&false, buffer)
         }
     }
 
-    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, SerializationError>
+    fn deserialize_from(buffer: &'a [u8]) -> Result<(Self, usize), SerializationError>
     where
         Self: Sized,
     {
-        if <bool as Value>::deserialize_from(buffer)? {
-            Ok(Some(<T as Value>::deserialize_from(buffer)?))
+        let (is_some, tag_size) = <bool as Value>::deserialize_from(buffer)?;
+        if is_some {
+            let (value, value_size) = <T as Value>::deserialize_from(&buffer[tag_size..])?;
+            Ok((Some(value), tag_size + value_size))
         } else {
-            Ok(None)
-        }
-    }
-}
-
-impl<'a, T: Value<'a>, const N: usize> Value<'a> for [T; N] {
-    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        if buffer.len() < size_of::<T>() * N {
-            return Err(SerializationError::BufferTooSmall);
-        }
-
-        let mut size = 0;
-        for v in self {
-            size += <T as Value>::serialize_into(v, &mut buffer[size..])?;
-        }
-
-        Ok(size)
-    }
-
-    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, SerializationError>
-    where
-        Self: Sized,
-    {
-        let mut array = MaybeUninit::<[T; N]>::uninit();
-
-        if N == 0 {
-            // SAFETY: This type is of zero size.
-            return Ok(unsafe { array.assume_init() });
-        }
-
-        let ptr = array.as_mut_ptr() as *mut T;
-
-        // SAFETY:
-        // 1. The pointers are all inside the array via knowing `N`.
-        // 2. `ptr.add(1)` does never point outside the array.
-        // 3. `MaybeUninit::assume_init` is upheld with all values being filled.
-        unsafe {
-            for i in 0..N {
-                *ptr.add(i) = <T as Value>::deserialize_from(&buffer[i * size_of::<T>()..])?;
-            }
-
-            Ok(array.assume_init())
+            Ok((None, tag_size))
         }
     }
 }
@@ -1128,28 +1089,64 @@ impl<'a> Value<'a> for &'a [u8] {
         Ok(self.len())
     }
 
-    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, SerializationError>
+    fn deserialize_from(buffer: &'a [u8]) -> Result<(Self, usize), SerializationError>
     where
         Self: Sized,
     {
-        Ok(buffer)
+        Ok((buffer, buffer.len()))
     }
 }
 
 macro_rules! impl_map_item_num {
-    ($int:ty) => {
-        impl<'a> Value<'a> for $int {
+    ($num:ty) => {
+        impl<'a> Value<'a> for $num {
             fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-                buffer[..core::mem::size_of::<Self>()].copy_from_slice(&self.to_le_bytes());
-                Ok(core::mem::size_of::<Self>())
+                let size = size_of::<Self>();
+                if buffer.len() < size {
+                    Err(SerializationError::BufferTooSmall)
+                } else {
+                    buffer[..size].copy_from_slice(&self.to_le_bytes());
+                    Ok(size)
+                }
             }
 
-            fn deserialize_from(buffer: &[u8]) -> Result<Self, SerializationError> {
-                Ok(Self::from_le_bytes(
-                    buffer[..core::mem::size_of::<Self>()]
+            fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), SerializationError> {
+                let size = size_of::<Self>();
+                let value = Self::from_le_bytes(
+                    buffer[..size]
                         .try_into()
                         .map_err(|_| SerializationError::BufferTooSmall)?,
-                ))
+                );
+                Ok((value, size))
+            }
+        }
+
+        // Also implement `Value` for arrays of numbers.
+        impl<'a, const N: usize> Value<'a> for [$num; N] {
+            fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
+                let elem_size = size_of::<$num>();
+                if buffer.len() < elem_size * N {
+                    return Err(SerializationError::BufferTooSmall);
+                }
+                for i in 0..N {
+                    buffer[i * elem_size..][..elem_size].copy_from_slice(&self[i].to_le_bytes())
+                }
+                Ok(elem_size * N)
+            }
+
+            fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), SerializationError> {
+                let elem_size = size_of::<$num>();
+                if buffer.len() < elem_size * N {
+                    return Err(SerializationError::BufferTooSmall);
+                }
+
+                let mut array = [0 as $num; N];
+                for i in 0..N {
+                    array[i] = <$num>::from_le_bytes(
+                        buffer[i * elem_size..][..elem_size].try_into().unwrap(),
+                    )
+                }
+                Ok((array, elem_size * N))
             }
         }
     };
@@ -1931,5 +1928,42 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(item, &[5, 6]);
+    }
+
+    #[test]
+    async fn option_value() {
+        let mut buffer = [0; 2];
+
+        assert_eq!(Some(42u8).serialize_into(&mut buffer), Ok(2));
+        assert_eq!(Option::<u8>::deserialize_from(&buffer), Ok((Some(42u8), 2)));
+        assert_eq!(buffer, [1, 42]);
+
+        let mut buffer = [0; 1];
+
+        assert_eq!(Option::<u8>::None.serialize_into(&mut buffer), Ok(1));
+        assert_eq!(Option::<u8>::deserialize_from(&buffer), Ok((None, 1)));
+        assert_eq!(buffer, [0]);
+    }
+
+    #[test]
+    async fn array_value() {
+        let mut buffer = [0; 3];
+        assert_eq!(Value::serialize_into(&[1u8, 2, 3], &mut buffer), Ok(3));
+        assert_eq!(buffer, [1, 2, 3]);
+        assert_eq!(
+            <[u8; 3] as Value>::deserialize_from(&buffer),
+            Ok(([1, 2, 3], 3))
+        );
+
+        let mut buffer = [0; 4];
+        assert_eq!(
+            Value::serialize_into(&[0x1234u16, 0x5678], &mut buffer),
+            Ok(4)
+        );
+        assert_eq!(buffer, [0x34, 0x12, 0x78, 0x56]);
+        assert_eq!(
+            <[u16; 2]>::deserialize_from(&buffer),
+            Ok(([0x1234, 0x5678], 4))
+        );
     }
 }

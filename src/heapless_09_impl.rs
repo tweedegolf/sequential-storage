@@ -1,15 +1,16 @@
-extern crate alloc;
+use core::str::FromStr;
+
+use heapless_09::{String, Vec};
+
 use crate::map::{Key, SerializationError, Value};
-use alloc::{string::String, vec::Vec};
 
-// alloc::Vec
+// heapless:: Vec
 
-impl Key for Vec<u8> {
+impl<const CAP: usize> Key for Vec<u8, CAP> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         if self.len() > u16::MAX as usize {
             return Err(SerializationError::InvalidData);
         }
-
         if buffer.len() < self.len() + 2 {
             return Err(SerializationError::BufferTooSmall);
         }
@@ -29,7 +30,10 @@ impl Key for Vec<u8> {
 
         let data_len = total_len - 2;
 
-        let output = Vec::from(&buffer[2..][..data_len]);
+        let mut output = Vec::new();
+        output
+            .extend_from_slice(&buffer[2..][..data_len])
+            .map_err(|_| SerializationError::InvalidFormat)?;
 
         Ok((output, total_len))
     }
@@ -45,7 +49,7 @@ impl Key for Vec<u8> {
     }
 }
 
-impl<'a> Value<'a> for Vec<u8> {
+impl<'a, const CAP: usize> Value<'a> for Vec<u8, CAP> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         if buffer.len() < self.len() {
             return Err(SerializationError::BufferTooSmall);
@@ -59,20 +63,21 @@ impl<'a> Value<'a> for Vec<u8> {
     where
         Self: Sized,
     {
-        Ok((Vec::from(buffer), buffer.len()))
+        let value = Vec::try_from(buffer).map_err(|_| SerializationError::InvalidFormat)?;
+        Ok((value, buffer.len()))
     }
 }
 
-// alloc::String
+// heapless::String
 
-impl Key for String {
+impl<const CAP: usize> Key for String<CAP> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         if self.len() > u16::MAX as usize {
             return Err(SerializationError::InvalidData);
         }
 
         if buffer.len() < self.len() + 2 {
-            return Err(SerializationError::BufferTooSmall);
+            return Err(SerializationError::InvalidFormat);
         }
 
         buffer[..2].copy_from_slice(&(self.len() as u16).to_le_bytes());
@@ -90,10 +95,13 @@ impl Key for String {
 
         let data_len = total_len - 2;
 
-        let output = String::from(
-            core::str::from_utf8(&buffer[2..][..data_len])
-                .map_err(|_| SerializationError::InvalidFormat)?,
-        );
+        let mut output = String::new();
+        output
+            .push_str(
+                core::str::from_utf8(&buffer[2..][..data_len])
+                    .map_err(|_| SerializationError::InvalidFormat)?,
+            )
+            .map_err(|_| SerializationError::InvalidFormat)?;
 
         Ok((output, total_len))
     }
@@ -109,7 +117,7 @@ impl Key for String {
     }
 }
 
-impl<'a> Value<'a> for String {
+impl<'a, const CAP: usize> Value<'a> for String<CAP> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         if buffer.len() < self.len() {
             return Err(SerializationError::BufferTooSmall);
@@ -123,9 +131,10 @@ impl<'a> Value<'a> for String {
     where
         Self: Sized,
     {
-        let output = String::from(
+        let output = String::from_str(
             core::str::from_utf8(buffer).map_err(|_| SerializationError::InvalidFormat)?,
-        );
+        )
+        .map_err(|_| SerializationError::BufferTooSmall)?;
 
         Ok((output, buffer.len()))
     }
@@ -133,49 +142,51 @@ impl<'a> Value<'a> for String {
 
 #[cfg(test)]
 mod tests {
+    use core::str::FromStr;
+
     use super::*;
 
     #[test]
-    fn key_serde_alloc_vec() {
+    fn key_serde_heapless_vec() {
         let mut buffer = [0; 128];
 
-        let val = Vec::from_iter([0xAAu8; 12]);
+        let val = Vec::<u8, 12>::from_iter([0xAA; 12]);
         Key::serialize_into(&val, &mut buffer).unwrap();
-        let new_val = <Vec<_> as Key>::deserialize_from(&buffer).unwrap();
+        let new_val = <Vec<u8, 12> as Key>::deserialize_from(&buffer).unwrap();
 
         assert_eq!((val, 14), new_val);
     }
 
     #[test]
-    fn key_serde_alloc_string() {
+    fn key_serde_heapless_string() {
         let mut buffer = [0; 128];
 
-        let val = String::from("Hello world!");
+        let val = String::<45>::from_str("Hello world!").unwrap();
         Key::serialize_into(&val, &mut buffer).unwrap();
-        let new_val = <String as Key>::deserialize_from(&buffer).unwrap();
+        let new_val = <String<45> as Key>::deserialize_from(&buffer).unwrap();
 
         assert_eq!((val, 14), new_val);
     }
 
     #[test]
-    fn value_serde_alloc_vec() {
+    fn value_serde_heapless_vec() {
         let mut buffer = [0; 12];
 
-        let val = Vec::from_iter([0xAAu8; 12]);
+        let val = Vec::<u8, 12>::from_iter([0xAA; 12]);
         Value::serialize_into(&val, &mut buffer).unwrap();
-        let (new_val, size) = <Vec<_> as Value>::deserialize_from(&buffer).unwrap();
+        let (new_val, size) = <Vec<u8, 12> as Value>::deserialize_from(&buffer).unwrap();
 
         assert_eq!(val, new_val);
         assert_eq!(size, 12);
     }
 
     #[test]
-    fn value_serde_alloc_string() {
+    fn value_serde_heapless_string() {
         let mut buffer = [0; 12];
 
-        let val = String::from("Hello world!");
+        let val = String::<45>::from_str("Hello world!").unwrap();
         Value::serialize_into(&val, &mut buffer).unwrap();
-        let (new_val, size) = <String as Value>::deserialize_from(&buffer).unwrap();
+        let (new_val, size) = <String<45> as Value>::deserialize_from(&buffer).unwrap();
 
         assert_eq!(val, new_val);
         assert_eq!(size, 12);
