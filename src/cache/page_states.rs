@@ -1,6 +1,7 @@
 use core::fmt::Debug;
 
 use crate::PageState;
+use crate::cache::list::List;
 
 pub(crate) trait PageStatesCache: Debug {
     fn get_page_state(&self, page_index: usize) -> Option<PageState>;
@@ -10,13 +11,13 @@ pub(crate) trait PageStatesCache: Debug {
 
 #[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
 pub(crate) struct CachedPageStates<const PAGE_COUNT: usize> {
-    pages: [Option<PageState>; PAGE_COUNT],
+    pages: List<Option<PageState>, PAGE_COUNT>,
 }
 
 impl<const PAGE_COUNT: usize> Debug for CachedPageStates<PAGE_COUNT> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "[")?;
-        for (i, val) in self.pages.iter().enumerate() {
+        for (i, val) in self.pages.as_slice().iter().enumerate() {
             if i > 0 {
                 write!(f, ", ")?;
             }
@@ -36,7 +37,14 @@ impl<const PAGE_COUNT: usize> Debug for CachedPageStates<PAGE_COUNT> {
 impl<const PAGE_COUNT: usize> CachedPageStates<PAGE_COUNT> {
     pub const fn new() -> Self {
         Self {
-            pages: [None; PAGE_COUNT],
+            pages: List::from_elem_arr(None),
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    pub fn new_heap(n: usize) -> Self {
+        Self {
+            pages: List::from_elem_vec(None, n),
         }
     }
 }

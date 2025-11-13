@@ -12,6 +12,9 @@ use self::{
     page_states::{CachedPageStates, UncachedPageStates},
 };
 
+#[cfg(feature = "alloc")]
+pub(crate) mod list;
+
 pub(crate) mod key_pointers;
 pub(crate) mod page_pointers;
 pub(crate) mod page_states;
@@ -286,6 +289,17 @@ impl<const PAGE_COUNT: usize> PageStateCache<PAGE_COUNT> {
             key_pointers: UncachedKeyPointers,
         }
     }
+
+    /// Construct a new instance on the heap, generics are discarded
+    #[cfg(feature = "alloc")]
+    pub fn new_heap(page_count: usize) -> Self {
+        Self {
+            dirt_tracker: DirtTracker::new(),
+            page_states: CachedPageStates::new_heap(page_count),
+            page_pointers: UncachedPagePointers,
+            key_pointers: UncachedKeyPointers,
+        }
+    }
 }
 
 impl<const PAGE_COUNT: usize> Default for PageStateCache<PAGE_COUNT> {
@@ -357,6 +371,17 @@ impl<const PAGE_COUNT: usize> PagePointerCache<PAGE_COUNT> {
             dirt_tracker: DirtTracker::new(),
             page_states: CachedPageStates::new(),
             page_pointers: CachedPagePointers::new(),
+            key_pointers: UncachedKeyPointers,
+        }
+    }
+
+    /// Construct a new instance on the heap, generics are discarded
+    #[cfg(feature = "alloc")]
+    pub fn new_heap(page_count: usize) -> Self {
+        Self {
+            dirt_tracker: DirtTracker::new(),
+            page_states: CachedPageStates::new_heap(page_count),
+            page_pointers: CachedPagePointers::new_heap(page_count),
             key_pointers: UncachedKeyPointers,
         }
     }
@@ -437,6 +462,16 @@ impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> KeyPointerCache<PAGE_
             page_states: CachedPageStates::new(),
             page_pointers: CachedPagePointers::new(),
             key_pointers: CachedKeyPointers::new(),
+        }
+    }
+
+    /// Construct a new instance on the heap, generics are discarded
+    pub fn new_heap(page_count: usize, keys: usize) -> Self {
+        Self {
+            dirt_tracker: DirtTracker::new(),
+            page_states: CachedPageStates::new_heap(page_count),
+            page_pointers: CachedPagePointers::new_heap(page_count),
+            key_pointers: CachedKeyPointers::new_heap(keys),
         }
     }
 }

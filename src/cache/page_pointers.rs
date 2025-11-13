@@ -6,6 +6,8 @@ use crate::{
     NorFlashExt, PageState, calculate_page_address, calculate_page_index, item::ItemHeader,
 };
 
+use super::list::List;
+
 pub(crate) trait PagePointersCache: Debug {
     fn first_item_after_erased(&self, page_index: usize) -> Option<u32>;
     fn first_item_after_written(&self, page_index: usize) -> Option<u32>;
@@ -31,14 +33,14 @@ pub(crate) trait PagePointersCache: Debug {
 // and so Option can make use of the niche so we save bytes
 #[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
 pub(crate) struct CachedPagePointers<const PAGE_COUNT: usize> {
-    after_erased_pointers: [Option<NonZeroU32>; PAGE_COUNT],
-    after_written_pointers: [Option<NonZeroU32>; PAGE_COUNT],
+    after_erased_pointers: List<Option<NonZeroU32>, PAGE_COUNT>,
+    after_written_pointers: List<Option<NonZeroU32>, PAGE_COUNT>,
 }
 
 impl<const PAGE_COUNT: usize> Debug for CachedPagePointers<PAGE_COUNT> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{{ after_erased_pointers: [")?;
-        for (i, val) in self.after_erased_pointers.iter().enumerate() {
+        for (i, val) in self.after_erased_pointers.as_slice().iter().enumerate() {
             if i > 0 {
                 write!(f, ", ")?;
             }
@@ -50,7 +52,7 @@ impl<const PAGE_COUNT: usize> Debug for CachedPagePointers<PAGE_COUNT> {
             }
         }
         write!(f, "], after_written_pointers: [")?;
-        for (i, val) in self.after_written_pointers.iter().enumerate() {
+        for (i, val) in self.after_written_pointers.as_slice().iter().enumerate() {
             if i > 0 {
                 write!(f, ", ")?;
             }
@@ -70,8 +72,16 @@ impl<const PAGE_COUNT: usize> Debug for CachedPagePointers<PAGE_COUNT> {
 impl<const PAGE_COUNT: usize> CachedPagePointers<PAGE_COUNT> {
     pub const fn new() -> Self {
         Self {
-            after_erased_pointers: [None; PAGE_COUNT],
-            after_written_pointers: [None; PAGE_COUNT],
+            after_erased_pointers: List::from_elem_arr(None),
+            after_written_pointers: List::from_elem_arr(None),
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    pub fn new_heap(n: usize) -> Self {
+        Self {
+            after_erased_pointers: List::from_elem_vec(None, n),
+            after_written_pointers: List::from_elem_vec(None, n),
         }
     }
 }
@@ -133,8 +143,8 @@ impl<const PAGE_COUNT: usize> PagePointersCache for CachedPagePointers<PAGE_COUN
     }
 
     fn invalidate_cache_state(&mut self) {
-        self.after_erased_pointers = [None; PAGE_COUNT];
-        self.after_written_pointers = [None; PAGE_COUNT];
+        self.after_erased_pointers.as_mut_slice().fill(None);
+        self.after_written_pointers.as_mut_slice().fill(None);
     }
 }
 

@@ -16,6 +16,8 @@ use embedded_storage_async::nor_flash::NorFlash;
 use map::SerializationError;
 
 #[cfg(feature = "alloc")]
+extern crate alloc;
+#[cfg(feature = "alloc")]
 mod alloc_impl;
 #[cfg(feature = "arrayvec")]
 mod arrayvec_impl;

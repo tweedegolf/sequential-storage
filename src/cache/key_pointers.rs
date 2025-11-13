@@ -2,6 +2,11 @@ use core::{fmt::Debug, num::NonZeroU32};
 
 use crate::map::Key;
 
+use super::list::List;
+
+#[cfg(feature = "alloc")]
+use alloc::vec;
+
 pub(crate) trait KeyPointersCache<KEY: Key> {
     fn key_location(&self, key: &KEY) -> Option<u32>;
 
@@ -14,7 +19,7 @@ pub(crate) trait KeyPointersCache<KEY: Key> {
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
 pub(crate) struct CachedKeyPointers<KEY: Eq, const KEYS: usize> {
-    key_pointers: [Option<(KEY, NonZeroU32)>; KEYS],
+    key_pointers: List<Option<(KEY, NonZeroU32)>, KEYS>,
 }
 
 impl<KEY: Eq, const KEYS: usize> CachedKeyPointers<KEY, KEYS> {
@@ -22,12 +27,23 @@ impl<KEY: Eq, const KEYS: usize> CachedKeyPointers<KEY, KEYS> {
 
     pub(crate) const fn new() -> Self {
         Self {
-            key_pointers: [Self::ARRAY_REPEAT_VALUE; KEYS],
+            key_pointers: List::Arr([Self::ARRAY_REPEAT_VALUE; KEYS]),
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    pub(crate) fn new_heap(n: usize) -> Self
+    where
+        KEY: Clone,
+    {
+        Self {
+            key_pointers: List::from_elem_vec(Self::ARRAY_REPEAT_VALUE, n),
         }
     }
 
     fn key_index(&self, key: &KEY) -> Option<usize> {
         self.key_pointers
+            .as_slice()
             .iter()
             .enumerate()
             .filter_map(|(index, val)| val.as_ref().map(|val| (index, val)))
@@ -40,7 +56,7 @@ impl<KEY: Eq, const KEYS: usize> CachedKeyPointers<KEY, KEYS> {
 
     fn insert_front(&mut self, value: (KEY, NonZeroU32)) {
         self.key_pointers[KEYS - 1] = Some(value);
-        move_to_front(&mut self.key_pointers, KEYS - 1);
+        move_to_front(self.key_pointers.as_mut_slice(), KEYS - 1);
     }
 }
 
@@ -55,7 +71,7 @@ impl<KEY: Key, const KEYS: usize> KeyPointersCache<KEY> for CachedKeyPointers<KE
             Some(existing_index) => {
                 self.key_pointers[existing_index] =
                     Some((key.clone(), NonZeroU32::new(item_address).unwrap()));
-                move_to_front(&mut self.key_pointers, existing_index);
+                move_to_front(self.key_pointers.as_mut_slice(), existing_index);
             }
             None => self.insert_front((key.clone(), NonZeroU32::new(item_address).unwrap())),
         }
@@ -64,7 +80,7 @@ impl<KEY: Key, const KEYS: usize> KeyPointersCache<KEY> for CachedKeyPointers<KE
     fn notice_key_erased(&mut self, key: &KEY) {
         if let Some(existing_index) = self.key_index(key) {
             self.key_pointers[existing_index] = None;
-            move_to_back(&mut self.key_pointers, existing_index);
+            move_to_back(self.key_pointers.as_mut_slice(), existing_index);
         }
     }
 
