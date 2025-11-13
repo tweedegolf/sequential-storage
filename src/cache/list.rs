@@ -14,6 +14,7 @@ use alloc::{boxed::Box, vec, vec::Vec};
 pub enum ListKind {
     Arr,
     /// Boxed Slice
+    #[cfg(feature = "alloc")]
     BS(usize),
 }
 
@@ -26,17 +27,18 @@ pub enum List<T, const N: usize = 0> {
 }
 
 impl<T, const N: usize> List<T, N> {
-    pub fn from_elem(elem: T, location_kind: ListKind) -> Self
+    pub fn from_elem(elem: T, list_kind: ListKind) -> Self
     where
         T: Copy,
     {
-        match location_kind {
+        match list_kind {
             ListKind::Arr => Self::Arr([elem; N]),
             #[cfg(feature = "alloc")]
             ListKind::BS(n) => Self::BS(vec![elem; n].into()),
         }
     }
 
+    #[cfg(feature = "alloc")]
     pub fn from_elem_vec(elem: T, n: usize) -> Self
     where
         T: Clone,
@@ -74,6 +76,7 @@ impl<T, const N: usize> core::ops::Index<usize> for List<T, N> {
     fn index(&self, index: usize) -> &Self::Output {
         match self {
             Self::Arr(a) => a.index(index),
+            #[cfg(feature = "alloc")]
             Self::BS(v) => v.index(index),
         }
     }
@@ -83,6 +86,7 @@ impl<T, const N: usize> core::ops::IndexMut<usize> for List<T, N> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         match self {
             Self::Arr(a) => a.index_mut(index),
+            #[cfg(feature = "alloc")]
             Self::BS(v) => v.index_mut(index),
         }
     }

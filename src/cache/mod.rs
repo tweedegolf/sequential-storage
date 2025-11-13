@@ -12,7 +12,6 @@ use self::{
     page_states::{CachedPageStates, UncachedPageStates},
 };
 
-#[cfg(feature = "alloc")]
 pub(crate) mod list;
 
 pub(crate) mod key_pointers;
@@ -466,6 +465,7 @@ impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> KeyPointerCache<PAGE_
     }
 
     /// Construct a new instance on the heap, generics are discarded
+    #[cfg(feature = "alloc")]
     pub fn new_heap(page_count: usize, keys: usize) -> Self {
         Self {
             dirt_tracker: DirtTracker::new(),
