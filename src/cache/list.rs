@@ -9,8 +9,9 @@
 //! Obviously when alloc feature is disabled only the array is available.
 
 #[cfg(feature = "alloc")]
-use alloc::{boxed::Box, vec, vec::Vec};
+use alloc::{boxed::Box, vec};
 
+#[allow(unused)]
 pub enum ListKind {
     Arr,
     /// Boxed Slice
@@ -19,7 +20,7 @@ pub enum ListKind {
 }
 
 #[derive(Debug)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum List<T, const N: usize = 0> {
     Arr([T; N]),
     #[cfg(feature = "alloc")]
@@ -27,6 +28,7 @@ pub enum List<T, const N: usize = 0> {
 }
 
 impl<T, const N: usize> List<T, N> {
+    #[allow(unused)]
     pub fn from_elem(elem: T, list_kind: ListKind) -> Self
     where
         T: Copy,

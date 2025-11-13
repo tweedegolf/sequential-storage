@@ -4,9 +4,6 @@ use crate::map::Key;
 
 use super::list::List;
 
-#[cfg(feature = "alloc")]
-use alloc::vec;
-
 pub(crate) trait KeyPointersCache<KEY: Key> {
     fn key_location(&self, key: &KEY) -> Option<u32>;
 
