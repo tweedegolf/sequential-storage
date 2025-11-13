@@ -4,12 +4,12 @@ use crate::map::{Key, SerializationError};
 
 impl<const CAP: usize> Key for ArrayVec<u8, CAP> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        if buffer.len() < self.len() + 2 {
-            return Err(SerializationError::BufferTooSmall);
-        }
-
         if self.len() > u16::MAX as usize {
             return Err(SerializationError::InvalidData);
+        }
+
+        if buffer.len() < self.len() + 2 {
+            return Err(SerializationError::BufferTooSmall);
         }
 
         buffer[..2].copy_from_slice(&(self.len() as u16).to_le_bytes());
@@ -48,12 +48,12 @@ impl<const CAP: usize> Key for ArrayVec<u8, CAP> {
 
 impl<const CAP: usize> Key for ArrayString<CAP> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        if buffer.len() < self.len() + 2 {
-            return Err(SerializationError::BufferTooSmall);
-        }
-
         if self.len() > u16::MAX as usize {
             return Err(SerializationError::InvalidData);
+        }
+
+        if buffer.len() < self.len() + 2 {
+            return Err(SerializationError::BufferTooSmall);
         }
 
         buffer[..2].copy_from_slice(&(self.len() as u16).to_le_bytes());

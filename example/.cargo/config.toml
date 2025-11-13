@@ -9,5 +9,4 @@ target = "thumbv7em-none-eabihf"
 DEFMT_LOG = "trace"
 
 [unstable]
-build-std = ["panic_abort", "core"]
-build-std-features = ["panic_immediate_abort"]
+build-std = ["core"]
