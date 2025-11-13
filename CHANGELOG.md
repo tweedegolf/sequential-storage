@@ -5,6 +5,9 @@
 ## Unreleased
 
 - *Breaking:* The feature `defmt-03` has been renamed `defmt` and has been updated to 1.0.
+- *Breaking:* Removed the impl of `Value` on `[T;N]` where `T: Value` since it was incorrect
+- *Breaking:* Changed the signature of `Value::deserialize_from` to also return the used buffer size
+- Added back impls for `Value` on `[<integer>;N]`
 
 ## 5.0.1 27-08-25
 
