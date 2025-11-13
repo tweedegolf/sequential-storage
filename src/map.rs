@@ -1033,7 +1033,7 @@ pub trait Value<'a> {
     /// is written from flash, so bitflips can affect that (though the length is separately crc-protected) and the key deserialization might
     /// return a wrong length.
     ///
-    /// Returns the decoded values and the amount of bytes used from the buffer.
+    /// Returns the decoded value and the amount of bytes used from the buffer.
     fn deserialize_from(buffer: &'a [u8]) -> Result<(Self, usize), SerializationError>
     where
         Self: Sized;
