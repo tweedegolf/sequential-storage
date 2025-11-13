@@ -27,7 +27,7 @@ futures = { version = "0.3.30", features = ["executor"] }
 futures-test = "0.3.30"
 
 [features]
-defmt-10 = ["dep:defmt"]
+defmt = ["dep:defmt"]
 std = []
 # Enable the implementation of the map Key trait for ArrayVec and ArrayString
 arrayvec = ["dep:arrayvec"]

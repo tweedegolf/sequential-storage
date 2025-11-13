@@ -4,7 +4,7 @@
 
 ## Unreleased
 
-- *Breaking:* The feature `defmt-03` has been renamed `defmt-10` to avoid a future breaking change.
+- *Breaking:* The feature `defmt-03` has been renamed `defmt` and has been updated to 1.0.
 
 ## 5.0.1 27-08-25
 

@@ -19,7 +19,7 @@ panic-probe = { version = "0.3", features = ["print-defmt"] }
 embedded-storage = "0.3.1"
 embedded-storage-async = "0.4.1"
 
-sequential-storage = { path = "../", features = ["defmt-10"] }
+sequential-storage = { path = "../", features = ["defmt"] }
 
 [profile.release]
 lto = true
