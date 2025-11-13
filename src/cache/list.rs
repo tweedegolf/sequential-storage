@@ -73,7 +73,7 @@ impl<T, const N: usize> List<T, N> {
 
     pub fn len(&self) -> usize {
         match self {
-            Self::Arr(a) => N,
+            Self::Arr(_) => N,
             #[cfg(feature = "alloc")]
             List::BS(bs) => bs.len(),
         }
