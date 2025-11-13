@@ -2,7 +2,7 @@
 //! once created.
 //!
 //! It does this by having a generic usize parameter and discarding that
-//! when being used as a vec.
+//! when being used as a boxed slice.
 //!
 //! BS stands for boxed slice.
 //!
