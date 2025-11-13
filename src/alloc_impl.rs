@@ -6,12 +6,12 @@ use alloc::{string::String, vec::Vec};
 
 impl Key for Vec<u8> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        if buffer.len() < self.len() + 2 {
-            return Err(SerializationError::BufferTooSmall);
-        }
-
         if self.len() > u16::MAX as usize {
             return Err(SerializationError::InvalidData);
+        }
+
+        if buffer.len() < self.len() + 2 {
+            return Err(SerializationError::BufferTooSmall);
         }
 
         buffer[..2].copy_from_slice(&(self.len() as u16).to_le_bytes());
@@ -55,11 +55,11 @@ impl<'a> Value<'a> for Vec<u8> {
         Ok(self.len())
     }
 
-    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, SerializationError>
+    fn deserialize_from(buffer: &'a [u8]) -> Result<(Self, usize), SerializationError>
     where
         Self: Sized,
     {
-        Ok(Vec::from(buffer))
+        Ok((Vec::from(buffer), buffer.len()))
     }
 }
 
@@ -67,12 +67,12 @@ impl<'a> Value<'a> for Vec<u8> {
 
 impl Key for String {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        if buffer.len() < self.len() + 2 {
-            return Err(SerializationError::BufferTooSmall);
-        }
-
         if self.len() > u16::MAX as usize {
             return Err(SerializationError::InvalidData);
+        }
+
+        if buffer.len() < self.len() + 2 {
+            return Err(SerializationError::BufferTooSmall);
         }
 
         buffer[..2].copy_from_slice(&(self.len() as u16).to_le_bytes());
@@ -119,7 +119,7 @@ impl<'a> Value<'a> for String {
         Ok(self.len())
     }
 
-    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, SerializationError>
+    fn deserialize_from(buffer: &'a [u8]) -> Result<(Self, usize), SerializationError>
     where
         Self: Sized,
     {
@@ -127,7 +127,7 @@ impl<'a> Value<'a> for String {
             core::str::from_utf8(buffer).map_err(|_| SerializationError::InvalidFormat)?,
         );
 
-        Ok(output)
+        Ok((output, buffer.len()))
     }
 }
 
@@ -163,9 +163,10 @@ mod tests {
 
         let val = Vec::from_iter([0xAAu8; 12]);
         Value::serialize_into(&val, &mut buffer).unwrap();
-        let new_val = <Vec<_> as Value>::deserialize_from(&buffer).unwrap();
+        let (new_val, size) = <Vec<_> as Value>::deserialize_from(&buffer).unwrap();
 
         assert_eq!(val, new_val);
+        assert_eq!(size, 12);
     }
 
     #[test]
@@ -174,8 +175,9 @@ mod tests {
 
         let val = String::from("Hello world!");
         Value::serialize_into(&val, &mut buffer).unwrap();
-        let new_val = <String as Value>::deserialize_from(&buffer).unwrap();
+        let (new_val, size) = <String as Value>::deserialize_from(&buffer).unwrap();
 
         assert_eq!(val, new_val);
+        assert_eq!(size, 12);
     }
 }

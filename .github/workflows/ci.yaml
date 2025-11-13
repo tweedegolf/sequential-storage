@@ -11,23 +11,23 @@ jobs:
   fmt:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - uses: dtolnay/rust-toolchain@stable
-    - run: cargo fmt --all -- --check
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --all -- --check
 
   test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - uses: dtolnay/rust-toolchain@stable
-    - run: cargo test --features arrayvec,heapless,heapless-09,alloc
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --features arrayvec,heapless,heapless-09,alloc
 
   clippy:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - uses: dtolnay/rust-toolchain@stable
-    - run: cargo clippy --features arrayvec,heapless,heapless-09,alloc -- -D warnings
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo clippy --features arrayvec,heapless,heapless-09,alloc -- -D warnings
 
   fuzz:
     runs-on: ubuntu-latest
@@ -45,7 +45,7 @@ jobs:
           for target in $(cargo fuzz list) ; do
             cargo fuzz run --sanitizer none $target -- -max_total_time=10
           done
-    
+
   binary-size:
     runs-on: ubuntu-latest
     permissions:
@@ -72,7 +72,7 @@ jobs:
       - name: Check out the repo with the full git history
         uses: actions/checkout@v3
         with:
-          fetch-depth: '0'
+          fetch-depth: "0"
       - name: Build new binary
         working-directory: ./example
         run: |

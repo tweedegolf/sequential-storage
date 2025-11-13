@@ -8,12 +8,11 @@ use crate::map::{Key, SerializationError, Value};
 
 impl<const CAP: usize> Key for Vec<u8, CAP> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        if buffer.len() < self.len() + 2 {
-            return Err(SerializationError::BufferTooSmall);
-        }
-
         if self.len() > u16::MAX as usize {
             return Err(SerializationError::InvalidData);
+        }
+        if buffer.len() < self.len() + 2 {
+            return Err(SerializationError::BufferTooSmall);
         }
 
         buffer[..2].copy_from_slice(&(self.len() as u16).to_le_bytes());
@@ -60,11 +59,12 @@ impl<'a, const CAP: usize> Value<'a> for Vec<u8, CAP> {
         Ok(self.len())
     }
 
-    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, SerializationError>
+    fn deserialize_from(buffer: &'a [u8]) -> Result<(Self, usize), SerializationError>
     where
         Self: Sized,
     {
-        Vec::try_from(buffer).map_err(|_| SerializationError::InvalidFormat)
+        let value = Vec::try_from(buffer).map_err(|_| SerializationError::InvalidFormat)?;
+        Ok((value, buffer.len()))
     }
 }
 
@@ -72,12 +72,12 @@ impl<'a, const CAP: usize> Value<'a> for Vec<u8, CAP> {
 
 impl<const CAP: usize> Key for String<CAP> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        if buffer.len() < self.len() + 2 {
-            return Err(SerializationError::InvalidFormat);
-        }
-
         if self.len() > u16::MAX as usize {
             return Err(SerializationError::InvalidData);
+        }
+
+        if buffer.len() < self.len() + 2 {
+            return Err(SerializationError::InvalidFormat);
         }
 
         buffer[..2].copy_from_slice(&(self.len() as u16).to_le_bytes());
@@ -127,7 +127,7 @@ impl<'a, const CAP: usize> Value<'a> for String<CAP> {
         Ok(self.len())
     }
 
-    fn deserialize_from(buffer: &'a [u8]) -> Result<Self, SerializationError>
+    fn deserialize_from(buffer: &'a [u8]) -> Result<(Self, usize), SerializationError>
     where
         Self: Sized,
     {
@@ -136,7 +136,7 @@ impl<'a, const CAP: usize> Value<'a> for String<CAP> {
         )
         .map_err(|_| SerializationError::BufferTooSmall)?;
 
-        Ok(output)
+        Ok((output, buffer.len()))
     }
 }
 
@@ -174,9 +174,10 @@ mod tests {
 
         let val = Vec::<u8, 12>::from_iter([0xAA; 12]);
         Value::serialize_into(&val, &mut buffer).unwrap();
-        let new_val = <Vec<u8, 12> as Value>::deserialize_from(&buffer).unwrap();
+        let (new_val, size) = <Vec<u8, 12> as Value>::deserialize_from(&buffer).unwrap();
 
         assert_eq!(val, new_val);
+        assert_eq!(size, 12);
     }
 
     #[test]
@@ -185,8 +186,9 @@ mod tests {
 
         let val = String::<45>::from_str("Hello world!").unwrap();
         Value::serialize_into(&val, &mut buffer).unwrap();
-        let new_val = <String<45> as Value>::deserialize_from(&buffer).unwrap();
+        let (new_val, size) = <String<45> as Value>::deserialize_from(&buffer).unwrap();
 
         assert_eq!(val, new_val);
+        assert_eq!(size, 12);
     }
 }
