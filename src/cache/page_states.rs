@@ -8,7 +8,7 @@ pub(crate) trait PageStatesCache: Debug {
     fn invalidate_cache_state(&mut self);
 }
 
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub(crate) struct CachedPageStates<const PAGE_COUNT: usize> {
     pages: [Option<PageState>; PAGE_COUNT],
 }
@@ -56,7 +56,7 @@ impl<const PAGE_COUNT: usize> PageStatesCache for CachedPageStates<PAGE_COUNT> {
 }
 
 #[derive(Debug, Default)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub(crate) struct UncachedPageStates;
 
 impl PageStatesCache for UncachedPageStates {

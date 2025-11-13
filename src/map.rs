@@ -1170,7 +1170,7 @@ impl_map_item_num!(f64);
 /// This error type is predefined (in contrast to using generics) to save many kilobytes of binary size.
 #[non_exhaustive]
 #[derive(Debug, PartialEq, Eq, Clone)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum SerializationError {
     /// The provided buffer was too small.
     BufferTooSmall,
