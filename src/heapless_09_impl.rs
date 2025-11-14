@@ -6,7 +6,7 @@ use crate::map::{Key, SerializationError, Value};
 
 // heapless:: Vec
 
-impl<const CAP: usize> Key for Vec<u8, CAP> {
+impl<LenType: heapless_09::LenType, const CAP: usize> Key for Vec<u8, CAP, LenType> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         if self.len() > u16::MAX as usize {
             return Err(SerializationError::InvalidData);
@@ -49,7 +49,7 @@ impl<const CAP: usize> Key for Vec<u8, CAP> {
     }
 }
 
-impl<'a, const CAP: usize> Value<'a> for Vec<u8, CAP> {
+impl<'a, LenType: heapless_09::LenType, const CAP: usize> Value<'a> for Vec<u8, CAP, LenType> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         if buffer.len() < self.len() {
             return Err(SerializationError::BufferTooSmall);
@@ -70,7 +70,7 @@ impl<'a, const CAP: usize> Value<'a> for Vec<u8, CAP> {
 
 // heapless::String
 
-impl<const CAP: usize> Key for String<CAP> {
+impl<LenType: heapless_09::LenType, const CAP: usize> Key for String<CAP, LenType> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         if self.len() > u16::MAX as usize {
             return Err(SerializationError::InvalidData);
@@ -117,7 +117,7 @@ impl<const CAP: usize> Key for String<CAP> {
     }
 }
 
-impl<'a, const CAP: usize> Value<'a> for String<CAP> {
+impl<'a, LenType: heapless_09::LenType, const CAP: usize> Value<'a> for String<CAP, LenType> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         if buffer.len() < self.len() {
             return Err(SerializationError::BufferTooSmall);
