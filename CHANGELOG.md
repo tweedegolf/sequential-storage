@@ -3,9 +3,12 @@
 (DD-MM-YY)
 
 ## Unreleased
+
+## 6.0.1 - 14-11-25
+
 - Made the `Key` and `Value` impls for `heapless` v0.9 types generic over the `LenType`.
 
-## v6.0.0 - 13-09-25
+## 6.0.0 - 13-11-25
 
 - *Breaking:* The feature `defmt-03` has been renamed `defmt` and has been updated to 1.0.
 - *Breaking:* Removed the impl of `Value` on `[T;N]` where `T: Value` since it was incorrect
