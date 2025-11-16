@@ -59,7 +59,7 @@ impl<T, const N: usize> List<T, N> {
         match self {
             Self::Arr(a) => &a[..],
             #[cfg(feature = "alloc")]
-            Self::BS(v) => v,
+            Self::BS(bs) => bs,
         }
     }
 
@@ -67,7 +67,7 @@ impl<T, const N: usize> List<T, N> {
         match self {
             Self::Arr(a) => &mut a[..],
             #[cfg(feature = "alloc")]
-            Self::BS(v) => v,
+            Self::BS(bs) => bs,
         }
     }
 
@@ -87,7 +87,7 @@ impl<T, const N: usize> core::ops::Index<usize> for List<T, N> {
         match self {
             Self::Arr(a) => a.index(index),
             #[cfg(feature = "alloc")]
-            Self::BS(v) => v.index(index),
+            Self::BS(bs) => bs.index(index),
         }
     }
 }
@@ -97,7 +97,7 @@ impl<T, const N: usize> core::ops::IndexMut<usize> for List<T, N> {
         match self {
             Self::Arr(a) => a.index_mut(index),
             #[cfg(feature = "alloc")]
-            Self::BS(v) => v.index_mut(index),
+            Self::BS(bs) => bs.index_mut(index),
         }
     }
 }

@@ -83,7 +83,7 @@ impl<KEY: Key, const KEYS: usize> KeyPointersCache<KEY> for CachedKeyPointers<KE
     }
 
     fn invalidate_cache_state(&mut self) {
-        *self = Self::new();
+        self.key_pointers.as_mut_slice().fill(None);
     }
 }
 

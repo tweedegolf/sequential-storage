@@ -59,7 +59,7 @@ impl<const PAGE_COUNT: usize> PageStatesCache for CachedPageStates<PAGE_COUNT> {
     }
 
     fn invalidate_cache_state(&mut self) {
-        *self = Self::new();
+        self.pages.as_mut_slice().fill(None);
     }
 }
 
