@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Optimized cache a little bit which saves ~200 bytes binary size in example
+
 ## 6.0.1 - 14-11-25
 
 - Made the `Key` and `Value` impls for `heapless` v0.9 types generic over the `LenType`.

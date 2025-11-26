@@ -401,7 +401,7 @@ impl<'s, S: NorFlash, CI: CacheImpl> QueueIterator<'s, S, CI> {
                     if get_page_state(
                         self.flash,
                         self.flash_range.clone(),
-                        &mut self.cache,
+                        self.cache,
                         next_page,
                     )
                     .await?
@@ -542,7 +542,7 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'_, 'd, '_, S, CI> {
             .erase_data(
                 self.iter.flash,
                 self.iter.flash_range.clone(),
-                &mut self.iter.cache,
+                self.iter.cache,
                 self.address,
             )
             .await?;
