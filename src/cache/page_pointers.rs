@@ -30,12 +30,12 @@ pub(crate) trait PagePointersCache: Debug {
 // Use NoneZeroU32 because we never store 0's in here (because of the first page marker)
 // and so Option can make use of the niche so we save bytes
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub(crate) struct CachedPagePointers<const PAGE_COUNT: usize> {
-    after_erased_pointers: [Option<NonZeroU32>; PAGE_COUNT],
-    after_written_pointers: [Option<NonZeroU32>; PAGE_COUNT],
+pub(crate) struct CachedPagePointers<'a> {
+    after_erased_pointers: &'a mut [Option<NonZeroU32>],
+    after_written_pointers: &'a mut [Option<NonZeroU32>],
 }
 
-impl<const PAGE_COUNT: usize> Debug for CachedPagePointers<PAGE_COUNT> {
+impl Debug for CachedPagePointers<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{{ after_erased_pointers: [")?;
         for (i, val) in self.after_erased_pointers.iter().enumerate() {
@@ -67,16 +67,19 @@ impl<const PAGE_COUNT: usize> Debug for CachedPagePointers<PAGE_COUNT> {
     }
 }
 
-impl<const PAGE_COUNT: usize> CachedPagePointers<PAGE_COUNT> {
-    pub const fn new() -> Self {
+impl<'a> CachedPagePointers<'a> {
+    pub const fn new(
+        after_erased_pointers: &'a mut [Option<NonZeroU32>],
+        after_written_pointers: &'a mut [Option<NonZeroU32>],
+    ) -> Self {
         Self {
-            after_erased_pointers: [None; PAGE_COUNT],
-            after_written_pointers: [None; PAGE_COUNT],
+            after_erased_pointers,
+            after_written_pointers,
         }
     }
 }
 
-impl<const PAGE_COUNT: usize> PagePointersCache for CachedPagePointers<PAGE_COUNT> {
+impl PagePointersCache for CachedPagePointers<'_> {
     fn first_item_after_erased(&self, page_index: usize) -> Option<u32> {
         self.after_erased_pointers[page_index].map(|val| val.get())
     }
@@ -133,8 +136,12 @@ impl<const PAGE_COUNT: usize> PagePointersCache for CachedPagePointers<PAGE_COUN
     }
 
     fn invalidate_cache_state(&mut self) {
-        self.after_erased_pointers = [None; PAGE_COUNT];
-        self.after_written_pointers = [None; PAGE_COUNT];
+        for pointers in self.after_erased_pointers.iter_mut() {
+            *pointers = None;
+        }
+        for pointers in self.after_written_pointers.iter_mut() {
+            *pointers = None;
+        }
     }
 }
 

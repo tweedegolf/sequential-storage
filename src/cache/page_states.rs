@@ -9,11 +9,11 @@ pub(crate) trait PageStatesCache: Debug {
 }
 
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub(crate) struct CachedPageStates<const PAGE_COUNT: usize> {
-    pages: [Option<PageState>; PAGE_COUNT],
+pub(crate) struct CachedPageStates<'a> {
+    pages: &'a mut [Option<PageState>],
 }
 
-impl<const PAGE_COUNT: usize> Debug for CachedPageStates<PAGE_COUNT> {
+impl Debug for CachedPageStates<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "[")?;
         for (i, val) in self.pages.iter().enumerate() {
@@ -33,15 +33,13 @@ impl<const PAGE_COUNT: usize> Debug for CachedPageStates<PAGE_COUNT> {
     }
 }
 
-impl<const PAGE_COUNT: usize> CachedPageStates<PAGE_COUNT> {
-    pub const fn new() -> Self {
-        Self {
-            pages: [None; PAGE_COUNT],
-        }
+impl<'a> CachedPageStates<'a> {
+    pub const fn new(pages: &'a mut [Option<PageState>]) -> Self {
+        Self { pages }
     }
 }
 
-impl<const PAGE_COUNT: usize> PageStatesCache for CachedPageStates<PAGE_COUNT> {
+impl PageStatesCache for CachedPageStates<'_> {
     fn get_page_state(&self, page_index: usize) -> Option<PageState> {
         self.pages[page_index]
     }
@@ -51,7 +49,9 @@ impl<const PAGE_COUNT: usize> PageStatesCache for CachedPageStates<PAGE_COUNT> {
     }
 
     fn invalidate_cache_state(&mut self) {
-        *self = Self::new();
+        for page in self.pages.iter_mut() {
+            *page = None;
+        }
     }
 }
 

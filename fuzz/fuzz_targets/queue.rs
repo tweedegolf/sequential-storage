@@ -5,7 +5,10 @@ use libfuzzer_sys::arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use rand::{Rng, SeedableRng};
 use sequential_storage::{
-    cache::{CacheImpl, NoCache, PagePointerCache, PageStateCache},
+    cache::{
+        CacheImpl, HeapPagePointerCache, HeapPageStateCache, NoCache, PagePointerCache,
+        PageStateCache,
+    },
     mock_flash::{MockFlashBase, MockFlashError, Operation, WriteCountCheck},
     Error,
 };
@@ -20,6 +23,8 @@ fuzz_target!(|data: Input| match data.cache_type {
     CacheType::NoCache => fuzz(data, NoCache::new()),
     CacheType::PageStateCache => fuzz(data, PageStateCache::<PAGES>::new()),
     CacheType::PagePointerCache => fuzz(data, PagePointerCache::<PAGES>::new()),
+    CacheType::HeapPageStateCache => fuzz(data, HeapPageStateCache::new(PAGES)),
+    CacheType::HeapPagePointerCache => fuzz(data, HeapPagePointerCache::new(PAGES)),
 });
 
 #[derive(Arbitrary, Debug, Clone)]
@@ -48,6 +53,8 @@ enum CacheType {
     NoCache,
     PageStateCache,
     PagePointerCache,
+    HeapPageStateCache,
+    HeapPagePointerCache,
 }
 
 #[repr(align(4))]

@@ -13,17 +13,13 @@ pub(crate) trait KeyPointersCache<KEY: Key> {
 
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub(crate) struct CachedKeyPointers<KEY: Eq, const KEYS: usize> {
-    key_pointers: [Option<(KEY, NonZeroU32)>; KEYS],
+pub(crate) struct CachedKeyPointers<'a, KEY: Eq> {
+    key_pointers: &'a mut [Option<(KEY, NonZeroU32)>],
 }
 
-impl<KEY: Eq, const KEYS: usize> CachedKeyPointers<KEY, KEYS> {
-    const ARRAY_REPEAT_VALUE: Option<(KEY, NonZeroU32)> = None;
-
-    pub(crate) const fn new() -> Self {
-        Self {
-            key_pointers: [Self::ARRAY_REPEAT_VALUE; KEYS],
-        }
+impl<'a, KEY: Eq> CachedKeyPointers<'a, KEY> {
+    pub const fn new(key_pointers: &'a mut [Option<(KEY, NonZeroU32)>]) -> Self {
+        Self { key_pointers }
     }
 
     fn key_index(&self, key: &KEY) -> Option<usize> {
@@ -39,12 +35,13 @@ impl<KEY: Eq, const KEYS: usize> CachedKeyPointers<KEY, KEYS> {
     }
 
     fn insert_front(&mut self, value: (KEY, NonZeroU32)) {
-        self.key_pointers[KEYS - 1] = Some(value);
-        move_to_front(&mut self.key_pointers, KEYS - 1);
+        let len = self.key_pointers.len();
+        self.key_pointers[len - 1] = Some(value);
+        move_to_front(self.key_pointers, len - 1);
     }
 }
 
-impl<KEY: Key, const KEYS: usize> KeyPointersCache<KEY> for CachedKeyPointers<KEY, KEYS> {
+impl<KEY: Key> KeyPointersCache<KEY> for CachedKeyPointers<'_, KEY> {
     fn key_location(&self, key: &KEY) -> Option<u32> {
         self.key_index(key)
             .map(|index| self.key_pointers[index].as_ref().unwrap().1.get())
@@ -55,7 +52,7 @@ impl<KEY: Key, const KEYS: usize> KeyPointersCache<KEY> for CachedKeyPointers<KE
             Some(existing_index) => {
                 self.key_pointers[existing_index] =
                     Some((key.clone(), NonZeroU32::new(item_address).unwrap()));
-                move_to_front(&mut self.key_pointers, existing_index);
+                move_to_front(self.key_pointers, existing_index);
             }
             None => self.insert_front((key.clone(), NonZeroU32::new(item_address).unwrap())),
         }
@@ -64,12 +61,14 @@ impl<KEY: Key, const KEYS: usize> KeyPointersCache<KEY> for CachedKeyPointers<KE
     fn notice_key_erased(&mut self, key: &KEY) {
         if let Some(existing_index) = self.key_index(key) {
             self.key_pointers[existing_index] = None;
-            move_to_back(&mut self.key_pointers, existing_index);
+            move_to_back(self.key_pointers, existing_index);
         }
     }
 
     fn invalidate_cache_state(&mut self) {
-        *self = Self::new();
+        for pointers in self.key_pointers.iter_mut() {
+            *pointers = None;
+        }
     }
 }
 

@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4.9"
-sequential-storage = { path = "..", features = ["_test"] }
+sequential-storage = { path = "..", features = ["_test", "alloc"] }
 arbitrary = { version = "1.4.1", features = ["derive"] }
 rand = "0.9.1"
 rand_pcg = "0.9.0"
