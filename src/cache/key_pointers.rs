@@ -37,7 +37,7 @@ impl<'a, KEY: Eq> CachedKeyPointers<'a, KEY> {
     fn insert_front(&mut self, value: (KEY, NonZeroU32)) {
         let len = self.key_pointers.len();
         self.key_pointers[len - 1] = Some(value);
-        move_to_front(&mut self.key_pointers, len - 1);
+        move_to_front(self.key_pointers, len - 1);
     }
 }
 
@@ -52,7 +52,7 @@ impl<KEY: Key> KeyPointersCache<KEY> for CachedKeyPointers<'_, KEY> {
             Some(existing_index) => {
                 self.key_pointers[existing_index] =
                     Some((key.clone(), NonZeroU32::new(item_address).unwrap()));
-                move_to_front(&mut self.key_pointers, existing_index);
+                move_to_front(self.key_pointers, existing_index);
             }
             None => self.insert_front((key.clone(), NonZeroU32::new(item_address).unwrap())),
         }
@@ -61,7 +61,7 @@ impl<KEY: Key> KeyPointersCache<KEY> for CachedKeyPointers<'_, KEY> {
     fn notice_key_erased(&mut self, key: &KEY) {
         if let Some(existing_index) = self.key_index(key) {
             self.key_pointers[existing_index] = None;
-            move_to_back(&mut self.key_pointers, existing_index);
+            move_to_back(self.key_pointers, existing_index);
         }
     }
 

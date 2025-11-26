@@ -28,10 +28,10 @@ futures-test = "0.3.30"
 
 [features]
 defmt = ["dep:defmt"]
-std = []
+std = ["alloc"]
 # Enable the implementation of the map Key trait for ArrayVec and ArrayString
 arrayvec = ["dep:arrayvec"]
-alloc = []
+alloc = ["defmt/alloc"]
 heapless = ["dep:heapless"]
 heapless-09 = ["dep:heapless-09"]
 _test = ["dep:futures", "dep:approx", "std", "arrayvec", "alloc", "heapless"]
