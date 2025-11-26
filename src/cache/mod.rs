@@ -1,6 +1,6 @@
 //! Module implementing all things cache related
 
-use core::{fmt::Debug, ops::Range};
+use core::{fmt::Debug, num::NonZeroU32, ops::Range};
 
 use embedded_storage_async::nor_flash::NorFlash;
 
@@ -33,12 +33,16 @@ pub(crate) trait Invalidate {
 }
 
 pub(crate) trait PrivateCacheImpl: Invalidate {
-    type PSC: PageStatesCache;
-    type PPC: PagePointersCache;
+    type PSC<'a>: PageStatesCache
+    where
+        Self: 'a;
+    type PPC<'a>: PagePointersCache
+    where
+        Self: 'a;
 
     fn dirt_tracker<R>(&mut self, f: impl FnOnce(&mut DirtTracker) -> R) -> Option<R>;
-    fn page_states(&mut self) -> &mut Self::PSC;
-    fn page_pointers(&mut self) -> &mut Self::PPC;
+    fn page_states(&mut self) -> Self::PSC<'_>;
+    fn page_pointers(&mut self) -> Self::PPC<'_>;
 
     /// True if the cache might be inconsistent
     fn is_dirty(&mut self) -> bool {
@@ -111,9 +115,11 @@ pub(crate) trait PrivateCacheImpl: Invalidate {
 }
 
 pub(crate) trait PrivateKeyCacheImpl<KEY: Key>: PrivateCacheImpl {
-    type KPC: KeyPointersCache<KEY>;
+    type KPC<'a>: KeyPointersCache<KEY>
+    where
+        Self: 'a;
 
-    fn key_pointers(&mut self) -> &mut Self::KPC;
+    fn key_pointers(&mut self) -> Self::KPC<'_>;
 
     fn key_location(&mut self, key: &KEY) -> Option<u32> {
         self.key_pointers().key_location(key)
@@ -169,20 +175,12 @@ impl DirtTracker {
 /// You could simply pass `&mut NoCache::new()` every time.
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct NoCache {
-    page_states: UncachedPageStates,
-    page_pointers: UncachedPagePointers,
-    key_pointers: UncachedKeyPointers,
-}
+pub struct NoCache;
 
 impl NoCache {
     /// Construct a new instance
     pub const fn new() -> Self {
-        Self {
-            page_states: UncachedPageStates,
-            page_pointers: UncachedPagePointers,
-            key_pointers: UncachedKeyPointers,
-        }
+        Self
     }
 }
 
@@ -193,20 +191,26 @@ impl Default for NoCache {
 }
 
 impl PrivateCacheImpl for NoCache {
-    type PSC = UncachedPageStates;
-    type PPC = UncachedPagePointers;
+    type PSC<'a>
+        = UncachedPageStates
+    where
+        Self: 'a;
+    type PPC<'a>
+        = UncachedPagePointers
+    where
+        Self: 'a;
 
     fn dirt_tracker<R>(&mut self, _f: impl FnOnce(&mut DirtTracker) -> R) -> Option<R> {
         // We have no state, so no need to track dirtyness
         None
     }
 
-    fn page_states(&mut self) -> &mut Self::PSC {
-        &mut self.page_states
+    fn page_states(&mut self) -> Self::PSC<'_> {
+        UncachedPageStates
     }
 
-    fn page_pointers(&mut self) -> &mut Self::PPC {
-        &mut self.page_pointers
+    fn page_pointers(&mut self) -> Self::PPC<'_> {
+        UncachedPagePointers
     }
 }
 
@@ -218,10 +222,13 @@ impl Invalidate for NoCache {
 }
 
 impl<KEY: Key> PrivateKeyCacheImpl<KEY> for NoCache {
-    type KPC = UncachedKeyPointers;
+    type KPC<'a>
+        = UncachedKeyPointers
+    where
+        Self: 'a;
 
-    fn key_pointers(&mut self) -> &mut Self::KPC {
-        &mut self.key_pointers
+    fn key_pointers(&mut self) -> Self::KPC<'_> {
+        UncachedKeyPointers
     }
 }
 
@@ -240,9 +247,7 @@ impl<KEY: Key> PrivateKeyCacheImpl<KEY> for NoCache {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct PageStateCache<const PAGE_COUNT: usize> {
     dirt_tracker: DirtTracker,
-    page_states: CachedPageStates<PAGE_COUNT>,
-    page_pointers: UncachedPagePointers,
-    key_pointers: UncachedKeyPointers,
+    page_states: [Option<PageState>; PAGE_COUNT],
 }
 
 impl<const PAGE_COUNT: usize> PageStateCache<PAGE_COUNT> {
@@ -250,9 +255,7 @@ impl<const PAGE_COUNT: usize> PageStateCache<PAGE_COUNT> {
     pub const fn new() -> Self {
         Self {
             dirt_tracker: DirtTracker::new(),
-            page_states: CachedPageStates::new(),
-            page_pointers: UncachedPagePointers,
-            key_pointers: UncachedKeyPointers,
+            page_states: [None; PAGE_COUNT],
         }
     }
 }
@@ -264,19 +267,25 @@ impl<const PAGE_COUNT: usize> Default for PageStateCache<PAGE_COUNT> {
 }
 
 impl<const PAGE_COUNT: usize> PrivateCacheImpl for PageStateCache<PAGE_COUNT> {
-    type PSC = CachedPageStates<PAGE_COUNT>;
-    type PPC = UncachedPagePointers;
+    type PSC<'a>
+        = CachedPageStates<'a>
+    where
+        Self: 'a;
+    type PPC<'a>
+        = UncachedPagePointers
+    where
+        Self: 'a;
 
     fn dirt_tracker<R>(&mut self, f: impl FnOnce(&mut DirtTracker) -> R) -> Option<R> {
         Some(f(&mut self.dirt_tracker))
     }
 
-    fn page_states(&mut self) -> &mut Self::PSC {
-        &mut self.page_states
+    fn page_states(&mut self) -> Self::PSC<'_> {
+        CachedPageStates::new(&mut self.page_states)
     }
 
-    fn page_pointers(&mut self) -> &mut Self::PPC {
-        &mut self.page_pointers
+    fn page_pointers(&mut self) -> Self::PPC<'_> {
+        UncachedPagePointers
     }
 }
 
@@ -286,16 +295,19 @@ impl<KEY: Key, const PAGE_COUNT: usize> KeyCacheImpl<KEY> for PageStateCache<PAG
 impl<const PAGE_COUNT: usize> Invalidate for PageStateCache<PAGE_COUNT> {
     fn invalidate_cache_state(&mut self) {
         self.dirt_tracker.unmark_dirty();
-        self.page_states.invalidate_cache_state();
-        self.page_pointers.invalidate_cache_state();
+        self.page_states().invalidate_cache_state();
+        self.page_pointers().invalidate_cache_state();
     }
 }
 
 impl<KEY: Key, const PAGE_COUNT: usize> PrivateKeyCacheImpl<KEY> for PageStateCache<PAGE_COUNT> {
-    type KPC = UncachedKeyPointers;
+    type KPC<'a>
+        = UncachedKeyPointers
+    where
+        Self: 'a;
 
-    fn key_pointers(&mut self) -> &mut Self::KPC {
-        &mut self.key_pointers
+    fn key_pointers(&mut self) -> Self::KPC<'_> {
+        UncachedKeyPointers
     }
 }
 
@@ -314,9 +326,9 @@ impl<KEY: Key, const PAGE_COUNT: usize> PrivateKeyCacheImpl<KEY> for PageStateCa
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct PagePointerCache<const PAGE_COUNT: usize> {
     dirt_tracker: DirtTracker,
-    page_states: CachedPageStates<PAGE_COUNT>,
-    page_pointers: CachedPagePointers<PAGE_COUNT>,
-    key_pointers: UncachedKeyPointers,
+    page_states: [Option<PageState>; PAGE_COUNT],
+    after_erased_pointers: [Option<NonZeroU32>; PAGE_COUNT],
+    after_written_pointers: [Option<NonZeroU32>; PAGE_COUNT],
 }
 
 impl<const PAGE_COUNT: usize> PagePointerCache<PAGE_COUNT> {
@@ -324,9 +336,9 @@ impl<const PAGE_COUNT: usize> PagePointerCache<PAGE_COUNT> {
     pub const fn new() -> Self {
         Self {
             dirt_tracker: DirtTracker::new(),
-            page_states: CachedPageStates::new(),
-            page_pointers: CachedPagePointers::new(),
-            key_pointers: UncachedKeyPointers,
+            page_states: [None; PAGE_COUNT],
+            after_erased_pointers: [None; PAGE_COUNT],
+            after_written_pointers: [None; PAGE_COUNT],
         }
     }
 }
@@ -338,19 +350,28 @@ impl<const PAGE_COUNT: usize> Default for PagePointerCache<PAGE_COUNT> {
 }
 
 impl<const PAGE_COUNT: usize> PrivateCacheImpl for PagePointerCache<PAGE_COUNT> {
-    type PSC = CachedPageStates<PAGE_COUNT>;
-    type PPC = CachedPagePointers<PAGE_COUNT>;
+    type PSC<'a>
+        = CachedPageStates<'a>
+    where
+        Self: 'a;
+    type PPC<'a>
+        = CachedPagePointers<'a>
+    where
+        Self: 'a;
 
     fn dirt_tracker<R>(&mut self, f: impl FnOnce(&mut DirtTracker) -> R) -> Option<R> {
         Some(f(&mut self.dirt_tracker))
     }
 
-    fn page_states(&mut self) -> &mut Self::PSC {
-        &mut self.page_states
+    fn page_states(&mut self) -> Self::PSC<'_> {
+        CachedPageStates::new(&mut self.page_states)
     }
 
-    fn page_pointers(&mut self) -> &mut Self::PPC {
-        &mut self.page_pointers
+    fn page_pointers(&mut self) -> Self::PPC<'_> {
+        CachedPagePointers::new(
+            &mut self.after_erased_pointers,
+            &mut self.after_written_pointers,
+        )
     }
 }
 
@@ -360,16 +381,19 @@ impl<KEY: Key, const PAGE_COUNT: usize> KeyCacheImpl<KEY> for PagePointerCache<P
 impl<const PAGE_COUNT: usize> Invalidate for PagePointerCache<PAGE_COUNT> {
     fn invalidate_cache_state(&mut self) {
         self.dirt_tracker.unmark_dirty();
-        self.page_states.invalidate_cache_state();
-        self.page_pointers.invalidate_cache_state();
+        self.page_states().invalidate_cache_state();
+        self.page_pointers().invalidate_cache_state();
     }
 }
 
 impl<KEY: Key, const PAGE_COUNT: usize> PrivateKeyCacheImpl<KEY> for PagePointerCache<PAGE_COUNT> {
-    type KPC = UncachedKeyPointers;
+    type KPC<'a>
+        = UncachedKeyPointers
+    where
+        Self: 'a;
 
-    fn key_pointers(&mut self) -> &mut Self::KPC {
-        &mut self.key_pointers
+    fn key_pointers(&mut self) -> Self::KPC<'_> {
+        UncachedKeyPointers
     }
 }
 
@@ -393,9 +417,10 @@ impl<KEY: Key, const PAGE_COUNT: usize> PrivateKeyCacheImpl<KEY> for PagePointer
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct KeyPointerCache<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> {
     dirt_tracker: DirtTracker,
-    page_states: CachedPageStates<PAGE_COUNT>,
-    page_pointers: CachedPagePointers<PAGE_COUNT>,
-    key_pointers: CachedKeyPointers<KEY, KEYS>,
+    page_states: [Option<PageState>; PAGE_COUNT],
+    after_erased_pointers: [Option<NonZeroU32>; PAGE_COUNT],
+    after_written_pointers: [Option<NonZeroU32>; PAGE_COUNT],
+    key_pointers: [Option<(KEY, NonZeroU32)>; KEYS],
 }
 
 impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> KeyPointerCache<PAGE_COUNT, KEY, KEYS> {
@@ -403,9 +428,10 @@ impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> KeyPointerCache<PAGE_
     pub const fn new() -> Self {
         Self {
             dirt_tracker: DirtTracker::new(),
-            page_states: CachedPageStates::new(),
-            page_pointers: CachedPagePointers::new(),
-            key_pointers: CachedKeyPointers::new(),
+            page_states: [None; PAGE_COUNT],
+            after_erased_pointers: [None; PAGE_COUNT],
+            after_written_pointers: [None; PAGE_COUNT],
+            key_pointers: [const { None }; KEYS],
         }
     }
 }
@@ -421,19 +447,28 @@ impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> Default
 impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> PrivateCacheImpl
     for KeyPointerCache<PAGE_COUNT, KEY, KEYS>
 {
-    type PSC = CachedPageStates<PAGE_COUNT>;
-    type PPC = CachedPagePointers<PAGE_COUNT>;
+    type PSC<'a>
+        = CachedPageStates<'a>
+    where
+        Self: 'a;
+    type PPC<'a>
+        = CachedPagePointers<'a>
+    where
+        Self: 'a;
 
     fn dirt_tracker<R>(&mut self, f: impl FnOnce(&mut DirtTracker) -> R) -> Option<R> {
         Some(f(&mut self.dirt_tracker))
     }
 
-    fn page_states(&mut self) -> &mut Self::PSC {
-        &mut self.page_states
+    fn page_states(&mut self) -> Self::PSC<'_> {
+        CachedPageStates::new(&mut self.page_states)
     }
 
-    fn page_pointers(&mut self) -> &mut Self::PPC {
-        &mut self.page_pointers
+    fn page_pointers(&mut self) -> Self::PPC<'_> {
+        CachedPagePointers::new(
+            &mut self.after_erased_pointers,
+            &mut self.after_written_pointers,
+        )
     }
 }
 
@@ -451,18 +486,21 @@ impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> Invalidate
 {
     fn invalidate_cache_state(&mut self) {
         self.dirt_tracker.unmark_dirty();
-        self.page_states.invalidate_cache_state();
-        self.page_pointers.invalidate_cache_state();
-        self.key_pointers.invalidate_cache_state();
+        self.page_states().invalidate_cache_state();
+        self.page_pointers().invalidate_cache_state();
+        self.key_pointers().invalidate_cache_state();
     }
 }
 
 impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> PrivateKeyCacheImpl<KEY>
     for KeyPointerCache<PAGE_COUNT, KEY, KEYS>
 {
-    type KPC = CachedKeyPointers<KEY, KEYS>;
+    type KPC<'a>
+        = CachedKeyPointers<'a, KEY>
+    where
+        Self: 'a;
 
-    fn key_pointers(&mut self) -> &mut Self::KPC {
-        &mut self.key_pointers
+    fn key_pointers(&mut self) -> Self::KPC<'_> {
+        CachedKeyPointers::new(&mut self.key_pointers)
     }
 }
