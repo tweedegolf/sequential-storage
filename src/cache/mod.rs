@@ -110,23 +110,6 @@ pub(crate) trait PrivateCacheImpl: Invalidate {
     }
 }
 
-// impl<T: PrivateCacheImpl> PrivateCacheImpl for &mut T {
-//     type PSC = T::PSC;
-//     type PPC = T::PPC;
-
-//     fn dirt_tracker<R>(&mut self, f: impl FnOnce(&mut DirtTracker) -> R) -> Option<R> {
-//         T::dirt_tracker(self, f)
-//     }
-
-//     fn page_states(&mut self) -> &mut Self::PSC {
-//         T::page_states(self)
-//     }
-
-//     fn page_pointers(&mut self) -> &mut Self::PPC {
-//         T::page_pointers(self)
-//     }
-// }
-
 pub(crate) trait PrivateKeyCacheImpl<KEY: Key>: PrivateCacheImpl {
     type KPC: KeyPointersCache<KEY>;
 
@@ -148,14 +131,6 @@ pub(crate) trait PrivateKeyCacheImpl<KEY: Key>: PrivateCacheImpl {
         self.key_pointers().notice_key_erased(key)
     }
 }
-
-// impl<KEY: Key, T: PrivateKeyCacheImpl<KEY>> PrivateKeyCacheImpl<KEY> for &mut T {
-//     type KPC = T::KPC;
-
-//     fn key_pointers(&mut self) -> &mut Self::KPC {
-//         T::key_pointers(self)
-//     }
-// }
 
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
