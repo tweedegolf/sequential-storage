@@ -5,6 +5,8 @@
 ## Unreleased
 
 - Optimized cache a little bit which saves ~200 bytes binary size in example
+- Add heap-backed cache types when the `alloc` feature is active.
+  This gets rid of some (const) generics and allows you to create a cache with dynamic length.
 
 ## 6.0.1 - 14-11-25
 

@@ -5,7 +5,10 @@ use libfuzzer_sys::arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use rand::SeedableRng;
 use sequential_storage::{
-    cache::{KeyCacheImpl, KeyPointerCache, NoCache, PagePointerCache, PageStateCache},
+    cache::{
+        HeapKeyPointerCache, HeapPagePointerCache, HeapPageStateCache, KeyCacheImpl,
+        KeyPointerCache, NoCache, PagePointerCache, PageStateCache,
+    },
     mock_flash::{MockFlashBase, MockFlashError, WriteCountCheck},
     Error,
 };
@@ -20,6 +23,9 @@ fuzz_target!(|data: Input| match data.cache_type {
     CacheType::PageStateCache => fuzz(data, PageStateCache::<PAGES>::new()),
     CacheType::PagePointerCache => fuzz(data, PagePointerCache::<PAGES>::new()),
     CacheType::KeyPointerCache => fuzz(data, KeyPointerCache::<PAGES, u8, 64>::new()),
+    CacheType::HeapPageStateCache => fuzz(data, HeapPageStateCache::new(PAGES)),
+    CacheType::HeapPagePointerCache => fuzz(data, HeapPagePointerCache::new(PAGES)),
+    CacheType::HeapKeyPointerCache => fuzz(data, HeapKeyPointerCache::<u8>::new(PAGES, 64)),
 });
 
 #[derive(Arbitrary, Debug, Clone)]
@@ -50,7 +56,7 @@ impl StoreOp {
         (
             self.key,
             (0..(self.value_len % 8) as usize)
-                .map(|_| rng.gen())
+                .map(|_| rng.random())
                 .collect(),
         )
     }
@@ -62,6 +68,9 @@ enum CacheType {
     PageStateCache,
     PagePointerCache,
     KeyPointerCache,
+    HeapPageStateCache,
+    HeapPagePointerCache,
+    HeapKeyPointerCache,
 }
 
 fn fuzz(ops: Input, mut cache: impl KeyCacheImpl<u8> + Debug) {
