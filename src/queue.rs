@@ -398,14 +398,9 @@ impl<'s, S: NorFlash, CI: CacheImpl> QueueIterator<'s, S, CI> {
             let (current_page, current_address) = match self.next_address {
                 NextAddress::PageAfter(previous_page) => {
                     let next_page = next_page::<S>(self.flash_range.clone(), previous_page);
-                    if get_page_state(
-                        self.flash,
-                        self.flash_range.clone(),
-                        self.cache,
-                        next_page,
-                    )
-                    .await?
-                    .is_open()
+                    if get_page_state(self.flash, self.flash_range.clone(), self.cache, next_page)
+                        .await?
+                        .is_open()
                         || next_page == self.oldest_page
                     {
                         self.cache.unmark_dirty();
@@ -1485,24 +1480,24 @@ mod tests {
 
         const FLASH_RANGE: Range<u32> = 0x000..0x1000;
 
-        close_page(&mut flash, FLASH_RANGE, &mut &mut cache::NoCache::new(), 0)
+        close_page(&mut flash, FLASH_RANGE, &mut cache::NoCache::new(), 0)
             .await
             .unwrap();
-        close_page(&mut flash, FLASH_RANGE, &mut &mut cache::NoCache::new(), 1)
+        close_page(&mut flash, FLASH_RANGE, &mut cache::NoCache::new(), 1)
             .await
             .unwrap();
-        partial_close_page(&mut flash, FLASH_RANGE, &mut &mut cache::NoCache::new(), 2)
+        partial_close_page(&mut flash, FLASH_RANGE, &mut cache::NoCache::new(), 2)
             .await
             .unwrap();
 
         assert_eq!(
-            find_youngest_page(&mut flash, FLASH_RANGE, &mut &mut cache::NoCache::new())
+            find_youngest_page(&mut flash, FLASH_RANGE, &mut cache::NoCache::new())
                 .await
                 .unwrap(),
             2
         );
         assert_eq!(
-            find_oldest_page(&mut flash, FLASH_RANGE, &mut &mut cache::NoCache::new())
+            find_oldest_page(&mut flash, FLASH_RANGE, &mut cache::NoCache::new())
                 .await
                 .unwrap(),
             0
