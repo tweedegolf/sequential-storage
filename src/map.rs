@@ -715,7 +715,7 @@ async fn remove_item_inner<K: Key, S: MultiwriteNorFlash>(
 ///     .await
 ///     .unwrap()
 /// {
-///     // Do somethinmg with the item.
+///     // Do something with the item.
 ///     // Please note that for the same key there might be multiple items returned,
 ///     // the last one is the current active one.
 ///     all_items.insert(key, value);
@@ -847,7 +847,7 @@ impl<K: Key, S: NorFlash, CI: CacheImpl> MapItemIter<'_, '_, K, S, CI> {
 ///     .await
 ///     .unwrap()
 /// {
-///     // Do somethinmg with the item.
+///     // Do something with the item.
 ///     // Please note that for the same key there might be multiple items returned,
 ///     // the last one is the current active one.
 ///     all_items.insert(key, value);
