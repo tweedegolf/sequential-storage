@@ -14,6 +14,7 @@ use core::{
 };
 use embedded_storage_async::nor_flash::NorFlash;
 use map::SerializationError;
+pub use runtime::Runtime;
 
 #[cfg(feature = "alloc")]
 mod alloc_impl;
@@ -27,6 +28,7 @@ mod heapless_impl;
 mod item;
 pub mod map;
 pub mod queue;
+pub mod runtime;
 
 #[cfg(any(test, doctest, feature = "_test"))]
 /// An in-memory flash type that can be used for mocking.
