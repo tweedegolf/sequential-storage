@@ -7,7 +7,6 @@
 // - flash erase size is quite big, aka, this is a paged flash
 // - flash write size is quite small, so it writes words and not full pages
 
-use cache::PrivateCacheImpl;
 use core::{
     fmt::Debug,
     marker::PhantomData,
@@ -27,7 +26,7 @@ mod heapless_09_impl;
 mod heapless_impl;
 mod item;
 pub mod map;
-// pub mod queue;
+pub mod queue;
 
 #[cfg(any(test, doctest, feature = "_test"))]
 /// An in-memory flash type that can be used for mocking.
@@ -46,7 +45,7 @@ pub struct Storage<T, S: NorFlash, C: CacheImpl> {
     flash: S,
     flash_range: Range<u32>,
     cache: C,
-    storage_type: T,
+    _phantom: PhantomData<T>,
 }
 
 impl<T, S: NorFlash, C: CacheImpl> Storage<T, S, C> {

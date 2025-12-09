@@ -122,10 +122,10 @@ impl<S: NorFlash> MapConfig<S> {
     }
 
     pub const fn try_new(flash_range: Range<u32>) -> Option<Self> {
-        if flash_range.start % S::ERASE_SIZE as u32 != 0 {
+        if !flash_range.start.is_multiple_of(S::ERASE_SIZE as u32) {
             return None;
         }
-        if flash_range.end % S::ERASE_SIZE as u32 != 0 {
+        if !flash_range.end.is_multiple_of(S::ERASE_SIZE as u32) {
             return None;
         }
         if flash_range.end - flash_range.start < S::ERASE_SIZE as u32 * 2 {
@@ -152,7 +152,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
             flash: storage,
             flash_range: config.flash_range,
             cache,
-            storage_type: Map(PhantomData),
+            _phantom: PhantomData,
         }
     }
 
