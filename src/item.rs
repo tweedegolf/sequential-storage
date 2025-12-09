@@ -27,8 +27,9 @@ use core::ops::Range;
 use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
 
 use crate::{
-    AlignedBuf, Error, MAX_WORD_SIZE, NorFlashExt, PageState, cache::PrivateCacheImpl,
-    calculate_page_address, calculate_page_end_address, calculate_page_index, get_page_state,
+    AlignedBuf, Error, MAX_WORD_SIZE, NorFlashExt, PageState, Storage,
+    cache::{CacheImpl, PrivateCacheImpl},
+    calculate_page_address, calculate_page_end_address, calculate_page_index,
     round_down_to_alignment, round_down_to_alignment_usize, round_up_to_alignment,
     round_up_to_alignment_usize,
 };
@@ -359,47 +360,6 @@ impl ItemUnborrowed {
     }
 }
 
-/// Scans through the items to find the first spot that is free to store a new item.
-///
-/// - `end_address` is exclusive.
-pub async fn find_next_free_item_spot<S: NorFlash>(
-    flash: &mut S,
-    flash_range: Range<u32>,
-    cache: &mut impl PrivateCacheImpl,
-    start_address: u32,
-    end_address: u32,
-    data_length: u32,
-) -> Result<Option<u32>, Error<S::Error>> {
-    let page_index = calculate_page_index::<S>(flash_range, start_address);
-
-    let free_item_address = match cache.first_item_after_written(page_index) {
-        Some(free_item_address) => free_item_address,
-        None => {
-            ItemHeaderIter::new(
-                cache
-                    .first_item_after_erased(page_index)
-                    .unwrap_or(0)
-                    .max(start_address),
-                end_address,
-            )
-            .traverse(flash, |_, _| true)
-            .await?
-            .1
-        }
-    };
-
-    if let Some(available) = ItemHeader::available_data_bytes::<S>(end_address - free_item_address)
-    {
-        if available >= data_length {
-            Ok(Some(free_item_address))
-        } else {
-            Ok(None)
-        }
-    } else {
-        Ok(None)
-    }
-}
-
 pub enum MaybeItem<'d> {
     Corrupted(ItemHeader, &'d mut [u8]),
     Erased(ItemHeader, &'d mut [u8]),
@@ -494,44 +454,84 @@ fn crc32_with_initial(data: &[u8], initial: u32) -> u32 {
     !crc
 }
 
-/// Checks if the page is open or closed with all items erased.
-/// By definition a partial-open page is not empty since it can still be written.
-///
-/// The page state can optionally be given if it's already known.
-/// In that case the state will not be checked again.
-pub async fn is_page_empty<S: NorFlash>(
-    flash: &mut S,
-    flash_range: Range<u32>,
-    cache: &mut impl PrivateCacheImpl,
-    page_index: usize,
-    page_state: Option<PageState>,
-) -> Result<bool, Error<S::Error>> {
-    let page_state = match page_state {
-        Some(page_state) => page_state,
-        None => get_page_state::<S>(flash, flash_range.clone(), cache, page_index).await?,
-    };
+impl<T, S: NorFlash, C: CacheImpl> Storage<T, S, C> {
+    /// Scans through the items to find the first spot that is free to store a new item.
+    ///
+    /// - `end_address` is exclusive.
+    pub async fn find_next_free_item_spot(
+        &mut self,
+        start_address: u32,
+        end_address: u32,
+        data_length: u32,
+    ) -> Result<Option<u32>, Error<S::Error>> {
+        let page_index = calculate_page_index::<S>(self.flash_range.clone(), start_address);
 
-    match page_state {
-        PageState::Closed => {
-            let page_data_start_address =
-                calculate_page_address::<S>(flash_range.clone(), page_index) + S::WORD_SIZE as u32;
-            let page_data_end_address =
-                calculate_page_end_address::<S>(flash_range.clone(), page_index)
-                    - S::WORD_SIZE as u32;
+        let free_item_address = match self.cache.first_item_after_written(page_index) {
+            Some(free_item_address) => free_item_address,
+            None => {
+                ItemHeaderIter::new(
+                    self.cache
+                        .first_item_after_erased(page_index)
+                        .unwrap_or(0)
+                        .max(start_address),
+                    end_address,
+                )
+                .traverse(&mut self.flash, |_, _| true)
+                .await?
+                .1
+            }
+        };
 
-            Ok(ItemHeaderIter::new(
-                cache
-                    .first_item_after_erased(page_index)
-                    .unwrap_or(page_data_start_address),
-                page_data_end_address,
-            )
-            .traverse(flash, |header, _| header.crc.is_none())
-            .await?
-            .0
-            .is_none())
+        if let Some(available) =
+            ItemHeader::available_data_bytes::<S>(end_address - free_item_address)
+        {
+            if available >= data_length {
+                Ok(Some(free_item_address))
+            } else {
+                Ok(None)
+            }
+        } else {
+            Ok(None)
         }
-        PageState::PartialOpen => Ok(false),
-        PageState::Open => Ok(true),
+    }
+    /// Checks if the page is open or closed with all items erased.
+    /// By definition a partial-open page is not empty since it can still be written.
+    ///
+    /// The page state can optionally be given if it's already known.
+    /// In that case the state will not be checked again.
+    pub(crate) async fn is_page_empty(
+        &mut self,
+        page_index: usize,
+        page_state: Option<PageState>,
+    ) -> Result<bool, Error<S::Error>> {
+        let page_state = match page_state {
+            Some(page_state) => page_state,
+            None => self.get_page_state(page_index).await?,
+        };
+
+        match page_state {
+            PageState::Closed => {
+                let page_data_start_address =
+                    calculate_page_address::<S>(self.flash_range.clone(), page_index)
+                        + S::WORD_SIZE as u32;
+                let page_data_end_address =
+                    calculate_page_end_address::<S>(self.flash_range.clone(), page_index)
+                        - S::WORD_SIZE as u32;
+
+                Ok(ItemHeaderIter::new(
+                    self.cache
+                        .first_item_after_erased(page_index)
+                        .unwrap_or(page_data_start_address),
+                    page_data_end_address,
+                )
+                .traverse(&mut self.flash, |header, _| header.crc.is_none())
+                .await?
+                .0
+                .is_none())
+            }
+            PageState::PartialOpen => Ok(false),
+            PageState::Open => Ok(true),
+        }
     }
 }
 

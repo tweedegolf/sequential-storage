@@ -106,12 +106,10 @@ mod queue_tests {
 
 #[cfg(test)]
 mod map_tests {
-    use core::ops::Range;
-
     use crate::{
-        AlignedBuf,
+        AlignedBuf, Storage,
         cache::{KeyCacheImpl, KeyPointerCache, NoCache, PagePointerCache, PageStateCache},
-        map::{fetch_item, store_item},
+        map::MapConfig,
         mock_flash::{self, FlashStatsResult, WriteCountCheck},
     };
 
@@ -122,7 +120,7 @@ mod map_tests {
     #[test]
     async fn no_cache() {
         assert_eq!(
-            run_test(&mut NoCache::new()).await,
+            run_test(NoCache::new()).await,
             FlashStatsResult {
                 erases: 198,
                 reads: 233786,
@@ -136,7 +134,7 @@ mod map_tests {
     #[test]
     async fn page_state_cache() {
         assert_eq!(
-            run_test(&mut PageStateCache::<NUM_PAGES>::new()).await,
+            run_test(PageStateCache::<NUM_PAGES>::new()).await,
             FlashStatsResult {
                 erases: 198,
                 reads: 181162,
@@ -150,7 +148,7 @@ mod map_tests {
     #[test]
     async fn page_pointer_cache() {
         assert_eq!(
-            run_test(&mut PagePointerCache::<NUM_PAGES>::new()).await,
+            run_test(PagePointerCache::<NUM_PAGES>::new()).await,
             FlashStatsResult {
                 erases: 198,
                 reads: 163273,
@@ -164,7 +162,7 @@ mod map_tests {
     #[test]
     async fn key_pointer_cache_half() {
         assert_eq!(
-            run_test(&mut KeyPointerCache::<NUM_PAGES, u16, 12>::new()).await,
+            run_test(KeyPointerCache::<NUM_PAGES, u16, 12>::new()).await,
             FlashStatsResult {
                 erases: 198,
                 reads: 131503,
@@ -178,7 +176,7 @@ mod map_tests {
     #[test]
     async fn key_pointer_cache_full() {
         assert_eq!(
-            run_test(&mut KeyPointerCache::<NUM_PAGES, u16, 24>::new()).await,
+            run_test(KeyPointerCache::<NUM_PAGES, u16, 24>::new()).await,
             FlashStatsResult {
                 erases: 198,
                 reads: 14510,
@@ -189,17 +187,19 @@ mod map_tests {
         );
     }
 
-    async fn run_test(cache: &mut impl KeyCacheImpl<u16>) -> FlashStatsResult {
-        let mut flash =
-            mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true);
-        const FLASH_RANGE: Range<u32> = 0x00..0x400;
+    async fn run_test(cache: impl KeyCacheImpl<u16>) -> FlashStatsResult {
+        let mut storage = Storage::new_map(
+            mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true),
+            const { MapConfig::new(0x00..0x400) },
+            cache,
+        );
         let mut data_buffer = AlignedBuf([0; 128]);
 
         const LENGHT_PER_KEY: [usize; 24] = [
             11, 13, 6, 13, 13, 10, 2, 3, 5, 36, 1, 65, 4, 6, 1, 15, 10, 7, 3, 15, 9, 3, 4, 5,
         ];
 
-        let start_snapshot = flash.stats_snapshot();
+        let start_snapshot = storage.flash.stats_snapshot();
 
         for _ in 0..100 {
             const WRITE_ORDER: [usize; 24] = [
@@ -208,16 +208,14 @@ mod map_tests {
             ];
 
             for i in WRITE_ORDER {
-                store_item(
-                    &mut flash,
-                    FLASH_RANGE,
-                    cache,
-                    &mut data_buffer,
-                    &(i as u16),
-                    &vec![i as u8; LENGHT_PER_KEY[i]].as_slice(),
-                )
-                .await
-                .unwrap();
+                storage
+                    .store_item(
+                        &mut data_buffer,
+                        &(i as u16),
+                        &vec![i as u8; LENGHT_PER_KEY[i]].as_slice(),
+                    )
+                    .await
+                    .unwrap();
             }
 
             const READ_ORDER: [usize; 24] = [
@@ -226,16 +224,11 @@ mod map_tests {
             ];
 
             for i in READ_ORDER {
-                let item = fetch_item::<u16, &[u8], _>(
-                    &mut flash,
-                    FLASH_RANGE,
-                    cache,
-                    &mut data_buffer,
-                    &(i as u16),
-                )
-                .await
-                .unwrap()
-                .unwrap();
+                let item = storage
+                    .fetch_item::<&[u8]>(&mut data_buffer, &(i as u16))
+                    .await
+                    .unwrap()
+                    .unwrap();
 
                 // println!("Fetched {item:?}");
 
@@ -243,6 +236,6 @@ mod map_tests {
             }
         }
 
-        start_snapshot.compare_to(flash.stats_snapshot())
+        start_snapshot.compare_to(storage.flash.stats_snapshot())
     }
 }
