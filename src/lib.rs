@@ -52,9 +52,9 @@ impl<T, S: NorFlash, C: CacheImpl> Storage<T, S, C> {
     /// Resets the flash in the entire given flash range.
     ///
     /// This is just a thin helper function as it just calls the flash's erase function.
-    pub async fn erase_all(flash: &mut S, flash_range: Range<u32>) -> Result<(), Error<S::Error>> {
-        flash
-            .erase(flash_range.start, flash_range.end)
+    pub async fn erase_all(&mut self) -> Result<(), Error<S::Error>> {
+        self.flash
+            .erase(self.flash_range.start, self.flash_range.end)
             .await
             .map_err(|e| Error::Storage {
                 value: e,
