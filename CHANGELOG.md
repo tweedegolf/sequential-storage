@@ -19,6 +19,8 @@
 - *Breaking:* Changed the signature of `Value::deserialize_from` to also return the used buffer size
 - Added back impls for `Value` on `[<integer>;N]`
 
+This release is 'disk'-compatible with 5.0
+
 ## 5.0.1 27-08-25
 
 - Fixed the `Value` implementation for `Option<T>` so it now serializes and deserializes properly
