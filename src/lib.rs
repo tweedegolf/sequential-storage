@@ -347,6 +347,14 @@ impl<T, S: NorFlash, C: CacheImpl> Storage<T, S, C> {
     pub fn destroy(self) -> (S, C) {
         (self.flash, self.cache)
     }
+
+    pub const fn flash(&mut self) -> &mut S {
+        &mut self.flash
+    }
+
+    pub const fn flash_range(&self) -> &Range<u32> {
+        &self.flash_range
+    }
 }
 
 /// Round up the the given number to align with the wordsize of the flash.
