@@ -281,6 +281,68 @@ impl<T, S: NorFlash, C: CacheImpl> Storage<T, S, C> {
 
         Ok(new_state)
     }
+
+    #[cfg(any(test, feature = "std"))]
+    /// Print all items in flash to the returned string
+    pub async fn print_items(&mut self) -> String {
+        use crate::NorFlashExt;
+        use std::fmt::Write;
+
+        let mut buf = [0; 1024 * 16];
+
+        let mut s = String::new();
+
+        writeln!(s, "Items in flash:").unwrap();
+
+        for page_index in self.get_pages(0) {
+            writeln!(
+                s,
+                "  Page {page_index} ({}):",
+                match self.get_page_state(page_index).await {
+                    Ok(value) => format!("{value:?}"),
+                    Err(e) => format!("Error ({e:?})"),
+                }
+            )
+            .unwrap();
+            let page_data_start =
+                crate::calculate_page_address::<S>(self.flash_range.clone(), page_index)
+                    + S::WORD_SIZE as u32;
+            let page_data_end =
+                crate::calculate_page_end_address::<S>(self.flash_range.clone(), page_index)
+                    - S::WORD_SIZE as u32;
+
+            let mut it = crate::item::ItemHeaderIter::new(page_data_start, page_data_end);
+            while let (Some(header), item_address) =
+                it.traverse(&mut self.flash, |_, _| false).await.unwrap()
+            {
+                let next_item_address = header.next_item_address::<S>(item_address);
+                let maybe_item = match header
+                    .read_item(&mut self.flash, &mut buf, item_address, page_data_end)
+                    .await
+                {
+                    Ok(maybe_item) => maybe_item,
+                    Err(e) => {
+                        writeln!(
+                            s,
+                            "   Item COULD NOT BE READ at {item_address}..{next_item_address}"
+                        )
+                        .unwrap();
+
+                        println!("{s}");
+                        panic!("{e:?}");
+                    }
+                };
+
+                writeln!(
+                    s,
+                    "   Item {maybe_item:?} at {item_address}..{next_item_address}"
+                )
+                .unwrap();
+            }
+        }
+
+        s
+    }
 }
 
 /// Round up the the given number to align with the wordsize of the flash.
@@ -573,7 +635,7 @@ mod tests {
             flash: flash,
             flash_range: 0x000..0x400,
             cache: NoCache::new(),
-            storage_type: (),
+            _phantom: PhantomData::<()>,
         };
 
         assert_eq!(

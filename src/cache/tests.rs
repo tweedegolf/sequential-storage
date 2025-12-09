@@ -1,12 +1,10 @@
 #[cfg(test)]
 mod queue_tests {
-    use core::ops::Range;
-
     use crate::{
-        AlignedBuf,
+        AlignedBuf, Storage,
         cache::{CacheImpl, NoCache, PagePointerCache, PageStateCache},
         mock_flash::{self, FlashStatsResult, WriteCountCheck},
-        queue::{peek, pop, push},
+        queue::QueueConfig,
     };
 
     use futures_test::test;
@@ -17,7 +15,7 @@ mod queue_tests {
     #[test]
     async fn no_cache() {
         assert_eq!(
-            run_test(&mut NoCache::new()).await,
+            run_test(NoCache::new()).await,
             FlashStatsResult {
                 erases: 149,
                 reads: 165009,
@@ -31,7 +29,7 @@ mod queue_tests {
     #[test]
     async fn page_state_cache() {
         assert_eq!(
-            run_test(&mut PageStateCache::<NUM_PAGES>::new()).await,
+            run_test(PageStateCache::<NUM_PAGES>::new()).await,
             FlashStatsResult {
                 erases: 149,
                 reads: 68037,
@@ -45,7 +43,7 @@ mod queue_tests {
     #[test]
     async fn page_pointer_cache() {
         assert_eq!(
-            run_test(&mut PagePointerCache::<NUM_PAGES>::new()).await,
+            run_test(PagePointerCache::<NUM_PAGES>::new()).await,
             FlashStatsResult {
                 erases: 149,
                 reads: 9959,
@@ -56,51 +54,43 @@ mod queue_tests {
         );
     }
 
-    async fn run_test(cache: &mut impl CacheImpl) -> FlashStatsResult {
-        let mut flash =
-            mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true);
-        const FLASH_RANGE: Range<u32> = 0x00..0x400;
+    async fn run_test(cache: impl CacheImpl) -> FlashStatsResult {
+        let mut storage = Storage::new_queue(
+            mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true),
+            const { QueueConfig::new(0x00..0x400) },
+            cache,
+        );
         let mut data_buffer = AlignedBuf([0; 1024]);
 
-        let start_snapshot = flash.stats_snapshot();
+        let start_snapshot = storage.flash.stats_snapshot();
 
         for i in 0..LOOP_COUNT {
             println!("{i}");
             let data = vec![i as u8; i % 20 + 1];
 
             println!("PUSH");
-            push(&mut flash, FLASH_RANGE, cache, &data, true)
-                .await
-                .unwrap();
+            storage.push(&data, true).await.unwrap();
             assert_eq!(
-                peek(&mut flash, FLASH_RANGE, cache, &mut data_buffer)
-                    .await
-                    .unwrap()
-                    .unwrap(),
+                storage.peek(&mut data_buffer).await.unwrap().unwrap(),
                 &data,
                 "At {i}"
             );
             println!("POP");
             assert_eq!(
-                pop(&mut flash, FLASH_RANGE, cache, &mut data_buffer)
-                    .await
-                    .unwrap()
-                    .unwrap(),
+                storage.pop(&mut data_buffer).await.unwrap().unwrap(),
                 &data,
                 "At {i}"
             );
             println!("PEEK");
             assert_eq!(
-                peek(&mut flash, FLASH_RANGE, cache, &mut data_buffer)
-                    .await
-                    .unwrap(),
+                storage.peek(&mut data_buffer).await.unwrap(),
                 None,
                 "At {i}"
             );
             println!("DONE");
         }
 
-        start_snapshot.compare_to(flash.stats_snapshot())
+        start_snapshot.compare_to(storage.flash.stats_snapshot())
     }
 }
 
