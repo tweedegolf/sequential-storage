@@ -379,7 +379,6 @@ dependencies = [
  "embassy-embedded-hal",
  "embassy-executor",
  "embassy-nrf",
- "embassy-sync",
  "embedded-storage",
  "embedded-storage-async",
  "panic-probe",

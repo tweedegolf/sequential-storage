@@ -343,6 +343,10 @@ impl<T, S: NorFlash, C: CacheImpl> Storage<T, S, C> {
 
         s
     }
+
+    pub fn destroy(self) -> (S, C) {
+        (self.flash, self.cache)
+    }
 }
 
 /// Round up the the given number to align with the wordsize of the flash.

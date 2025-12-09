@@ -5,11 +5,10 @@ use core::ops::Range;
 
 use defmt::unwrap;
 use embassy_executor::Spawner;
-use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 use sequential_storage::{
-    Storage,
-    cache::{KeyPointerCache, PagePointerCache},
+    Map, Queue, Storage,
+    cache::{CacheImpl, KeyCacheImpl, KeyPointerCache, PagePointerCache},
     map::MapConfig,
     queue::QueueConfig,
 };
@@ -23,34 +22,33 @@ async fn main(_spawner: Spawner) {
     let p = embassy_nrf::init(Default::default());
 
     let flash = embassy_nrf::nvmc::Nvmc::new(p.NVMC);
-    let flash =
-        Mutex::<NoopRawMutex, _>::new(embassy_embedded_hal::adapter::BlockingAsync::new(flash));
+    let flash = embassy_embedded_hal::adapter::BlockingAsync::new(flash);
 
-    let queue_flash = embassy_embedded_hal::flash::partition::Partition::new(
-        &flash,
-        QUEUE_FLASH_RANGE.start,
-        QUEUE_FLASH_RANGE.len() as u32,
-    );
-    let map_flash = embassy_embedded_hal::flash::partition::Partition::new(
-        &flash,
-        MAP_FLASH_RANGE.start,
-        MAP_FLASH_RANGE.len() as u32,
+    let mut queue_storage = Storage::new_queue(
+        flash,
+        const { QueueConfig::new(QUEUE_FLASH_RANGE) },
+        PagePointerCache::<4>::new(),
     );
 
-    run_queue(queue_flash).await;
-    run_map(map_flash).await;
+    run_queue(&mut queue_storage).await;
+
+    let (flash, _) = queue_storage.destroy();
+
+    let mut map_storage = Storage::new_map(
+        flash,
+        const { MapConfig::new(MAP_FLASH_RANGE) },
+        KeyPointerCache::<4, u8, 8>::new(),
+    );
+
+    run_map(&mut map_storage).await;
 
     defmt::info!("All went ok!");
     cortex_m::asm::bkpt();
 }
 
-async fn run_queue<E: defmt::Format>(flash: impl MultiwriteNorFlash<Error = E>) {
-    let mut storage = Storage::new_queue(
-        flash,
-        const { QueueConfig::new(0..QUEUE_FLASH_RANGE.end - QUEUE_FLASH_RANGE.start) },
-        PagePointerCache::<4>::new(),
-    );
-
+async fn run_queue<E: defmt::Format>(
+    storage: &mut Storage<Queue, impl MultiwriteNorFlash<Error = E>, impl CacheImpl>,
+) {
     unwrap!(storage.erase_all().await);
 
     let mut data_buffer = [0; 32];
@@ -70,13 +68,9 @@ async fn run_queue<E: defmt::Format>(flash: impl MultiwriteNorFlash<Error = E>) 
     defmt::assert!(peeked.is_none());
 }
 
-async fn run_map<E: defmt::Format>(flash: impl MultiwriteNorFlash<Error = E>) {
-    let mut storage = Storage::new_map(
-        flash,
-        const { MapConfig::new(0..MAP_FLASH_RANGE.end - MAP_FLASH_RANGE.start) },
-        KeyPointerCache::<4, u8, 8>::new(),
-    );
-
+async fn run_map<E: defmt::Format>(
+    storage: &mut Storage<Map<u8>, impl MultiwriteNorFlash<Error = E>, impl KeyCacheImpl<u8>>,
+) {
     unwrap!(storage.erase_all().await);
 
     let mut data_buffer = [0; 32];
