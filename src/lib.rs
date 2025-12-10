@@ -7,6 +7,7 @@
 // - flash erase size is quite big, aka, this is a paged flash
 // - flash write size is quite small, so it writes words and not full pages
 
+use core::num::NonZeroUsize;
 use core::{
     fmt::Debug,
     marker::PhantomData,
@@ -115,32 +116,34 @@ impl<T, S: NorFlash, C: CacheImpl> Storage<T, S, C> {
         Ok(None)
     }
 
+    fn page_count(&self) -> NonZeroUsize {
+        let page_count = self.flash_range.len() / S::ERASE_SIZE;
+        // Do a max 1 on the page count to prevent a panic. We know it's never 0 because it's checked in the constructor, but the compiler doesn't know
+        NonZeroUsize::new(page_count.max(1)).unwrap()
+    }
+
     /// Get all pages in the flash range from the given start to end (that might wrap back to 0)
     fn get_pages(
         &self,
         starting_page_index: usize,
     ) -> impl DoubleEndedIterator<Item = usize> + use<T, S, C> {
-        let page_count = self.flash_range.len() / S::ERASE_SIZE;
-        self.flash_range
-            .clone()
-            .step_by(S::ERASE_SIZE)
-            .enumerate()
-            .map(move |(index, _)| (index + starting_page_index) % page_count)
+        let page_count = self.page_count();
+        (0..page_count.get()).map(move |index| (index + starting_page_index) % page_count)
     }
 
     /// Get the next page index (wrapping around to 0 if required)
     fn next_page(&self, page_index: usize) -> usize {
-        let page_count = self.flash_range.len() / S::ERASE_SIZE;
+        let page_count = self.page_count();
         (page_index + 1) % page_count
     }
 
     /// Get the previous page index (wrapping around to the biggest page if required)
     fn previous_page(&self, page_index: usize) -> usize {
-        let page_count = self.flash_range.len() / S::ERASE_SIZE;
+        let page_count = self.page_count();
 
         match page_index.checked_sub(1) {
             Some(new_page_index) => new_page_index,
-            None => page_count - 1,
+            None => page_count.get() - 1,
         }
     }
 
@@ -487,6 +490,12 @@ pub enum Error<S> {
         /// Backtrace made at the construction of the error
         backtrace: std::backtrace::Backtrace,
     },
+    /// There's a bug in the logic of the crate. Please report!
+    LogicBug {
+        #[cfg(feature = "_test")]
+        /// Backtrace made at the construction of the error
+        backtrace: std::backtrace::Backtrace,
+    },
     /// A provided buffer was to big to be used
     BufferTooBig,
     /// A provided buffer was to small to be used (usize is size needed)
@@ -530,6 +539,9 @@ where
             Error::Corrupted { .. } => write!(f, "Storage is corrupted"),
             #[cfg(feature = "_test")]
             Error::Corrupted { backtrace } => write!(f, "Storage is corrupted\n{backtrace}"),
+            Error::LogicBug { .. } => write!(f, "Logic bug"),
+            #[cfg(feature = "_test")]
+            Error::LogicBug { backtrace } => write!(f, "Logic bug\n{backtrace}"),
             Error::BufferTooBig => write!(f, "A provided buffer was to big to be used"),
             Error::BufferTooSmall(needed) => write!(
                 f,

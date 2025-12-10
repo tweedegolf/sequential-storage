@@ -81,11 +81,19 @@ impl<'a> CachedPagePointers<'a> {
 
 impl PagePointersCache for CachedPagePointers<'_> {
     fn first_item_after_erased(&self, page_index: usize) -> Option<u32> {
-        self.after_erased_pointers[page_index].map(|val| val.get())
+        self.after_erased_pointers
+            .get(page_index)
+            .copied()
+            .flatten()
+            .map(|val| val.get())
     }
 
     fn first_item_after_written(&self, page_index: usize) -> Option<u32> {
-        self.after_written_pointers[page_index].map(|val| val.get())
+        self.after_written_pointers
+            .get(page_index)
+            .copied()
+            .flatten()
+            .map(|val| val.get())
     }
 
     fn notice_item_written<S: NorFlash>(
@@ -105,7 +113,9 @@ impl PagePointersCache for CachedPagePointers<'_> {
             }
         }
 
-        self.after_written_pointers[page_index] = NonZeroU32::new(next_item_address);
+        if let Some(after_written_pointer) = self.after_written_pointers.get_mut(page_index) {
+            *after_written_pointer = NonZeroU32::new(next_item_address);
+        }
     }
 
     fn notice_item_erased<S: NorFlash>(
@@ -122,16 +132,22 @@ impl PagePointersCache for CachedPagePointers<'_> {
         });
 
         if item_address == next_unerased_item {
-            self.after_erased_pointers[page_index] =
-                NonZeroU32::new(item_header.next_item_address::<S>(item_address));
+            if let Some(after_erased_pointer) = self.after_erased_pointers.get_mut(page_index) {
+                *after_erased_pointer =
+                    NonZeroU32::new(item_header.next_item_address::<S>(item_address))
+            }
         }
     }
 
     fn notice_page_state(&mut self, page_index: usize, new_state: PageState) {
         if new_state.is_open() {
             // This page was erased
-            self.after_erased_pointers[page_index] = None;
-            self.after_written_pointers[page_index] = None;
+            if let Some(after_erased_pointer) = self.after_erased_pointers.get_mut(page_index) {
+                *after_erased_pointer = None
+            }
+            if let Some(after_written_pointer) = self.after_written_pointers.get_mut(page_index) {
+                *after_written_pointer = None
+            }
         }
     }
 

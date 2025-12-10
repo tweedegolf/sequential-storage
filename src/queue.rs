@@ -28,6 +28,10 @@ impl<S: NorFlash> QueueConfig<S> {
         if !flash_range.end.is_multiple_of(S::ERASE_SIZE as u32) {
             return None;
         }
+        // At least 1 page is used
+        if flash_range.end - flash_range.start < (S::ERASE_SIZE as u32) {
+            return None;
+        }
 
         if S::ERASE_SIZE < S::WORD_SIZE * 4 {
             return None;
@@ -603,8 +607,6 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
         &mut self,
         data_buffer: &mut [u8],
     ) -> Result<Option<(ItemUnborrowed, u32)>, Error<S::Error>> {
-        let mut data_buffer = Some(data_buffer);
-
         if self.storage.cache.is_dirty() {
             self.storage.cache.invalidate_cache_state();
         }
@@ -656,23 +658,28 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
                 let maybe_item = found_item_header
                     .read_item(
                         &mut self.storage.flash,
-                        data_buffer.take().unwrap(),
+                        data_buffer,
                         found_item_address,
                         page_data_end_address,
                     )
                     .await?;
 
                 match maybe_item {
-                    item::MaybeItem::Corrupted(header, db) => {
+                    item::MaybeItem::Corrupted(header, _) => {
                         let next_address = header.next_item_address::<S>(found_item_address);
                         self.next_address = if next_address >= page_data_end_address {
                             NextAddress::PageAfter(current_page)
                         } else {
                             NextAddress::Address(next_address)
                         };
-                        data_buffer.replace(db);
                     }
-                    item::MaybeItem::Erased(_, _) => unreachable!("Item is already erased"),
+                    item::MaybeItem::Erased(_, _) => {
+                        // Item is already erased
+                        return Err(Error::LogicBug {
+                            #[cfg(feature = "_test")]
+                            backtrace: std::backtrace::Backtrace::capture(),
+                        });
+                    }
                     item::MaybeItem::Present(item) => {
                         let next_address = item.header.next_item_address::<S>(found_item_address);
                         self.next_address = if next_address >= page_data_end_address {

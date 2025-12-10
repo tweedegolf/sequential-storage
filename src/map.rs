@@ -35,6 +35,7 @@ impl<S: NorFlash> MapConfig<S> {
         if !flash_range.end.is_multiple_of(S::ERASE_SIZE as u32) {
             return None;
         }
+        // At least 2 pages are used
         if flash_range.end - flash_range.start < S::ERASE_SIZE as u32 * 2 {
             return None;
         }
@@ -998,24 +999,26 @@ macro_rules! impl_key_num {
     ($int:ty) => {
         impl Key for $int {
             fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-                let len = size_of::<Self>();
-                if buffer.len() < len {
-                    return Err(SerializationError::BufferTooSmall);
+                let self_bytes = self.to_le_bytes();
+
+                match buffer.get_mut(..self_bytes.len()) {
+                    Some(buffer) => {
+                        buffer.copy_from_slice(&self_bytes);
+                        Ok(buffer.len())
+                    }
+                    None => Err(SerializationError::BufferTooSmall),
                 }
-                buffer[..len].copy_from_slice(&self.to_le_bytes());
-                Ok(len)
             }
 
             fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), SerializationError> {
-                let len = size_of::<Self>();
-                if buffer.len() < len {
-                    return Err(SerializationError::BufferTooSmall);
-                }
-
-                Ok((
-                    Self::from_le_bytes(buffer[..len].try_into().unwrap()),
-                    size_of::<Self>(),
-                ))
+                let value = Self::from_le_bytes(
+                    buffer
+                        .get(..size_of::<Self>())
+                        .ok_or(SerializationError::BufferTooSmall)?
+                        .try_into()
+                        .unwrap(),
+                );
+                Ok((value, size_of::<Self>()))
             }
 
             fn get_len(_buffer: &[u8]) -> Result<usize, SerializationError> {
@@ -1038,19 +1041,22 @@ impl_key_num!(i128);
 
 impl<const N: usize> Key for [u8; N] {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        if buffer.len() < N {
-            return Err(SerializationError::BufferTooSmall);
-        }
-        buffer[..N].copy_from_slice(self);
+        buffer
+            .get_mut(..N)
+            .ok_or(SerializationError::BufferTooSmall)?
+            .copy_from_slice(self);
         Ok(N)
     }
 
     fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), SerializationError> {
-        if buffer.len() < N {
-            return Err(SerializationError::BufferTooSmall);
-        }
-
-        Ok((buffer[..N].try_into().unwrap(), N))
+        Ok((
+            buffer
+                .get(..N)
+                .ok_or(SerializationError::BufferTooSmall)?
+                .try_into()
+                .unwrap(),
+            N,
+        ))
     }
 
     fn get_len(_buffer: &[u8]) -> Result<usize, SerializationError> {
@@ -1108,7 +1114,12 @@ impl<'a, T: Value<'a>> Value<'a> for Option<T> {
         if let Some(val) = self {
             let mut size = 0;
             size += <bool as Value>::serialize_into(&true, buffer)?;
-            size += <T as Value>::serialize_into(val, &mut buffer[size..])?;
+            size += <T as Value>::serialize_into(
+                val,
+                buffer
+                    .get_mut(size..)
+                    .ok_or(SerializationError::BufferTooSmall)?,
+            )?;
             Ok(size)
         } else {
             <bool as Value>::serialize_into(&false, buffer)
@@ -1121,7 +1132,11 @@ impl<'a, T: Value<'a>> Value<'a> for Option<T> {
     {
         let (is_some, tag_size) = <bool as Value>::deserialize_from(buffer)?;
         if is_some {
-            let (value, value_size) = <T as Value>::deserialize_from(&buffer[tag_size..])?;
+            let (value, value_size) = <T as Value>::deserialize_from(
+                buffer
+                    .get(tag_size..)
+                    .ok_or(SerializationError::BufferTooSmall)?,
+            )?;
             Ok((Some(value), tag_size + value_size))
         } else {
             Ok((None, tag_size))
@@ -1131,11 +1146,10 @@ impl<'a, T: Value<'a>> Value<'a> for Option<T> {
 
 impl<'a> Value<'a> for &'a [u8] {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        if buffer.len() < self.len() {
-            return Err(SerializationError::BufferTooSmall);
-        }
-
-        buffer[..self.len()].copy_from_slice(self);
+        buffer
+            .get_mut(..self.len())
+            .ok_or(SerializationError::BufferTooSmall)?
+            .copy_from_slice(self);
         Ok(self.len())
     }
 
@@ -1151,23 +1165,26 @@ macro_rules! impl_map_item_num {
     ($num:ty) => {
         impl<'a> Value<'a> for $num {
             fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-                let size = size_of::<Self>();
-                if buffer.len() < size {
-                    Err(SerializationError::BufferTooSmall)
-                } else {
-                    buffer[..size].copy_from_slice(&self.to_le_bytes());
-                    Ok(size)
+                let self_bytes = self.to_le_bytes();
+
+                match buffer.get_mut(..self_bytes.len()) {
+                    Some(buffer) => {
+                        buffer.copy_from_slice(&self_bytes);
+                        Ok(buffer.len())
+                    }
+                    None => Err(SerializationError::BufferTooSmall),
                 }
             }
 
             fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), SerializationError> {
-                let size = size_of::<Self>();
                 let value = Self::from_le_bytes(
-                    buffer[..size]
+                    buffer
+                        .get(..size_of::<Self>())
+                        .ok_or(SerializationError::BufferTooSmall)?
                         .try_into()
-                        .map_err(|_| SerializationError::BufferTooSmall)?,
+                        .unwrap(),
                 );
-                Ok((value, size))
+                Ok((value, size_of::<Self>()))
             }
         }
 
@@ -1175,11 +1192,13 @@ macro_rules! impl_map_item_num {
         impl<'a, const N: usize> Value<'a> for [$num; N] {
             fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
                 let elem_size = size_of::<$num>();
-                if buffer.len() < elem_size * N {
-                    return Err(SerializationError::BufferTooSmall);
-                }
-                for i in 0..N {
-                    buffer[i * elem_size..][..elem_size].copy_from_slice(&self[i].to_le_bytes())
+
+                let buffer = buffer
+                    .get_mut(0..elem_size * N)
+                    .ok_or(SerializationError::BufferTooSmall)?;
+
+                for (chunk, number) in buffer.chunks_exact_mut(elem_size).zip(self.iter()) {
+                    chunk.copy_from_slice(&number.to_le_bytes())
                 }
                 Ok(elem_size * N)
             }
@@ -1191,10 +1210,8 @@ macro_rules! impl_map_item_num {
                 }
 
                 let mut array = [0 as $num; N];
-                for i in 0..N {
-                    array[i] = <$num>::from_le_bytes(
-                        buffer[i * elem_size..][..elem_size].try_into().unwrap(),
-                    )
+                for (chunk, number) in buffer.chunks_exact(elem_size).zip(array.iter_mut()) {
+                    *number = <$num>::from_le_bytes(chunk.try_into().unwrap());
                 }
                 Ok((array, elem_size * N))
             }

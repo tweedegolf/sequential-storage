@@ -275,7 +275,15 @@ impl<'d> Item<'d> {
         cache.notice_item_written::<S>(flash_range, address, header);
         header.write(flash, address).await?;
 
-        let (data_block, data_left) = data.split_at(round_down_to_alignment_usize::<S>(data.len()));
+        let Some((data_block, data_left)) =
+            data.split_at_checked(round_down_to_alignment_usize::<S>(data.len()))
+        else {
+            debug_assert!(false);
+            return Err(Error::LogicBug {
+                #[cfg(feature = "_test")]
+                backtrace: std::backtrace::Backtrace::capture(),
+            });
+        };
 
         let data_address = ItemHeader::data_address::<S>(address);
         flash
@@ -387,7 +395,13 @@ impl<'d> MaybeItem<'d> {
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
             }),
-            MaybeItem::Erased(_, _) => panic!("Cannot unwrap an erased item"),
+            MaybeItem::Erased(_, _) => {
+                // Cannot unwrap an erased item
+                Err(Error::LogicBug {
+                    #[cfg(feature = "_test")]
+                    backtrace: std::backtrace::Backtrace::capture(),
+                })
+            }
             MaybeItem::Present(item) => Ok(item),
         }
     }
