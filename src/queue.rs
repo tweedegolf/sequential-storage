@@ -608,9 +608,9 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
         }
     }
 
-    async fn next_inner<'d>(
+    async fn next_inner(
         &mut self,
-        data_buffer: &'d mut [u8],
+        data_buffer: &mut [u8],
     ) -> Result<Option<(ItemUnborrowed, u32)>, Error<S::Error>> {
         if self.storage.cache.is_dirty() {
             self.storage.cache.invalidate_cache_state();

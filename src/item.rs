@@ -236,11 +236,11 @@ pub struct Item<'d> {
 
 impl<'d> Item<'d> {
     pub fn data(&self) -> &[u8] {
-        &self.item_data_buffer
+        self.item_data_buffer
     }
 
     pub fn data_mut(&mut self) -> &mut [u8] {
-        &mut self.item_data_buffer
+        self.item_data_buffer
     }
 
     pub fn data_owned(self) -> &'d mut [u8] {
