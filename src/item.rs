@@ -57,16 +57,16 @@ impl ItemHeader {
         end_address: u32,
     ) -> Result<Option<Self>, Error<S::Error>> {
         let mut buffer = [0; MAX_WORD_SIZE];
-        let header_slice = &mut buffer[..round_up_to_alignment_usize::<S>(Self::LENGTH)];
+        let header_slice_len = round_up_to_alignment_usize::<S>(Self::LENGTH);
 
-        if address + header_slice.len() as u32 > end_address {
+        if address + header_slice_len as u32 > end_address {
             return Ok(None);
         }
 
         let mut retry = false;
         loop {
             flash
-                .read(address, header_slice)
+                .read(address, &mut buffer[..header_slice_len])
                 .await
                 .map_err(|e| Error::Storage {
                     value: e,
@@ -74,14 +74,13 @@ impl ItemHeader {
                     backtrace: std::backtrace::Backtrace::capture(),
                 })?;
 
-            if header_slice.iter().all(|b| *b == 0xFF) {
+            if buffer.iter().take(header_slice_len).all(|b| *b == 0xFF) {
                 // What we read was fully erased bytes, so there's no header here
                 return Ok(None);
             }
 
-            let length_crc =
-                u16::from_le_bytes(header_slice[Self::LENGTH_CRC_FIELD].try_into().unwrap());
-            let calculated_length_crc = crc16(&header_slice[Self::LENGTH_FIELD]);
+            let length_crc = u16::from_le_bytes(buffer[Self::LENGTH_CRC_FIELD].try_into().unwrap());
+            let calculated_length_crc = crc16(&buffer[Self::LENGTH_FIELD]);
 
             if calculated_length_crc != length_crc {
                 if retry {
@@ -99,9 +98,9 @@ impl ItemHeader {
         }
 
         let header = Self {
-            length: u16::from_le_bytes(header_slice[Self::LENGTH_FIELD].try_into().unwrap()),
+            length: u16::from_le_bytes(buffer[Self::LENGTH_FIELD].try_into().unwrap()),
             crc: {
-                match u32::from_le_bytes(header_slice[Self::DATA_CRC_FIELD].try_into().unwrap()) {
+                match u32::from_le_bytes(buffer[Self::DATA_CRC_FIELD].try_into().unwrap()) {
                     0 => None,
                     value => Some(NonZeroU32::new(value).unwrap()),
                 }
@@ -157,7 +156,7 @@ impl ItemHeader {
                     break if data_crc == header_crc {
                         Ok(MaybeItem::Present(Item {
                             header: self,
-                            data_buffer,
+                            item_data_buffer: data_buffer,
                         }))
                     } else {
                         if !retry {
@@ -228,23 +227,28 @@ impl ItemHeader {
     }
 }
 
+#[derive(Debug)]
 pub struct Item<'d> {
     pub header: ItemHeader,
-    data_buffer: &'d mut [u8],
+    /// The part of the data buffer that contains the item only
+    item_data_buffer: &'d mut [u8],
 }
 
 impl<'d> Item<'d> {
     pub fn data(&self) -> &[u8] {
-        &self.data_buffer[..self.header.length as usize]
+        self.item_data_buffer
     }
 
     pub fn data_mut(&mut self) -> &mut [u8] {
-        &mut self.data_buffer[..self.header.length as usize]
+        self.item_data_buffer
     }
 
-    /// Destruct the item to get back the full data buffer
-    pub fn destruct(self) -> (ItemHeader, &'d mut [u8]) {
-        (self.header, self.data_buffer)
+    pub fn data_owned(self) -> &'d mut [u8] {
+        self.item_data_buffer
+    }
+
+    pub fn header_and_data_owned(self) -> (ItemHeader, &'d mut [u8]) {
+        (self.header, self.item_data_buffer)
     }
 
     pub async fn write_new<S: NorFlash>(
@@ -275,7 +279,15 @@ impl<'d> Item<'d> {
         cache.notice_item_written::<S>(flash_range, address, header);
         header.write(flash, address).await?;
 
-        let (data_block, data_left) = data.split_at(round_down_to_alignment_usize::<S>(data.len()));
+        let Some((data_block, data_left)) =
+            data.split_at_checked(round_down_to_alignment_usize::<S>(data.len()))
+        else {
+            debug_assert!(false);
+            return Err(Error::LogicBug {
+                #[cfg(feature = "_test")]
+                backtrace: std::backtrace::Backtrace::capture(),
+            });
+        };
 
         let data_address = ItemHeader::data_address::<S>(address);
         flash
@@ -289,11 +301,22 @@ impl<'d> Item<'d> {
 
         if !data_left.is_empty() {
             let mut buffer = AlignedBuf([0; MAX_WORD_SIZE]);
+
+            let extend_len = round_up_to_alignment_usize::<S>(data_left.len());
+
+            if extend_len > buffer.len() {
+                debug_assert!(false);
+                return Err(Error::LogicBug {
+                    #[cfg(feature = "_test")]
+                    backtrace: std::backtrace::Backtrace::capture(),
+                });
+            }
+
             buffer[..data_left.len()].copy_from_slice(data_left);
             flash
                 .write(
                     data_address + data_block.len() as u32,
-                    &buffer[..round_up_to_alignment_usize::<S>(data_left.len())],
+                    &buffer[..extend_len],
                 )
                 .await
                 .map_err(|e| Error::Storage {
@@ -327,36 +350,25 @@ impl<'d> Item<'d> {
     pub fn unborrow(self) -> ItemUnborrowed {
         ItemUnborrowed {
             header: self.header,
-            data_buffer_len: self.data_buffer.len(),
         }
-    }
-}
-
-impl core::fmt::Debug for Item<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("Item")
-            .field("header", &self.header)
-            .field(
-                "data_buffer",
-                &&self.data_buffer[..self.header.length as usize],
-            )
-            .finish()
     }
 }
 
 /// A version of [Item] that does not borrow the data. This is to circumvent the borrowchecker in some places.
 pub struct ItemUnborrowed {
     pub header: ItemHeader,
-    data_buffer_len: usize,
 }
 
 impl ItemUnborrowed {
     /// Reborrows the data. Watch out! Make sure the data buffer hasn't changed since unborrowing!
-    pub fn reborrow(self, data_buffer: &mut [u8]) -> Item<'_> {
-        Item {
+    ///
+    /// Returns None if the data buffer is too small. This should never happen, but we don't want to panic
+    pub fn reborrow(self, data_buffer: &mut [u8]) -> Option<Item<'_>> {
+        let length = self.header.length as usize;
+        Some(Item {
             header: self.header,
-            data_buffer: &mut data_buffer[..self.data_buffer_len],
-        }
+            item_data_buffer: data_buffer.get_mut(..length)?,
+        })
     }
 }
 
@@ -387,7 +399,13 @@ impl<'d> MaybeItem<'d> {
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
             }),
-            MaybeItem::Erased(_, _) => panic!("Cannot unwrap an erased item"),
+            MaybeItem::Erased(_, _) => {
+                // Cannot unwrap an erased item
+                Err(Error::LogicBug {
+                    #[cfg(feature = "_test")]
+                    backtrace: std::backtrace::Backtrace::capture(),
+                })
+            }
             MaybeItem::Present(item) => Ok(item),
         }
     }
@@ -546,11 +564,11 @@ impl ItemIter {
         }
     }
 
-    pub async fn next<'m, S: NorFlash>(
+    pub async fn next<'d, S: NorFlash>(
         &mut self,
         flash: &mut S,
-        data_buffer: &'m mut [u8],
-    ) -> Result<Option<(Item<'m>, u32)>, Error<S::Error>> {
+        data_buffer: &'d mut [u8],
+    ) -> Result<Option<(Item<'d>, u32)>, Error<S::Error>> {
         let mut data_buffer = Some(data_buffer);
         while let (Some(header), address) = self.header.next(flash).await? {
             let buffer = data_buffer.take().unwrap();

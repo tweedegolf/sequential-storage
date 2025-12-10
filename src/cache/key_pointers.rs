@@ -22,18 +22,6 @@ impl<'a, KEY: Eq> CachedKeyPointers<'a, KEY> {
         Self { key_pointers }
     }
 
-    fn key_index(&self, key: &KEY) -> Option<usize> {
-        self.key_pointers
-            .iter()
-            .enumerate()
-            .filter_map(|(index, val)| val.as_ref().map(|val| (index, val)))
-            .find_map(
-                |(index, (known_key, _))| {
-                    if key == known_key { Some(index) } else { None }
-                },
-            )
-    }
-
     fn insert_front(&mut self, value: (KEY, NonZeroU32)) {
         let len = self.key_pointers.len();
         self.key_pointers[len - 1] = Some(value);
@@ -43,15 +31,25 @@ impl<'a, KEY: Eq> CachedKeyPointers<'a, KEY> {
 
 impl<KEY: Key> KeyPointersCache<KEY> for CachedKeyPointers<'_, KEY> {
     fn key_location(&self, key: &KEY) -> Option<u32> {
-        self.key_index(key)
-            .map(|index| self.key_pointers[index].as_ref().unwrap().1.get())
+        self.key_pointers
+            .iter()
+            .flatten()
+            .find(|(iter_key, _)| key == iter_key)
+            .map(|(_, pointer)| pointer.get())
     }
 
     fn notice_key_location(&mut self, key: &KEY, item_address: u32) {
-        match self.key_index(key) {
-            Some(existing_index) => {
-                self.key_pointers[existing_index] =
-                    Some((key.clone(), NonZeroU32::new(item_address).unwrap()));
+        let existing_pointer = self
+            .key_pointers
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(index, val)| val.as_mut().map(|(key, pointer)| (index, key, pointer)))
+            .find(|(_, iter_key, _)| key == *iter_key)
+            .map(|(index, _, pointer)| (index, pointer));
+
+        match existing_pointer {
+            Some((existing_index, pointer)) => {
+                *pointer = NonZeroU32::new(item_address).unwrap();
                 move_to_front(self.key_pointers, existing_index);
             }
             None => self.insert_front((key.clone(), NonZeroU32::new(item_address).unwrap())),
@@ -59,8 +57,14 @@ impl<KEY: Key> KeyPointersCache<KEY> for CachedKeyPointers<'_, KEY> {
     }
 
     fn notice_key_erased(&mut self, key: &KEY) {
-        if let Some(existing_index) = self.key_index(key) {
-            self.key_pointers[existing_index] = None;
+        let existing_pointer = self
+            .key_pointers
+            .iter_mut()
+            .enumerate()
+            .find(|(_, val)| val.as_ref().is_some_and(|(iter_key, _)| key == iter_key));
+
+        if let Some((existing_index, val)) = existing_pointer {
+            *val = None;
             move_to_back(self.key_pointers, existing_index);
         }
     }
@@ -89,47 +93,20 @@ impl<KEY: Key> KeyPointersCache<KEY> for UncachedKeyPointers {
 }
 
 fn move_to_front<T>(data: &mut [Option<T>], index: usize) {
-    assert!(index < data.len());
+    debug_assert!(index < data.len());
 
-    // Swap the item we're moving into this temporary
-    let mut item = None;
-    core::mem::swap(&mut item, &mut data[index]);
-
-    unsafe {
-        // Move the items until the index back one.
-        // This overwrites the None we just put in.
-        // This is fine because it's none and no drop has to occur
-        let ptr = data.as_mut_ptr();
-        ptr.copy_to(ptr.add(1), index);
-
-        // The item in front is now duplicated.
-        // Swap back our item into the front.
-        core::mem::swap(&mut item, &mut data[0]);
-        // The duplicated item must not drop, so just forget it
-        core::mem::forget(item);
+    // In an if to get rid of panic. Assert above still panics in debug builds
+    if index < data.len() {
+        data[..=index].rotate_right(1);
     }
 }
 
 fn move_to_back<T>(data: &mut [Option<T>], index: usize) {
-    assert!(index < data.len());
+    debug_assert!(index < data.len());
 
-    // Swap the item we're moving into this temporary
-    let mut item = None;
-    core::mem::swap(&mut item, &mut data[index]);
-
-    unsafe {
-        // Move the items until the index back one.
-        // This overwrites the None we just put in.
-        // This is fine because it's none and no drop has to occur
-        let ptr = data.as_mut_ptr();
-        ptr.add(index + 1)
-            .copy_to(ptr.add(index), data.len() - 1 - index);
-
-        // The item in front is now duplicated.
-        // Swap back our item into the back.
-        core::mem::swap(&mut item, &mut data[data.len() - 1]);
-        // The duplicated item must not drop, so just forget it
-        core::mem::forget(item);
+    // In an if to get rid of panic. Assert above still panics in debug builds
+    if index < data.len() {
+        data[index..].rotate_left(1);
     }
 }
 

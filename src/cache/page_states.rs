@@ -41,11 +41,13 @@ impl<'a> CachedPageStates<'a> {
 
 impl PageStatesCache for CachedPageStates<'_> {
     fn get_page_state(&self, page_index: usize) -> Option<PageState> {
-        self.pages[page_index]
+        self.pages.get(page_index).copied().flatten()
     }
 
     fn notice_page_state(&mut self, page_index: usize, new_state: PageState) {
-        self.pages[page_index] = Some(new_state);
+        if let Some(page_state) = self.pages.get_mut(page_index) {
+            *page_state = Some(new_state);
+        }
     }
 
     fn invalidate_cache_state(&mut self) {
