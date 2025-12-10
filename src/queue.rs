@@ -1,59 +1,4 @@
-//! A queue (fifo) implementation for storing arbitrary data in flash memory.
-//!
-//! Use [push] to add data to the fifo and use [peek] and [pop] to get the data back.
-//!
-//! ```rust
-//! # use sequential_storage::cache::NoCache;
-//! # use sequential_storage::Storage;
-//! # use sequential_storage::queue::QueueConfig;
-//! # use mock_flash::MockFlashBase;
-//! # use futures::executor::block_on;
-//! # type Flash = MockFlashBase<10, 1, 4096>;
-//! # mod mock_flash {
-//! #   include!("mock_flash.rs");
-//! # }
-//! #
-//! # fn init_flash() -> Flash {
-//! #     Flash::new(mock_flash::WriteCountCheck::Twice, None, false)
-//! # }
-//! #
-//! # block_on(async {
-//!
-//! // Initialize the flash. This can be internal or external
-//! let mut flash = init_flash();
-//!
-//! let mut storage = Storage::new_queue(flash, const { QueueConfig::new(0x1000..0x3000) }, NoCache::new());
-//! // We need to give the crate a buffer to work with.
-//! // It must be big enough to serialize the biggest value of your storage type in.
-//! let mut data_buffer = [0; 128];
-//!
-//! let my_data = [10, 47, 29];
-//!
-//! // We can push some data to the queue
-//! storage.push(&my_data, false).await.unwrap();
-//!
-//! // We can peek at the oldest data
-//!
-//! assert_eq!(
-//!     &storage.peek(&mut data_buffer).await.unwrap().unwrap()[..],
-//!     &my_data[..]
-//! );
-//!
-//! // With popping we get back the oldest data, but that data is now also removed
-//!
-//! assert_eq!(
-//!     &storage.pop(&mut data_buffer).await.unwrap().unwrap()[..],
-//!     &my_data[..]
-//! );
-//!
-//! // If we pop again, we find there's no data anymore
-//!
-//! assert_eq!(
-//!     storage.pop(&mut data_buffer).await,
-//!     Ok(None)
-//! );
-//! # });
-//! ```
+//! Implementation of the map logic
 
 use crate::item::{Item, ItemHeader, ItemHeaderIter};
 
@@ -62,16 +7,20 @@ use self::{cache::CacheImpl, item::ItemUnborrowed};
 use super::*;
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 
+/// Configuration for a queue
 pub struct QueueConfig<S> {
     flash_range: Range<u32>,
     _phantom: PhantomData<S>,
 }
 
 impl<S: NorFlash> QueueConfig<S> {
+    /// Create a new queue configuration. Will panic if the data is invalid.
+    /// If you want a fallible version, use [Self::try_new].
     pub const fn new(flash_range: Range<u32>) -> Self {
         Self::try_new(flash_range).expect("Queue config must be correct")
     }
 
+    /// Create a new queue configuration. Will return None if the data is invalid
     pub const fn try_new(flash_range: Range<u32>) -> Option<Self> {
         if !flash_range.start.is_multiple_of(S::ERASE_SIZE as u32) {
             return None;
@@ -95,6 +44,62 @@ impl<S: NorFlash> QueueConfig<S> {
 }
 
 impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
+    /// Create a new (fifo) queue instance
+    ///
+    /// Use [Self::push] to add data to the fifo and use [Self::peek] and [Self::pop] to get the data back.
+    ///
+    /// ```rust
+    /// # use sequential_storage::cache::NoCache;
+    /// # use sequential_storage::Storage;
+    /// # use sequential_storage::queue::QueueConfig;
+    /// # use mock_flash::MockFlashBase;
+    /// # use futures::executor::block_on;
+    /// # type Flash = MockFlashBase<10, 1, 4096>;
+    /// # mod mock_flash {
+    /// #   include!("mock_flash.rs");
+    /// # }
+    /// #
+    /// # fn init_flash() -> Flash {
+    /// #     Flash::new(mock_flash::WriteCountCheck::Twice, None, false)
+    /// # }
+    /// #
+    /// # block_on(async {
+    ///
+    /// // Initialize the flash. This can be internal or external
+    /// let mut flash = init_flash();
+    ///
+    /// let mut storage = Storage::new_queue(flash, const { QueueConfig::new(0x1000..0x3000) }, NoCache::new());
+    /// // We need to give the crate a buffer to work with.
+    /// // It must be big enough to serialize the biggest value of your storage type in.
+    /// let mut data_buffer = [0; 128];
+    ///
+    /// let my_data = [10, 47, 29];
+    ///
+    /// // We can push some data to the queue
+    /// storage.push(&my_data, false).await.unwrap();
+    ///
+    /// // We can peek at the oldest data
+    ///
+    /// assert_eq!(
+    ///     &storage.peek(&mut data_buffer).await.unwrap().unwrap()[..],
+    ///     &my_data[..]
+    /// );
+    ///
+    /// // With popping we get back the oldest data, but that data is now also removed
+    ///
+    /// assert_eq!(
+    ///     &storage.pop(&mut data_buffer).await.unwrap().unwrap()[..],
+    ///     &my_data[..]
+    /// );
+    ///
+    /// // If we pop again, we find there's no data anymore
+    ///
+    /// assert_eq!(
+    ///     storage.pop(&mut data_buffer).await,
+    ///     Ok(None)
+    /// );
+    /// # });
+    /// ```
     pub const fn new_queue(storage: S, config: QueueConfig<S>, cache: C) -> Self {
         Self {
             flash: storage,
@@ -104,8 +109,8 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
         }
     }
 
-    /// Push data into the queue in the given flash memory with the given range.
-    /// The data can only be taken out with the [pop] function.
+    /// Push data into the queue.
+    /// The data can only be taken out with the [Self::pop] function.
     ///
     /// Old data will not be overwritten unless `allow_overwrite_old_data` is true.
     /// If it is, then if the queue is full, the oldest data is removed to make space for the new data.
@@ -233,7 +238,7 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
 
     /// Peek at the oldest data.
     ///
-    /// If you also want to remove the data use [pop].
+    /// If you also want to remove the data use [Self::pop].
     ///
     /// The data is written to the given `data_buffer` and the part that was written is returned.
     /// It is valid to only use the length of the returned slice and use the original `data_buffer`.
@@ -258,7 +263,7 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
 
     /// Pop the oldest data from the queue.
     ///
-    /// If you don't want to remove the data use [peek].
+    /// If you don't want to remove the data use [Self::peek].
     ///
     /// The data is written to the given `data_buffer` and the part that was written is returned.
     /// It is valid to only use the length of the returned slice and use the original `data_buffer`.
@@ -357,7 +362,7 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
     /// Calculate how much space is left free in the queue (in bytes).
     ///
     /// The number given back is accurate, however there are lots of things that add overhead and padding.
-    /// Every push is an item with its own overhead. You can check the overhead per item with [crate::item_overhead_size].
+    /// Every push is an item with its own overhead. You can check the overhead per item with [Self::item_overhead_size].
     ///
     /// Furthermore, every item has to fully fit in a page. So if a page has 50 bytes left and you push an item of 60 bytes,
     /// the current page is closed and the item is stored on the next page, 'wasting' the 50 you had.

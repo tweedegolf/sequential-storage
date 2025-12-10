@@ -1,101 +1,4 @@
-//! A module for storing key-value pairs in flash with minimal erase cycles.
-//!
-//! When a key-value is stored, it overwrites the any old items with the same key.
-//!
-//! ## Basic API:
-//!
-//! ```rust
-//! # use sequential_storage::cache::NoCache;
-//! # use sequential_storage::{Storage, Map, map::MapConfig};
-//! # use mock_flash::MockFlashBase;
-//! # use futures::executor::block_on;
-//! # type Flash = MockFlashBase<10, 1, 4096>;
-//! # mod mock_flash {
-//! #   include!("mock_flash.rs");
-//! # }
-//! # fn init_flash() -> Flash {
-//! #     Flash::new(mock_flash::WriteCountCheck::Twice, None, false)
-//! # }
-//!
-//! # block_on(async {
-//! // Initialize the flash. This can be internal or external
-//! let mut flash = init_flash();
-//!
-//! // Create the storage instance
-//!
-//! // We provide the flash addresses in which it will operate.
-//! // The storage will not read, write or erase outside of this range.
-//!
-//! // We also put the config in a const block so if the config is bad we'll get a compile time error
-//!
-//! // With the generics we specify that this is a map with `u8` as the key
-//! let mut storage = Storage::<Map<u8>, _, _>::new_map(flash, const { MapConfig::new(0x1000..0x3000) }, NoCache::new());
-//!
-//! // We need to give the crate a buffer to work with.
-//! // It must be big enough to serialize the biggest value of your storage type in,
-//! // rounded up to to word alignment of the flash. Some kinds of internal flash may require
-//! // this buffer to be aligned in RAM as well.
-//! let mut data_buffer = [0; 128];
-//!
-//! // We can fetch an item from the flash. We're using `u8` as our key type and `u32` as our value type.
-//! // Nothing is stored in it yet, so it will return None.
-//!
-//! assert_eq!(
-//!     storage.fetch_item::<u32>(
-//!         &mut data_buffer,
-//!         &42,
-//!     ).await.unwrap(),
-//!     None
-//! );
-//!
-//! // Now we store an item the flash with key 42.
-//! // Again we make sure we pass the correct key and value types, u8 and u32.
-//! // It is important to do this consistently.
-//!
-//! storage.store_item(
-//!     &mut data_buffer,
-//!     &42u8,
-//!     &104729u32,
-//! ).await.unwrap();
-//!
-//! // When we ask for key 42, we now get back a Some with the correct value
-//!
-//! assert_eq!(
-//!     storage.fetch_item::<u32>(
-//!         &mut data_buffer,
-//!         &42,
-//!     ).await.unwrap(),
-//!     Some(104729)
-//! );
-//! # });
-//! ```
-//!
-//! ## Key and value traits
-//!
-//! In the previous example we saw we used one key and one value type.
-//! It is ***crucial*** we use the same key type every time on the same range of flash.
-//! This is because the internal items are serialized as `[key|value]`. A different key type
-//! will have a different length and will make all data nonsense.
-//!
-//! However, if we have special knowledge about what we store for each key,
-//! we are allowed to use different value types.
-//!
-//! For example, we can do the following:
-//!
-//! 1. Store a u32 with key 0
-//! 2. Store a custom type 'Foo' with key 1
-//! 3. Fetch a u32 with key 0
-//! 4. Fetch a custom type 'Foo' with key 1
-//!
-//! It is up to the user to make sure this is done correctly.
-//! If done incorrectly, the deserialize function of requested value type will see
-//! data it doesn't expect. In the best case it'll return an error, in a bad case it'll
-//! give bad invalid data and in the worst case the deserialization code panics.
-//! It is worth mentioning that `fetch_all_items` also requires that all items have the same type.
-//! So be careful.
-//!
-//! For your convenience there are premade implementations for the [Key] and [Value] traits.
-//!
+//! Implementation of the map logic
 
 use core::{marker::PhantomData, mem::size_of};
 
@@ -111,16 +14,20 @@ use self::{
 
 use super::*;
 
+/// Configuration for a map
 pub struct MapConfig<S> {
     flash_range: Range<u32>,
     _phantom: PhantomData<S>,
 }
 
 impl<S: NorFlash> MapConfig<S> {
+    /// Create a new map configuration. Will panic if the data is invalid.
+    /// If you want a fallible version, use [Self::try_new].
     pub const fn new(flash_range: Range<u32>) -> Self {
         Self::try_new(flash_range).expect("Map config must be correct")
     }
 
+    /// Create a new map configuration. Will return None if the data is invalid
     pub const fn try_new(flash_range: Range<u32>) -> Option<Self> {
         if !flash_range.start.is_multiple_of(S::ERASE_SIZE as u32) {
             return None;
@@ -147,6 +54,103 @@ impl<S: NorFlash> MapConfig<S> {
 }
 
 impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
+    /// Create a new map instance
+    ///
+    /// When a key-value is stored, it overwrites the any old items with the same key.
+    ///
+    /// ## Basic API:
+    ///
+    /// ```rust
+    /// # use sequential_storage::cache::NoCache;
+    /// # use sequential_storage::{Storage, Map, map::MapConfig};
+    /// # use mock_flash::MockFlashBase;
+    /// # use futures::executor::block_on;
+    /// # type Flash = MockFlashBase<10, 1, 4096>;
+    /// # mod mock_flash {
+    /// #   include!("mock_flash.rs");
+    /// # }
+    /// # fn init_flash() -> Flash {
+    /// #     Flash::new(mock_flash::WriteCountCheck::Twice, None, false)
+    /// # }
+    ///
+    /// # block_on(async {
+    /// // Initialize the flash. This can be internal or external
+    /// let mut flash = init_flash();
+    ///
+    /// // Create the storage instance
+    ///
+    /// // We provide the flash addresses in which it will operate.
+    /// // The storage will not read, write or erase outside of this range.
+    ///
+    /// // We also put the config in a const block so if the config is bad we'll get a compile time error
+    ///
+    /// // With the generics we specify that this is a map with `u8` as the key
+    /// let mut storage = Storage::<Map<u8>, _, _>::new_map(flash, const { MapConfig::new(0x1000..0x3000) }, NoCache::new());
+    ///
+    /// // We need to give the crate a buffer to work with.
+    /// // It must be big enough to serialize the biggest value of your storage type in,
+    /// // rounded up to to word alignment of the flash. Some kinds of internal flash may require
+    /// // this buffer to be aligned in RAM as well.
+    /// let mut data_buffer = [0; 128];
+    ///
+    /// // We can fetch an item from the flash. We're using `u8` as our key type and `u32` as our value type.
+    /// // Nothing is stored in it yet, so it will return None.
+    ///
+    /// assert_eq!(
+    ///     storage.fetch_item::<u32>(
+    ///         &mut data_buffer,
+    ///         &42,
+    ///     ).await.unwrap(),
+    ///     None
+    /// );
+    ///
+    /// // Now we store an item the flash with key 42.
+    /// // Again we make sure we pass the correct key and value types, u8 and u32.
+    /// // It is important to do this consistently.
+    ///
+    /// storage.store_item(
+    ///     &mut data_buffer,
+    ///     &42u8,
+    ///     &104729u32,
+    /// ).await.unwrap();
+    ///
+    /// // When we ask for key 42, we now get back a Some with the correct value
+    ///
+    /// assert_eq!(
+    ///     storage.fetch_item::<u32>(
+    ///         &mut data_buffer,
+    ///         &42,
+    ///     ).await.unwrap(),
+    ///     Some(104729)
+    /// );
+    /// # });
+    /// ```
+    ///
+    /// ## Key and value traits
+    ///
+    /// In the previous example we saw we used one key and one value type.
+    /// It is ***crucial*** we use the same key type every time on the same range of flash.
+    /// This is because the internal items are serialized as `[key|value]`. A different key type
+    /// will have a different length and will make all data nonsense.
+    ///
+    /// However, if we have special knowledge about what we store for each key,
+    /// we are allowed to use different value types.
+    ///
+    /// For example, we can do the following:
+    ///
+    /// 1. Store a u32 with key 0
+    /// 2. Store a custom type 'Foo' with key 1
+    /// 3. Fetch a u32 with key 0
+    /// 4. Fetch a custom type 'Foo' with key 1
+    ///
+    /// It is up to the user to make sure this is done correctly.
+    /// If done incorrectly, the deserialize function of requested value type will see
+    /// data it doesn't expect. In the best case it'll return an error, in a bad case it'll
+    /// give bad invalid data and in the worst case the deserialization code panics.
+    /// It is worth mentioning that `fetch_all_items` also requires that all items have the same type.
+    /// So be careful.
+    ///
+    /// For your convenience there are premade implementations for the [Key] and [Value] traits.
     pub const fn new_map(storage: S, config: MapConfig<S>, cache: C) -> Self {
         Self {
             flash: storage,
@@ -161,15 +165,6 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
     ///
     /// The data buffer must be long enough to hold the longest serialized data of your [Key] + [Value] types combined,
     /// rounded up to flash word alignment.
-    ///
-    /// <div class="warning">
-    ///
-    /// *You are required to, on a given flash range, use the same [Key] type every time. You are allowed to use*
-    /// *multiple [Value] types. See the module-level docs for more information about this.*
-    ///
-    /// Also watch out for using integers. This function will take any integer and it's easy to pass the wrong type.
-    ///
-    /// </div>
     pub async fn fetch_item<'d, V: Value<'d>>(
         &mut self,
         data_buffer: &'d mut [u8],
@@ -356,20 +351,10 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
     }
 
     /// Store a key-value pair into flash memory.
-    /// It will overwrite the last value that has the same key.
-    /// The flash needs to be at least 2 pages long.
+    /// It will (logically) overwrite the last value that has the same key.
     ///
     /// The data buffer must be long enough to hold the longest serialized data of your [Key] + [Value] types combined,
     /// rounded up to flash word alignment.
-    ///
-    /// <div class="warning">
-    ///
-    /// *You are required to, on a given flash range, use the same [Key] type every time. You are allowed to use*
-    /// *multiple [Value] types. See the module-level docs for more information about this.*
-    ///
-    /// Also watch out for using integers. This function will take any integer and it's easy to pass the wrong type.
-    ///
-    /// </div>
     pub async fn store_item<'d, V: Value<'d>>(
         &mut self,
         data_buffer: &mut [u8],
@@ -543,15 +528,6 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
     /// Alternatively, e.g. when you don't have a [MultiwriteNorFlash] flash, you could store your value inside an Option
     /// and store the value `None` to mark it as erased.
     /// </div>
-    ///
-    /// <div class="warning">
-    ///
-    /// *You are required to, on a given flash range, use the same [Key] type every time. You are allowed to use*
-    /// *multiple [Value] types. See the module-level docs for more information about this.*
-    ///
-    /// Also watch out for using integers. This function will take any integer and it's easy to pass the wrong type.
-    ///
-    /// </div>
     pub async fn remove_item(
         &mut self,
         data_buffer: &mut [u8],
@@ -574,14 +550,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
     /// This is better for flash endurance.
     ///
     /// You might want to simply erase the flash range, e.g. if your flash does not implement [MultiwriteNorFlash].
-    /// Consider using the helper method for that: [crate::erase_all].
-    /// </div>
-    ///
-    /// <div class="warning">
-    ///
-    /// *You are required to, on a given flash range, use the same [Key] type every time. You are allowed to use*
-    /// *multiple [Value] types. See the module-level docs for more information about this.*
-    ///
+    /// Consider using the helper method for that: [Self::erase_all].
     /// </div>
     pub async fn remove_all_items(&mut self, data_buffer: &mut [u8]) -> Result<(), Error<S::Error>>
     where
@@ -683,11 +652,11 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
     /// <ul>
     /// <li>
     /// Because map doesn't erase the items when you insert a new one with the same key,
-    /// so it's possible that the iterator returns items with the same key multiple times.
-    /// Generally the last returned one is the `active` one.
+    /// so it's expected that the iterator returns items with the same key multiple times.
+    /// Only the last returned one is the `active` one.
     /// </li>
     /// <li>
-    /// The iterator requires ALL items in the storage have the SAME type.
+    /// The iterator requires ALL items in the storage have the SAME Value type.
     /// If you have different types of items in your map, the iterator might return incorrect data or error.
     /// </li>
     /// </ul>

@@ -458,7 +458,7 @@ impl<T, S: NorFlash, C: CacheImpl> Storage<T, S, C> {
     /// Scans through the items to find the first spot that is free to store a new item.
     ///
     /// - `end_address` is exclusive.
-    pub async fn find_next_free_item_spot(
+    pub(crate) async fn find_next_free_item_spot(
         &mut self,
         start_address: u32,
         end_address: u32,

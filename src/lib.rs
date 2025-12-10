@@ -1,5 +1,5 @@
 #![cfg_attr(not(any(test, doctest, feature = "std")), no_std)]
-// #![deny(missing_docs)]
+#![warn(missing_docs)]
 #![doc = include_str!("../README.md")]
 
 // Assumptions made in this crate:
@@ -38,9 +38,18 @@ pub mod mock_flash;
 /// Many flashes have 4-byte or 1-byte words.
 const MAX_WORD_SIZE: usize = 32;
 
+/// Typestate struct for maps
 pub struct Map<Key>(PhantomData<Key>);
+/// Typestate struct for queues
 pub struct Queue(());
 
+/// The object that manages the flash.
+///
+/// It has a couple of modes in which it can operate:
+/// - map: [Self::new_map]
+/// - queue: [Self::new_queue]
+///
+/// You can [Self::destroy] this type to get back the flash and the cache.
 pub struct Storage<T, S: NorFlash, C: CacheImpl> {
     flash: S,
     flash_range: Range<u32>,
@@ -344,14 +353,19 @@ impl<T, S: NorFlash, C: CacheImpl> Storage<T, S, C> {
         s
     }
 
+    /// Destroy the instance to get back the flash and the cache.
+    ///
+    /// The cache can be passed to a new storage instance, but only for the same flash region and if nothing has changed in flash.
     pub fn destroy(self) -> (S, C) {
         (self.flash, self.cache)
     }
 
+    /// Get a reference to the flash. Mutating the memory is at your own risk.
     pub const fn flash(&mut self) -> &mut S {
         &mut self.flash
     }
 
+    /// Get the flash range being used
     pub const fn flash_range(&self) -> &Range<u32> {
         &self.flash_range
     }
