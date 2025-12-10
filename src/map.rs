@@ -786,7 +786,6 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
         );
         while let Some((item, item_address)) = it.next(&mut self.flash, data_buffer).await? {
             let (key, _) = K::deserialize_from(item.data())?;
-            let (_, data_buffer) = item.destruct();
 
             // We're in a decent state here
             self.cache.unmark_dirty();
@@ -802,7 +801,12 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
                 });
             };
 
-            let found_item = found_item.reborrow(data_buffer);
+            let found_item = found_item
+                .reborrow(data_buffer)
+                .ok_or_else(|| Error::LogicBug {
+                    #[cfg(feature = "_test")]
+                    backtrace: std::backtrace::Backtrace::capture(),
+                })?;
 
             if found_address == item_address {
                 self.cache

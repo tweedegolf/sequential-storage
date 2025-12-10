@@ -377,17 +377,13 @@ impl<T, S: NorFlash, C: CacheImpl> Storage<T, S, C> {
 /// Round up the the given number to align with the wordsize of the flash.
 /// If the number is already aligned, it is not changed.
 const fn round_up_to_alignment<S: NorFlash>(value: u32) -> u32 {
-    let alignment = S::WORD_SIZE as u32;
-    match value % alignment {
-        0 => value,
-        r => value + (alignment - r),
-    }
+    value.next_multiple_of(S::WORD_SIZE as u32)
 }
 
 /// Round up the the given number to align with the wordsize of the flash.
 /// If the number is already aligned, it is not changed.
 const fn round_up_to_alignment_usize<S: NorFlash>(value: usize) -> usize {
-    round_up_to_alignment::<S>(value as u32) as usize
+    value.next_multiple_of(S::WORD_SIZE)
 }
 
 /// Round down the the given number to align with the wordsize of the flash.
@@ -491,6 +487,7 @@ pub enum Error<S> {
         backtrace: std::backtrace::Backtrace,
     },
     /// There's a bug in the logic of the crate. Please report!
+    /// This would otherwise have been a panic
     LogicBug {
         #[cfg(feature = "_test")]
         /// Backtrace made at the construction of the error

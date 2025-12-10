@@ -594,18 +594,23 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
             repair = self.storage.try_repair().await?
         );
 
-        value.map(|v| {
-            v.map(|(item, address)| QueueIteratorEntry {
+        match value {
+            Ok(Some((item, address))) => Ok(Some(QueueIteratorEntry {
                 iter: self,
-                item: item.reborrow(data_buffer),
+                item: item.reborrow(data_buffer).ok_or_else(|| Error::LogicBug {
+                    #[cfg(feature = "_test")]
+                    backtrace: std::backtrace::Backtrace::capture(),
+                })?,
                 address,
-            })
-        })
+            })),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
-    async fn next_inner(
+    async fn next_inner<'d>(
         &mut self,
-        data_buffer: &mut [u8],
+        data_buffer: &'d mut [u8],
     ) -> Result<Option<(ItemUnborrowed, u32)>, Error<S::Error>> {
         if self.storage.cache.is_dirty() {
             self.storage.cache.invalidate_cache_state();
@@ -730,8 +735,7 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'_, 'd, '_, S, CI> {
     /// Get a mutable reference to the data of this entry, but consume the entry too.
     /// This function has some relaxed lifetime constraints compared to the deref impls.
     pub fn into_buf(self) -> &'d mut [u8] {
-        let (header, data) = self.item.destruct();
-        &mut data[..header.length as usize]
+        self.item.data_owned()
     }
 
     /// Pop the data in flash that corresponds to this entry. This makes it so
@@ -740,8 +744,7 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'_, 'd, '_, S, CI> {
     where
         S: MultiwriteNorFlash,
     {
-        let (header, data_buffer) = self.item.destruct();
-        let ret = &mut data_buffer[..header.length as usize];
+        let (header, item_data_buffer) = self.item.header_and_data_owned();
 
         // We're popping ourself, so if all previous but us were popped, then now all are popped again
         if self.iter.previous_item_states == PreviousItemStates::AllButCurrentPopped {
@@ -758,7 +761,7 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'_, 'd, '_, S, CI> {
             .await?;
 
         self.iter.storage.cache.unmark_dirty();
-        Ok(ret)
+        Ok(item_data_buffer)
     }
 
     /// Get the flash address of the item
