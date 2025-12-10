@@ -4,7 +4,12 @@ extern crate libfuzzer_sys;
 
 use futures::executor::block_on;
 use libfuzzer_sys::fuzz_target;
-use sequential_storage::mock_flash::{MockFlashBase, WriteCountCheck};
+use sequential_storage::{
+    cache::NoCache,
+    mock_flash::{MockFlashBase, WriteCountCheck},
+    queue::QueueConfig,
+    Storage,
+};
 
 fuzz_target!(|data: &[u8]| fuzz(data));
 
@@ -19,5 +24,10 @@ fn fuzz(random_data: &[u8]) {
     let len = random_data.len().min(flash.as_bytes().len());
     flash.as_bytes_mut()[..len].copy_from_slice(&random_data[..len]);
 
-    block_on(flash.print_items());
+    let mut storage = Storage::new_queue(
+        flash,
+        const { QueueConfig::new(0..(PAGES * WORD_SIZE * WORDS_PER_PAGE) as u32) },
+        NoCache::new(),
+    );
+    block_on(storage.print_items());
 }
