@@ -138,7 +138,7 @@ pub struct MapStorage<K: Key, S: NorFlash, C: KeyCacheImpl<K>> {
 
 impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
     /// Create a new map instance
-    /// 
+    ///
     /// The provided cache instance must be new or must be in the exact correct state for the current flash contents.
     /// If the cache is bad, undesirable things will happen.
     /// So, it's ok to reuse the cache gotten from the [`Self::destroy`] method when the flash hasn't changed since calling destroy.
@@ -912,7 +912,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
 
     #[cfg(any(test, feature = "std"))]
     /// Print all items in flash to the returned string
-    /// 
+    ///
     /// This is meant as a debugging utility. The string format is not stable.
     pub fn print_items(&mut self) -> impl Future<Output = String> {
         self.inner.print_items()

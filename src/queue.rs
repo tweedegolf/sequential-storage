@@ -583,7 +583,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
 
     #[cfg(any(test, feature = "std"))]
     /// Print all items in flash to the returned string
-    /// 
+    ///
     /// This is meant as a debugging utility. The string format is not stable.
     pub fn print_items(&mut self) -> impl Future<Output = String> {
         self.inner.print_items()
