@@ -206,10 +206,13 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
                         .await?
                 else {
                     // The cache points to a non-existing item?
-                    assert!(
-                        !cfg!(feature = "_test"),
-                        "Wrong cache value. Addr: {cached_location}"
-                    );
+                    #[expect(clippy::assertions_on_constants, reason = "Clippy is wrong here")]
+                    {
+                        assert!(
+                            !cfg!(feature = "_test"),
+                            "Wrong cache value. Addr: {cached_location}"
+                        );
+                    }
                     self.cache.invalidate_cache_state();
                     break 'cache;
                 };
@@ -225,10 +228,13 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
 
                 match item {
                     item::MaybeItem::Corrupted(_, _) | item::MaybeItem::Erased(_, _) => {
-                        assert!(
-                            !cfg!(feature = "_test"),
-                            "Wrong cache value. Addr: {cached_location}"
-                        );
+                        #[expect(clippy::assertions_on_constants, reason = "Clippy is wrong here")]
+                        {
+                            assert!(
+                                !cfg!(feature = "_test"),
+                                "Wrong cache value. Addr: {cached_location}"
+                            );
+                        }
 
                         // The cache points to a corrupted or erased item?
                         self.cache.invalidate_cache_state();
