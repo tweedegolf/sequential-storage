@@ -58,12 +58,12 @@ pub(crate) trait PrivateCacheImpl: Invalidate {
 
     /// Mark the cache as potentially inconsistent with reality
     fn mark_dirty(&mut self) {
-        self.dirt_tracker(|d| d.mark_dirty());
+        self.dirt_tracker(DirtTracker::mark_dirty);
     }
 
     /// Mark the cache as being consistent with reality
     fn unmark_dirty(&mut self) {
-        self.dirt_tracker(|d| d.unmark_dirty());
+        self.dirt_tracker(DirtTracker::mark_dirty);
     }
 
     /// Get the cache state of the requested page
@@ -105,7 +105,7 @@ pub(crate) trait PrivateCacheImpl: Invalidate {
     ) {
         self.mark_dirty();
         self.page_pointers()
-            .notice_item_written::<S>(flash_range, item_address, item_header)
+            .notice_item_written::<S>(flash_range, item_address, item_header);
     }
 
     /// Let the cache know that an item has been erased from flash
@@ -117,7 +117,7 @@ pub(crate) trait PrivateCacheImpl: Invalidate {
     ) {
         self.mark_dirty();
         self.page_pointers()
-            .notice_item_erased::<S>(flash_range, item_address, item_header)
+            .notice_item_erased::<S>(flash_range, item_address, item_header);
     }
 }
 
@@ -136,12 +136,12 @@ pub(crate) trait PrivateKeyCacheImpl<KEY: Key>: PrivateCacheImpl {
         if dirty {
             self.mark_dirty();
         }
-        self.key_pointers().notice_key_location(key, item_address)
+        self.key_pointers().notice_key_location(key, item_address);
     }
     #[allow(unused)]
     fn notice_key_erased(&mut self, key: &KEY) {
         self.mark_dirty();
-        self.key_pointers().notice_key_erased(key)
+        self.key_pointers().notice_key_erased(key);
     }
 }
 

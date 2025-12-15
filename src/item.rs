@@ -12,12 +12,12 @@
 //! 0      1      2      3      4      5      6      7      8                 8+padding                     8+padding+length  8+padding+length+endpadding
 //! ```
 //!
-//! An item consists of an [ItemHeader] and some data.
-//! The header has a length field that encodes the length of the data, a [crc16] of the length (`Length'`)
+//! An item consists of an [`ItemHeader`] and some data.
+//! The header has a length field that encodes the length of the data, a [`crc16`] of the length (`Length'`)
 //! and a crc field that encodes the checksum of the data.
 //!
 //! If the crc is 0, then the item is counted as being erased.
-//! The crc is calculated by [adapted_crc32] which never produces a 0 value on its own
+//! The crc is calculated by [`adapted_crc32`] which never produces a 0 value on its own
 //! and has some other modifications to make corruption less likely to happen.
 //!
 
@@ -88,10 +88,10 @@ impl ItemHeader {
                         #[cfg(feature = "_test")]
                         backtrace: std::backtrace::Backtrace::capture(),
                     });
-                } else {
-                    retry = true;
-                    continue;
                 }
+
+                retry = true;
+                continue;
             }
 
             break;
@@ -414,7 +414,7 @@ impl<'d> MaybeItem<'d> {
 /// A crc that never returns 0xFFFF
 fn crc16(data: &[u8]) -> u16 {
     let mut crc = 0xffff;
-    for byte in data.iter() {
+    for byte in data {
         crc ^= *byte as u16;
         for _ in 0..8 {
             if crc & 1 == 1 {
@@ -449,11 +449,11 @@ fn adapted_crc32(data: &[u8]) -> NonZeroU32 {
 fn crc32(data: &[u8]) -> u32 {
     // We use a modified initial value because the normal 0xFFFFFFF does not pass
     // the `crc32_all_ones_resistant` test
-    crc32_with_initial(data, 0xEEEEEEEE)
+    crc32_with_initial(data, 0xEEEE_EEEE)
 }
 
 fn crc32_with_initial(data: &[u8], initial: u32) -> u32 {
-    const POLY: u32 = 0x82f63b78; // Castagnoli
+    const POLY: u32 = 0x82f6_3b78; // Castagnoli
 
     let mut crc = initial;
 

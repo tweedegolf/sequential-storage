@@ -1,4 +1,5 @@
-//! Implementation of the map logic
+//! Implementation of the map logic.
+//! To use maps, see [`Storage::new_map`].
 
 use core::{marker::PhantomData, mem::size_of};
 
@@ -22,7 +23,7 @@ pub struct MapConfig<S> {
 
 impl<S: NorFlash> MapConfig<S> {
     /// Create a new map configuration. Will panic if the data is invalid.
-    /// If you want a fallible version, use [Self::try_new].
+    /// If you want a fallible version, use [`Self::try_new`].
     pub const fn new(flash_range: Range<u32>) -> Self {
         Self::try_new(flash_range).expect("Map config must be correct")
     }
@@ -59,7 +60,11 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
     ///
     /// When a key-value is stored, it overwrites the any old items with the same key.
     ///
-    /// ## Basic API:
+    /// The provided cache instance must be new or must be in the exact correct state for the current flash contents.
+    /// If the cache is bad, undesirable things will happen.
+    /// So, it's ok to reuse the cache gotten from the [`Self::destroy`] method when the flash hasn't changed since calling destroy.
+    ///
+    /// ## Basic API
     ///
     /// ```rust
     /// # use sequential_storage::cache::NoCache;
@@ -127,30 +132,6 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
     /// # });
     /// ```
     ///
-    /// ## Key and value traits
-    ///
-    /// In the previous example we saw we used one key and one value type.
-    /// It is ***crucial*** we use the same key type every time on the same range of flash.
-    /// This is because the internal items are serialized as `[key|value]`. A different key type
-    /// will have a different length and will make all data nonsense.
-    ///
-    /// However, if we have special knowledge about what we store for each key,
-    /// we are allowed to use different value types.
-    ///
-    /// For example, we can do the following:
-    ///
-    /// 1. Store a u32 with key 0
-    /// 2. Store a custom type 'Foo' with key 1
-    /// 3. Fetch a u32 with key 0
-    /// 4. Fetch a custom type 'Foo' with key 1
-    ///
-    /// It is up to the user to make sure this is done correctly.
-    /// If done incorrectly, the deserialize function of requested value type will see
-    /// data it doesn't expect. In the best case it'll return an error, in a bad case it'll
-    /// give bad invalid data and in the worst case the deserialization code panics.
-    /// It is worth mentioning that `fetch_all_items` also requires that all items have the same type.
-    /// So be careful.
-    ///
     /// For your convenience there are premade implementations for the [Key] and [Value] traits.
     pub const fn new_map(storage: S, config: MapConfig<S>, cache: C) -> Self {
         Self {
@@ -163,6 +144,9 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
 
     /// Get the last stored value from the flash that is associated with the given key.
     /// If no value with the key is found, None is returned.
+    ///
+    /// You must make sure the used type as [Value] is correct for the key used.
+    /// If not, there can be wrong values or deserialization errors.
     ///
     /// The data buffer must be long enough to hold the longest serialized data of your [Key] + [Value] types combined,
     /// rounded up to flash word alignment.
@@ -438,27 +422,24 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
                     )
                     .await?;
 
-                match free_spot_address {
-                    Some(free_spot_address) => {
-                        self.cache.notice_key_location(key, free_spot_address, true);
-                        Item::write_new(
-                            &mut self.flash,
-                            self.flash_range.clone(),
-                            &mut self.cache,
-                            free_spot_address,
-                            &data_buffer[..item_data_length],
-                        )
-                        .await?;
+                if let Some(free_spot_address) = free_spot_address {
+                    self.cache.notice_key_location(key, free_spot_address, true);
+                    Item::write_new(
+                        &mut self.flash,
+                        self.flash_range.clone(),
+                        &mut self.cache,
+                        free_spot_address,
+                        &data_buffer[..item_data_length],
+                    )
+                    .await?;
 
-                        self.cache.unmark_dirty();
-                        return Ok(());
-                    }
-                    None => {
-                        // The item doesn't fit here, so we need to close this page and move to the next
-                        self.close_page(partial_open_page).await?;
-                        Some(self.next_page(partial_open_page))
-                    }
+                    self.cache.unmark_dirty();
+                    return Ok(());
                 }
+
+                // The item doesn't fit here, so we need to close this page and move to the next
+                self.close_page(partial_open_page).await?;
+                Some(self.next_page(partial_open_page))
             } else {
                 None
             };
@@ -468,48 +449,42 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
             // The new buffer page has to be emptied if it was closed.
             // If there was no partial page, we just use the first open page.
 
-            match next_page_to_use {
-                Some(next_page_to_use) => {
-                    let next_page_state = self.get_page_state(next_page_to_use).await?;
+            if let Some(next_page_to_use) = next_page_to_use {
+                let next_page_state = self.get_page_state(next_page_to_use).await?;
 
-                    if !next_page_state.is_open() {
-                        // What was the previous buffer page was not open...
-                        return Err(Error::Corrupted {
-                            #[cfg(feature = "_test")]
-                            backtrace: std::backtrace::Backtrace::capture(),
-                        });
-                    }
-
-                    // Since we're gonna write data here, let's already partially close the page
-                    // This could be done after moving the data, but this is more robust in the
-                    // face of shutdowns and cancellations
-                    self.partial_close_page(next_page_to_use).await?;
-
-                    let next_buffer_page = self.next_page(next_page_to_use);
-                    let next_buffer_page_state = self.get_page_state(next_buffer_page).await?;
-
-                    if !next_buffer_page_state.is_open() {
-                        self.migrate_items(data_buffer, next_buffer_page, next_page_to_use)
-                            .await?;
-                    }
+                if !next_page_state.is_open() {
+                    // What was the previous buffer page was not open...
+                    return Err(Error::Corrupted {
+                        #[cfg(feature = "_test")]
+                        backtrace: std::backtrace::Backtrace::capture(),
+                    });
                 }
-                None => {
-                    // There's no partial open page, so we just gotta turn the first open page into a partial open one
-                    let first_open_page = match self.find_first_page(0, PageState::Open).await? {
-                        Some(first_open_page) => first_open_page,
-                        None => {
-                            // Uh oh, no open pages.
-                            // Something has gone wrong.
-                            // We should never get here.
-                            return Err(Error::Corrupted {
-                                #[cfg(feature = "_test")]
-                                backtrace: std::backtrace::Backtrace::capture(),
-                            });
-                        }
-                    };
 
-                    self.partial_close_page(first_open_page).await?;
+                // Since we're gonna write data here, let's already partially close the page
+                // This could be done after moving the data, but this is more robust in the
+                // face of shutdowns and cancellations
+                self.partial_close_page(next_page_to_use).await?;
+
+                let next_buffer_page = self.next_page(next_page_to_use);
+                let next_buffer_page_state = self.get_page_state(next_buffer_page).await?;
+
+                if !next_buffer_page_state.is_open() {
+                    self.migrate_items(data_buffer, next_buffer_page, next_page_to_use)
+                        .await?;
                 }
+            } else {
+                // There's no partial open page, so we just gotta turn the first open page into a partial open one
+                let Some(first_open_page) = self.find_first_page(0, PageState::Open).await? else {
+                    // Uh oh, no open pages.
+                    // Something has gone wrong.
+                    // We should never get here.
+                    return Err(Error::Corrupted {
+                        #[cfg(feature = "_test")]
+                        backtrace: std::backtrace::Backtrace::capture(),
+                    });
+                };
+
+                self.partial_close_page(first_open_page).await?;
             }
 
             // If we get here, we just freshly partially closed a new page, so the next loop iteration should succeed.
@@ -526,7 +501,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
     /// All items in flash have to be read and deserialized to find the items with the key.
     /// This is unlikely to be cached well.
     ///
-    /// Alternatively, e.g. when you don't have a [MultiwriteNorFlash] flash, you could store your value inside an Option
+    /// Alternatively, e.g. when you don't have a [`MultiwriteNorFlash`] flash, you could store your value inside an Option
     /// and store the value `None` to mark it as erased.
     /// </div>
     pub async fn remove_item(
@@ -550,8 +525,8 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
     /// This might be really slow! This doesn't simply erase flash, but goes through all items and marks them as deleted.
     /// This is better for flash endurance.
     ///
-    /// You might want to simply erase the flash range, e.g. if your flash does not implement [MultiwriteNorFlash].
-    /// Consider using the helper method for that: [Self::erase_all].
+    /// You might want to simply erase the flash range, e.g. if your flash does not implement [`MultiwriteNorFlash`].
+    /// Consider using the helper method for that: [`Self::erase_all`].
     /// </div>
     pub async fn remove_all_items(&mut self, data_buffer: &mut [u8]) -> Result<(), Error<S::Error>>
     where
@@ -616,8 +591,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
                     .await?;
 
                 match item {
-                    item::MaybeItem::Corrupted(_, _) => continue,
-                    item::MaybeItem::Erased(_, _) => continue,
+                    item::MaybeItem::Corrupted(_, _) | item::MaybeItem::Erased(_, _) => continue,
                     item::MaybeItem::Present(item) => {
                         let item_match = match search_key {
                             Some(search_key) => K::deserialize_from(item.data())?.0 == *search_key,
@@ -834,10 +808,10 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
     /// Care is taken that no data is lost, but this depends on correctly repairing the state and
     /// so is only best effort.
     ///
-    /// This function might be called after a different function returned the [Error::Corrupted] error.
+    /// This function might be called after a different function returned the [`Error::Corrupted`] error.
     /// There's no guarantee it will work.
     ///
-    /// If this function or the function call after this crate returns [Error::Corrupted], then it's unlikely
+    /// If this function or the function call after this crate returns [`Error::Corrupted`], then it's unlikely
     /// that the state can be recovered. To at least make everything function again at the cost of losing the data,
     /// erase the flash range.
     async fn try_repair(&mut self, data_buffer: &mut [u8]) -> Result<(), Error<S::Error>> {
@@ -950,7 +924,7 @@ impl<K: Key, S: NorFlash, C: CacheImpl> MapItemIter<'_, K, S, C> {
                 }
 
                 match self.storage.get_page_state(self.current_page_index).await {
-                    Ok(PageState::Closed) | Ok(PageState::PartialOpen) => {
+                    Ok(PageState::Closed | PageState::PartialOpen) => {
                         self.current_iter = ItemIter::new(
                             calculate_page_address::<S>(
                                 self.storage.flash_range.clone(),
@@ -993,7 +967,7 @@ pub trait Key: Eq + Clone + Sized {
     /// The key is returned together with the serialized length.
     fn deserialize_from(buffer: &[u8]) -> Result<(Self, usize), SerializationError>;
     /// Get the length of the key from the buffer.
-    /// This is an optimized version of [Self::deserialize_from] that doesn't have to deserialize everything.
+    /// This is an optimized version of [`Self::deserialize_from`] that doesn't have to deserialize everything.
     fn get_len(buffer: &[u8]) -> Result<usize, SerializationError> {
         Self::deserialize_from(buffer).map(|(_, len)| len)
     }

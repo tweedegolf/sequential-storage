@@ -85,7 +85,7 @@ impl PagePointersCache for CachedPagePointers<'_> {
             .get(page_index)
             .copied()
             .flatten()
-            .map(|val| val.get())
+            .map(NonZeroU32::get)
     }
 
     fn first_item_after_written(&self, page_index: usize) -> Option<u32> {
@@ -93,7 +93,7 @@ impl PagePointersCache for CachedPagePointers<'_> {
             .get(page_index)
             .copied()
             .flatten()
-            .map(|val| val.get())
+            .map(NonZeroU32::get)
     }
 
     fn notice_item_written<S: NorFlash>(
@@ -134,7 +134,7 @@ impl PagePointersCache for CachedPagePointers<'_> {
         if item_address == next_unerased_item {
             if let Some(after_erased_pointer) = self.after_erased_pointers.get_mut(page_index) {
                 *after_erased_pointer =
-                    NonZeroU32::new(item_header.next_item_address::<S>(item_address))
+                    NonZeroU32::new(item_header.next_item_address::<S>(item_address));
             }
         }
     }
@@ -143,10 +143,10 @@ impl PagePointersCache for CachedPagePointers<'_> {
         if new_state.is_open() {
             // This page was erased
             if let Some(after_erased_pointer) = self.after_erased_pointers.get_mut(page_index) {
-                *after_erased_pointer = None
+                *after_erased_pointer = None;
             }
             if let Some(after_written_pointer) = self.after_written_pointers.get_mut(page_index) {
-                *after_written_pointer = None
+                *after_written_pointer = None;
             }
         }
     }

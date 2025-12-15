@@ -1,4 +1,5 @@
-//! Implementation of the map logic
+//! Implementation of the queue logic.
+//! To use queues, see [`Storage::new_queue`].
 
 use crate::item::{Item, ItemHeader, ItemHeaderIter};
 
@@ -15,7 +16,7 @@ pub struct QueueConfig<S> {
 
 impl<S: NorFlash> QueueConfig<S> {
     /// Create a new queue configuration. Will panic if the data is invalid.
-    /// If you want a fallible version, use [Self::try_new].
+    /// If you want a fallible version, use [`Self::try_new`].
     pub const fn new(flash_range: Range<u32>) -> Self {
         Self::try_new(flash_range).expect("Queue config must be correct")
     }
@@ -50,7 +51,13 @@ impl<S: NorFlash> QueueConfig<S> {
 impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
     /// Create a new (fifo) queue instance
     ///
-    /// Use [Self::push] to add data to the fifo and use [Self::peek] and [Self::pop] to get the data back.
+    /// Use [`Self::push`] to add data to the fifo and use [`Self::peek`] and [`Self::pop`] to get the data back.
+    ///
+    /// The provided cache instance must be new or must be in the exact correct state for the current flash contents.
+    /// If the cache is bad, undesirable things will happen.
+    /// So, it's ok to reuse the cache gotten from the [`Self::destroy`] method when the flash hasn't changed since calling destroy.
+    ///
+    /// ## Basic API
     ///
     /// ```rust
     /// # use sequential_storage::cache::NoCache;
@@ -114,7 +121,7 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
     }
 
     /// Push data into the queue.
-    /// The data can only be taken out with the [Self::pop] function.
+    /// The data can only be taken out with the [`Self::pop`] function.
     ///
     /// Old data will not be overwritten unless `allow_overwrite_old_data` is true.
     /// If it is, then if the queue is full, the oldest data is removed to make space for the new data.
@@ -233,7 +240,7 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
     /// This goes from oldest to newest.
     ///
     /// The iteration happens non-destructively, or in other words it peeks at every item.
-    /// The returned entry has a [QueueIteratorEntry::pop] function with which you can decide to pop the item
+    /// The returned entry has a [`QueueIteratorEntry::pop`] function with which you can decide to pop the item
     /// after you've seen the contents.
     pub async fn iter(&mut self) -> Result<QueueIterator<'_, S, C>, Error<S::Error>> {
         // Note: Corruption repair is done in these functions already
@@ -242,7 +249,7 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
 
     /// Peek at the oldest data.
     ///
-    /// If you also want to remove the data use [Self::pop].
+    /// If you also want to remove the data use [`Self::pop`].
     ///
     /// The data is written to the given `data_buffer` and the part that was written is returned.
     /// It is valid to only use the length of the returned slice and use the original `data_buffer`.
@@ -267,7 +274,7 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
 
     /// Pop the oldest data from the queue.
     ///
-    /// If you don't want to remove the data use [Self::peek].
+    /// If you don't want to remove the data use [`Self::peek`].
     ///
     /// The data is written to the given `data_buffer` and the part that was written is returned.
     /// It is valid to only use the length of the returned slice and use the original `data_buffer`.
@@ -366,7 +373,7 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
     /// Calculate how much space is left free in the queue (in bytes).
     ///
     /// The number given back is accurate, however there are lots of things that add overhead and padding.
-    /// Every push is an item with its own overhead. You can check the overhead per item with [Self::item_overhead_size].
+    /// Every push is an item with its own overhead. You can check the overhead per item with [`Self::item_overhead_size`].
     ///
     /// Furthermore, every item has to fully fit in a page. So if a page has 50 bytes left and you push an item of 60 bytes,
     /// the current page is closed and the item is stored on the next page, 'wasting' the 50 you had.
@@ -490,10 +497,10 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
     /// Care is taken that no data is lost, but this depends on correctly repairing the state and
     /// so is only best effort.
     ///
-    /// This function might be called after a different function returned the [Error::Corrupted] error.
+    /// This function might be called after a different function returned the [`Error::Corrupted`] error.
     /// There's no guarantee it will work.
     ///
-    /// If this function or the function call after this crate returns [Error::Corrupted], then it's unlikely
+    /// If this function or the function call after this crate returns [`Error::Corrupted`], then it's unlikely
     /// that the state can be recovered. To at least make everything function again at the cost of losing the data,
     /// erase the flash range.
     async fn try_repair(&mut self) -> Result<(), Error<S::Error>> {

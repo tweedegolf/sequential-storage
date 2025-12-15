@@ -9,10 +9,40 @@ There are two datastructures:
 - Map: A key-value pair store
 - Queue: A fifo store
 
-Each live in their own module. See the module documentation for more info and examples.
+Each are implemented on the `Storage` struct. See the [documentation](https://docs.rs/sequential-storage) for examples and API docs.
 
-***Note:** Make sure not to mix the datastructures in flash!*  
-You can't e.g. fetch a key-value item from a flash region where you pushed to the queue.
+Map example:
+
+```rust ignore
+let mut flash = init_flash();
+
+let mut storage = Storage::<Map<u8>, _, _>::new_map(
+   flash,
+   const { MapConfig::new(0x1000..0x3000) }, // Range this instance operates in
+   NoCache::new()
+);
+let mut data_buffer = [0; 128];
+
+storage
+    .store_item(
+        &mut data_buffer,  // Buffer for serialization/deserialization
+        &42u8,             // Key
+        &104729u32,        // Value
+    )
+    .await
+    .unwrap();
+
+assert_eq!(
+    storage
+        .fetch_item::<u32>(
+            &mut data_buffer, // Buffer for serialization/deserialization
+            &42,              // Key
+        )
+        .await
+        .unwrap(),
+    Some(104729)              // Would be None if nothing was found
+);
+```
 
 To search for data, the crate first searches for the flash page that is likeliest to contain it and
 then performs a linear scan over the data, skipping data blocks where it can.
@@ -58,7 +88,7 @@ See the `map` and `queue` module level documentation for examples.
   - Store byte slices in memory
   - Great for caching data
 - Simple APIs:
-  - Just call the function you think you need
+  - Initialize the storage struct and use its functions
   - No need to worry about anything else
 - Item header CRC protected
 - Item data CRC protected
@@ -96,23 +126,23 @@ These numbers are taken from the test cases in the cache module:
 
 |             Name |                                    RAM bytes | Map # flash reads | Map flash bytes read | Queue # flash reads | Queue flash bytes read |
 | ---------------: | -------------------------------------------: | ----------------: | -------------------: | ------------------: | ---------------------: |
-|          NoCache |                                            0 |              100% |                 100% |                100% |                   100% |
-|   PageStateCache |                                1 * num pages |               77% |                  97% |                 41% |                    85% |
-| PagePointerCache |                                9 * num pages |               70% |                  89% |                  6% |                    14% |
-|  KeyPointerCache | 9 * num pages + (sizeof(KEY) + 4) * num keys |              6.2% |                 8.2% |                   - |                      - |
+|          `NoCache` |                                            0 |              100% |                 100% |                100% |                   100% |
+|   `PageStateCache` |                                1 * num pages |               77% |                  97% |                 41% |                    85% |
+| `PagePointerCache` |                                9 * num pages |               70% |                  89% |                  6% |                    14% |
+|  `KeyPointerCache` | 9 * num pages + (sizeof(KEY) + 4) * num keys |              6.2% |                 8.2% |                   - |                      - |
 
 #### Takeaways
 
-- PageStateCache
+- `PageStateCache`
   - Mostly tackles number of reads
   - Very cheap in RAM, so easy win
-- PagePointerCache
+- `PagePointerCache`
   - Very efficient for the queue
   - Minimum cache level that makes a dent in the map
-- KeyPointerCache
+- `KeyPointerCache`
   - Awesome savings!
   - Numbers are less good if there are more keys than the cache can store
-  - Same as PagePointerCache when used for queue
+  - Same as `PagePointerCache` when used for queue
 
 ## Inner workings
 
@@ -167,4 +197,4 @@ You should only lose data when you give permission.
 Peeking and popping look at the oldest data it can find.
 When popping, the item is also erased.
 
-When using peek_many, you can look at all data from oldest to newest.
+When using `peek_many`, you can look at all data from oldest to newest.

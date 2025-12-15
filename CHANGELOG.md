@@ -4,9 +4,28 @@
 
 ## Unreleased
 
+- *Breaking:* Changed the API to revolve around a new `Storage` struct. Instead of having to call a bunch of free-standing
+  functions and passing all parameters in every time, you can now create a new storage using `Storage::new_map` or `Storage::new_queue`.
+  Then you can call the old functions on the storage instance, like: `storage.store_item(...)`.  
+  People tended to create this sort of API already as wrapper over sequential-storage.  
+  This API change has been done to:
+  - Save some binary size
+  - Make the API easier to use
+  - Save on amount of possible panic paths
+  - Make new features easier to implement in the future
+  
+  This change also means that the flash is owned now. If you were sharing the flash before, you'll have to find a way to change it.  
+  Some suggestions:
+  - Use some partition crate to split the flash: [embassy-embedded-hal](https://docs.embassy.dev/embassy-embedded-hal/0.5.0/default/flash/partition/struct.Partition.html) (or [partition-manager](https://github.com/OpenDevicePartnership/embedded-services/tree/555e20a1b13eaa3e12cbbe2e689db4fc86cc0392/partition-manager/partition-manager))
+  - Pass `&mut flash` as the owned flash. The embedded-storage traits sometimes impl the traits for references to the type
+  - Use `storage.destroy()` to get back the flash
+
+- Removed a bunch of possible panics by doing some refactors
 - Optimized cache a little bit which saves ~200 bytes binary size in example
 - Add heap-backed cache types when the `alloc` feature is active.
   This gets rid of some (const) generics and allows you to create a cache with dynamic length.
+
+This release is 'disk'-compatible with 6.0
 
 ## 6.0.1 - 14-11-25
 

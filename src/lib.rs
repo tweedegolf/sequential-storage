@@ -1,11 +1,7 @@
 #![cfg_attr(not(any(test, doctest, feature = "std")), no_std)]
 #![warn(missing_docs)]
 #![doc = include_str!("../README.md")]
-
-// Assumptions made in this crate:
-//
-// - flash erase size is quite big, aka, this is a paged flash
-// - flash write size is quite small, so it writes words and not full pages
+#![allow(clippy::cast_possible_truncation)]
 
 use core::num::NonZeroUsize;
 use core::{
@@ -47,10 +43,10 @@ pub struct Queue(());
 /// The object that manages the flash.
 ///
 /// It has a couple of modes in which it can operate:
-/// - map: [Self::new_map]
-/// - queue: [Self::new_queue]
+/// - map: [`Self::new_map`]
+/// - queue: [`Self::new_queue`]
 ///
-/// You can [Self::destroy] this type to get back the flash and the cache.
+/// You can [`Self::destroy`] this type to get back the flash and the cache.
 pub struct Storage<T, S: NorFlash, C: CacheImpl> {
     flash: S,
     flash_range: Range<u32>,
@@ -101,7 +97,7 @@ impl<T, S: NorFlash, C: CacheImpl> Storage<T, S, C> {
 
     /// Find the first page that is in the given page state.
     ///
-    /// The search starts at starting_page_index (and wraps around back to 0 if required)
+    /// The search starts at `starting_page_index` (and wraps around back to 0 if required)
     async fn find_first_page(
         &mut self,
         starting_page_index: usize,
@@ -273,8 +269,7 @@ impl<T, S: NorFlash, C: CacheImpl> Storage<T, S, C> {
 
         let new_state = match current_state {
             PageState::Closed => PageState::Closed,
-            PageState::PartialOpen => PageState::PartialOpen,
-            PageState::Open => PageState::PartialOpen,
+            PageState::PartialOpen | PageState::Open => PageState::PartialOpen,
         };
 
         self.cache.notice_page_state(page_index, new_state, true);
@@ -443,7 +438,7 @@ impl PageState {
     ///
     /// [`Closed`]: PageState::Closed
     #[must_use]
-    fn is_closed(&self) -> bool {
+    fn is_closed(self) -> bool {
         matches!(self, Self::Closed)
     }
 
@@ -451,7 +446,7 @@ impl PageState {
     ///
     /// [`PartialOpen`]: PageState::PartialOpen
     #[must_use]
-    fn is_partial_open(&self) -> bool {
+    fn is_partial_open(self) -> bool {
         matches!(self, Self::PartialOpen)
     }
 
@@ -459,7 +454,7 @@ impl PageState {
     ///
     /// [`Open`]: PageState::Open
     #[must_use]
-    fn is_open(&self) -> bool {
+    fn is_open(self) -> bool {
         matches!(self, Self::Open)
     }
 }
@@ -500,7 +495,7 @@ pub enum Error<S> {
     /// A serialization error (from the key or value)
     SerializationError(SerializationError),
     /// The item does not fit in flash, ever.
-    /// This is different from [Error::FullStorage] because this item is too big to fit even in empty flash.
+    /// This is different from [`Error::FullStorage`] because this item is too big to fit even in empty flash.
     ///
     /// See the readme for more info about the constraints on item sizes.
     ItemTooBig,
