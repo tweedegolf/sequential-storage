@@ -532,6 +532,7 @@ where
             Error::Corrupted { .. } => write!(f, "Storage is corrupted"),
             #[cfg(feature = "_test")]
             Error::Corrupted { backtrace } => write!(f, "Storage is corrupted\n{backtrace}"),
+            #[cfg(not(feature = "_test"))]
             Error::LogicBug { .. } => write!(f, "Logic bug"),
             #[cfg(feature = "_test")]
             Error::LogicBug { backtrace } => write!(f, "Logic bug\n{backtrace}"),
