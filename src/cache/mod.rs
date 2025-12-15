@@ -63,7 +63,7 @@ pub(crate) trait PrivateCacheImpl: Invalidate {
 
     /// Mark the cache as being consistent with reality
     fn unmark_dirty(&mut self) {
-        self.dirt_tracker(DirtTracker::mark_dirty);
+        self.dirt_tracker(DirtTracker::unmark_dirty);
     }
 
     /// Get the cache state of the requested page
