@@ -9,9 +9,9 @@ use sequential_storage::{
         HeapKeyPointerCache, HeapPagePointerCache, HeapPageStateCache, KeyCacheImpl,
         KeyPointerCache, NoCache, PagePointerCache, PageStateCache,
     },
-    map::MapConfig,
+    map::{MapConfig, MapStorage},
     mock_flash::{MockFlashBase, MockFlashError, WriteCountCheck},
-    Error, Storage,
+    Error,
 };
 use std::{collections::HashMap, fmt::Debug};
 
@@ -89,7 +89,7 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
         true,
     );
 
-    let mut storage = Storage::new_map(flash, const { MapConfig::new(0x000..0x1000) }, cache);
+    let mut storage = MapStorage::new(flash, const { MapConfig::new(0x000..0x1000) }, cache);
 
     let mut map = HashMap::new();
     #[repr(align(4))]

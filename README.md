@@ -11,39 +11,6 @@ There are two datastructures:
 
 Each are implemented on the `Storage` struct. See the [documentation](https://docs.rs/sequential-storage) for examples and API docs.
 
-Map example:
-
-```rust ignore
-let mut flash = init_flash();
-
-let mut storage = Storage::<Map<u8>, _, _>::new_map(
-   flash,
-   const { MapConfig::new(0x1000..0x3000) }, // Range this instance operates in
-   NoCache::new()
-);
-let mut data_buffer = [0; 128];
-
-storage
-    .store_item(
-        &mut data_buffer,  // Buffer for serialization/deserialization
-        &42u8,             // Key
-        &104729u32,        // Value
-    )
-    .await
-    .unwrap();
-
-assert_eq!(
-    storage
-        .fetch_item::<u32>(
-            &mut data_buffer, // Buffer for serialization/deserialization
-            &42,              // Key
-        )
-        .await
-        .unwrap(),
-    Some(104729)              // Would be None if nothing was found
-);
-```
-
 To search for data, the crate first searches for the flash page that is likeliest to contain it and
 then performs a linear scan over the data, skipping data blocks where it can.
 

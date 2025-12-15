@@ -10,8 +10,8 @@ use sequential_storage::{
         PageStateCache,
     },
     mock_flash::{MockFlashBase, MockFlashError, Operation, WriteCountCheck},
-    queue::QueueConfig,
-    Error, Storage,
+    queue::{QueueConfig, QueueStorage},
+    Error,
 };
 use std::{collections::VecDeque, fmt::Debug};
 const MAX_VALUE_SIZE: usize = u8::MAX as usize;
@@ -67,7 +67,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
         Some(ops.fuel as u32),
         true,
     );
-    let mut storage = Storage::new_queue(flash, const { QueueConfig::new(0x000..0x1000) }, cache);
+    let mut storage = QueueStorage::new(flash, const { QueueConfig::new(0x000..0x1000) }, cache);
 
     let mut order = VecDeque::new();
     let mut buf = AlignedBuf([0; MAX_VALUE_SIZE + 1]);

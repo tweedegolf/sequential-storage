@@ -2,8 +2,6 @@
 //! To use maps, see [`Storage::new_map`].
 
 use core::{marker::PhantomData, mem::size_of};
-
-use cache::CacheImpl;
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 
 use crate::item::{Item, ItemHeader, ItemIter};
@@ -14,7 +12,7 @@ use self::{
 };
 
 use super::{
-    Debug, Error, MAX_WORD_SIZE, Map, NorFlash, NorFlashExt, PageState, Range, Storage, cache,
+    Debug, Error, GenericStorage, MAX_WORD_SIZE, NorFlash, NorFlashExt, PageState, Range, cache,
     calculate_page_address, calculate_page_end_address, calculate_page_index, calculate_page_size,
     item, run_with_auto_repair,
 };
@@ -61,89 +59,97 @@ impl<S: NorFlash> MapConfig<S> {
     }
 }
 
-impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
+/// A map-like storage
+///
+/// When a key-value is stored, it overwrites the any old items with the same key.
+///
+/// The provided cache instance must be new or must be in the exact correct state for the current flash contents.
+/// If the cache is bad, undesirable things will happen.
+/// So, it's ok to reuse the cache gotten from the [`Self::destroy`] method when the flash hasn't changed since calling destroy.
+///
+/// ## Basic API
+///
+/// ```rust
+/// # use sequential_storage::cache::NoCache;
+/// # use sequential_storage::map::{MapConfig, MapStorage};
+/// # use mock_flash::MockFlashBase;
+/// # use futures::executor::block_on;
+/// # type Flash = MockFlashBase<10, 1, 4096>;
+/// # mod mock_flash {
+/// #   include!("mock_flash.rs");
+/// # }
+/// # fn init_flash() -> Flash {
+/// #     Flash::new(mock_flash::WriteCountCheck::Twice, None, false)
+/// # }
+///
+/// # block_on(async {
+/// // Initialize the flash. This can be internal or external
+/// let mut flash = init_flash();
+///
+/// // Create the storage instance
+///
+/// // We provide the flash addresses in which it will operate.
+/// // The storage will not read, write or erase outside of this range.
+///
+/// // We also put the config in a const block so if the config is bad we'll get a compile time error
+///
+/// // With the generics we specify that this is a map with `u8` as the key
+/// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000) }, NoCache::new());
+///
+/// // We need to give the crate a buffer to work with.
+/// // It must be big enough to serialize the biggest value of your storage type in,
+/// // rounded up to to word alignment of the flash. Some kinds of internal flash may require
+/// // this buffer to be aligned in RAM as well.
+/// let mut data_buffer = [0; 128];
+///
+/// // We can fetch an item from the flash. We're using `u8` as our key type and `u32` as our value type.
+/// // Nothing is stored in it yet, so it will return None.
+///
+/// assert_eq!(
+///     storage.fetch_item::<u32>(
+///         &mut data_buffer,
+///         &42,
+///     ).await.unwrap(),
+///     None
+/// );
+///
+/// // Now we store an item the flash with key 42.
+/// // Again we make sure we pass the correct key and value types, u8 and u32.
+/// // It is important to do this consistently.
+///
+/// storage.store_item(
+///     &mut data_buffer,
+///     &42u8,
+///     &104729u32,
+/// ).await.unwrap();
+///
+/// // When we ask for key 42, we now get back a Some with the correct value
+///
+/// assert_eq!(
+///     storage.fetch_item::<u32>(
+///         &mut data_buffer,
+///         &42,
+///     ).await.unwrap(),
+///     Some(104729)
+/// );
+/// # });
+/// ```
+///
+/// For your convenience there are premade implementations for the [Key] and [Value] traits.
+pub struct MapStorage<K: Key, S: NorFlash, C: KeyCacheImpl<K>> {
+    inner: GenericStorage<S, C>,
+    _phantom: PhantomData<K>,
+}
+
+impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
     /// Create a new map instance
-    ///
-    /// When a key-value is stored, it overwrites the any old items with the same key.
-    ///
-    /// The provided cache instance must be new or must be in the exact correct state for the current flash contents.
-    /// If the cache is bad, undesirable things will happen.
-    /// So, it's ok to reuse the cache gotten from the [`Self::destroy`] method when the flash hasn't changed since calling destroy.
-    ///
-    /// ## Basic API
-    ///
-    /// ```rust
-    /// # use sequential_storage::cache::NoCache;
-    /// # use sequential_storage::{Storage, Map, map::MapConfig};
-    /// # use mock_flash::MockFlashBase;
-    /// # use futures::executor::block_on;
-    /// # type Flash = MockFlashBase<10, 1, 4096>;
-    /// # mod mock_flash {
-    /// #   include!("mock_flash.rs");
-    /// # }
-    /// # fn init_flash() -> Flash {
-    /// #     Flash::new(mock_flash::WriteCountCheck::Twice, None, false)
-    /// # }
-    ///
-    /// # block_on(async {
-    /// // Initialize the flash. This can be internal or external
-    /// let mut flash = init_flash();
-    ///
-    /// // Create the storage instance
-    ///
-    /// // We provide the flash addresses in which it will operate.
-    /// // The storage will not read, write or erase outside of this range.
-    ///
-    /// // We also put the config in a const block so if the config is bad we'll get a compile time error
-    ///
-    /// // With the generics we specify that this is a map with `u8` as the key
-    /// let mut storage = Storage::<Map<u8>, _, _>::new_map(flash, const { MapConfig::new(0x1000..0x3000) }, NoCache::new());
-    ///
-    /// // We need to give the crate a buffer to work with.
-    /// // It must be big enough to serialize the biggest value of your storage type in,
-    /// // rounded up to to word alignment of the flash. Some kinds of internal flash may require
-    /// // this buffer to be aligned in RAM as well.
-    /// let mut data_buffer = [0; 128];
-    ///
-    /// // We can fetch an item from the flash. We're using `u8` as our key type and `u32` as our value type.
-    /// // Nothing is stored in it yet, so it will return None.
-    ///
-    /// assert_eq!(
-    ///     storage.fetch_item::<u32>(
-    ///         &mut data_buffer,
-    ///         &42,
-    ///     ).await.unwrap(),
-    ///     None
-    /// );
-    ///
-    /// // Now we store an item the flash with key 42.
-    /// // Again we make sure we pass the correct key and value types, u8 and u32.
-    /// // It is important to do this consistently.
-    ///
-    /// storage.store_item(
-    ///     &mut data_buffer,
-    ///     &42u8,
-    ///     &104729u32,
-    /// ).await.unwrap();
-    ///
-    /// // When we ask for key 42, we now get back a Some with the correct value
-    ///
-    /// assert_eq!(
-    ///     storage.fetch_item::<u32>(
-    ///         &mut data_buffer,
-    ///         &42,
-    ///     ).await.unwrap(),
-    ///     Some(104729)
-    /// );
-    /// # });
-    /// ```
-    ///
-    /// For your convenience there are premade implementations for the [Key] and [Value] traits.
-    pub const fn new_map(storage: S, config: MapConfig<S>, cache: C) -> Self {
+    pub const fn new(storage: S, config: MapConfig<S>, cache: C) -> Self {
         Self {
-            flash: storage,
-            flash_range: config.flash_range,
-            cache,
+            inner: GenericStorage {
+                flash: storage,
+                flash_range: config.flash_range,
+                cache,
+            },
             _phantom: PhantomData,
         }
     }
@@ -189,21 +195,23 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
         data_buffer: &mut [u8],
         search_key: &K,
     ) -> Result<Option<(ItemUnborrowed, u32, Option<usize>)>, Error<S::Error>> {
-        if self.cache.is_dirty() {
-            self.cache.invalidate_cache_state();
+        if self.inner.cache.is_dirty() {
+            self.inner.cache.invalidate_cache_state();
         }
 
         'cache: {
-            if let Some(cached_location) = self.cache.key_location(search_key) {
-                let page_index =
-                    calculate_page_index::<S>(self.flash_range.clone(), cached_location);
+            if let Some(cached_location) = self.inner.cache.key_location(search_key) {
+                let page_index = calculate_page_index::<S>(self.flash_range(), cached_location);
                 let page_data_end_address =
-                    calculate_page_end_address::<S>(self.flash_range.clone(), page_index)
+                    calculate_page_end_address::<S>(self.flash_range(), page_index)
                         - S::WORD_SIZE as u32;
 
-                let Some(header) =
-                    ItemHeader::read_new(&mut self.flash, cached_location, page_data_end_address)
-                        .await?
+                let Some(header) = ItemHeader::read_new(
+                    &mut self.inner.flash,
+                    cached_location,
+                    page_data_end_address,
+                )
+                .await?
                 else {
                     // The cache points to a non-existing item?
                     #[expect(clippy::assertions_on_constants, reason = "Clippy is wrong here")]
@@ -213,13 +221,13 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
                             "Wrong cache value. Addr: {cached_location}"
                         );
                     }
-                    self.cache.invalidate_cache_state();
+                    self.inner.cache.invalidate_cache_state();
                     break 'cache;
                 };
 
                 let item = header
                     .read_item(
-                        &mut self.flash,
+                        &mut self.inner.flash,
                         data_buffer,
                         cached_location,
                         page_data_end_address,
@@ -237,7 +245,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
                         }
 
                         // The cache points to a corrupted or erased item?
-                        self.cache.invalidate_cache_state();
+                        self.inner.cache.invalidate_cache_state();
                         break 'cache;
                     }
                     item::MaybeItem::Present(item) => {
@@ -248,19 +256,22 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
         }
 
         // We need to find the page we were last using. This should be the only partial open page.
-        let mut last_used_page = self.find_first_page(0, PageState::PartialOpen).await?;
+        let mut last_used_page = self
+            .inner
+            .find_first_page(0, PageState::PartialOpen)
+            .await?;
 
         if last_used_page.is_none() {
             // In the event that all pages are still open or the last used page was just closed, we search for the first open page.
             // If the page one before that is closed, then that's the last used page.
-            if let Some(first_open_page) = self.find_first_page(0, PageState::Open).await? {
-                let previous_page = self.previous_page(first_open_page);
-                if self.get_page_state(previous_page).await?.is_closed() {
+            if let Some(first_open_page) = self.inner.find_first_page(0, PageState::Open).await? {
+                let previous_page = self.inner.previous_page(first_open_page);
+                if self.inner.get_page_state(previous_page).await?.is_closed() {
                     last_used_page = Some(previous_page);
                 } else {
                     // The page before the open page is not closed, so it must be open.
                     // This means that all pages are open and that we don't have any items yet.
-                    self.cache.unmark_dirty();
+                    self.inner.cache.unmark_dirty();
                     return Ok(None);
                 }
             } else {
@@ -282,14 +293,14 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
 
         loop {
             let page_data_start_address =
-                calculate_page_address::<S>(self.flash_range.clone(), current_page_to_check)
+                calculate_page_address::<S>(self.flash_range(), current_page_to_check)
                     + S::WORD_SIZE as u32;
             let page_data_end_address =
-                calculate_page_end_address::<S>(self.flash_range.clone(), current_page_to_check)
+                calculate_page_end_address::<S>(self.flash_range(), current_page_to_check)
                     - S::WORD_SIZE as u32;
 
             let mut it = ItemIter::new(page_data_start_address, page_data_end_address);
-            while let Some((item, address)) = it.next(&mut self.flash, data_buffer).await? {
+            while let Some((item, address)) = it.next(&mut self.inner.flash, data_buffer).await? {
                 let (found_key, found_key_len) = K::deserialize_from(item.data())?;
                 if found_key == *search_key {
                     newest_found_item_data = Some((address, found_key_len));
@@ -298,46 +309,48 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
 
             // We've found the item! We can stop searching
             if let Some((newest_found_item_address, _)) = newest_found_item_data.as_ref() {
-                self.cache
+                self.inner
+                    .cache
                     .notice_key_location(search_key, *newest_found_item_address, false);
 
                 break;
             }
 
             // We have not found the item. We've got to look in the previous page, but only if that page is closed and contains data.
-            let previous_page = self.previous_page(current_page_to_check);
+            let previous_page = self.inner.previous_page(current_page_to_check);
 
-            if self.get_page_state(previous_page).await? != PageState::Closed {
+            if self.inner.get_page_state(previous_page).await? != PageState::Closed {
                 // We've looked through all the pages with data and couldn't find the item
-                self.cache.unmark_dirty();
+                self.inner.cache.unmark_dirty();
                 return Ok(None);
             }
 
             current_page_to_check = previous_page;
         }
 
-        self.cache.unmark_dirty();
+        self.inner.cache.unmark_dirty();
 
         // We now need to reread the item because we lost all its data other than its address
 
         if let Some((newest_found_item_address, newest_found_item_key_len)) = newest_found_item_data
         {
-            let item = ItemHeader::read_new(&mut self.flash, newest_found_item_address, u32::MAX)
-                .await?
-                .ok_or_else(|| {
-                    // How come there's no item header here!? We just found it!
-                    Error::Corrupted {
-                        #[cfg(feature = "_test")]
-                        backtrace: std::backtrace::Backtrace::capture(),
-                    }
-                })?
-                .read_item(
-                    &mut self.flash,
-                    data_buffer,
-                    newest_found_item_address,
-                    u32::MAX,
-                )
-                .await?;
+            let item =
+                ItemHeader::read_new(&mut self.inner.flash, newest_found_item_address, u32::MAX)
+                    .await?
+                    .ok_or_else(|| {
+                        // How come there's no item header here!? We just found it!
+                        Error::Corrupted {
+                            #[cfg(feature = "_test")]
+                            backtrace: std::backtrace::Backtrace::capture(),
+                        }
+                    })?
+                    .read_item(
+                        &mut self.inner.flash,
+                        data_buffer,
+                        newest_found_item_address,
+                        u32::MAX,
+                    )
+                    .await?;
 
             Ok(Some((
                 item.unwrap()?.unborrow(),
@@ -372,25 +385,28 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
         key: &K,
         item: &dyn Value<'_>,
     ) -> Result<(), Error<S::Error>> {
-        if self.cache.is_dirty() {
-            self.cache.invalidate_cache_state();
+        if self.inner.cache.is_dirty() {
+            self.inner.cache.invalidate_cache_state();
         }
 
         let mut recursion_level = 0;
         loop {
             // Check if we're in an infinite recursion which happens when we don't have enough space to store the new data
-            if recursion_level == self.get_pages(0).count() {
-                self.cache.unmark_dirty();
+            if recursion_level == self.inner.get_pages(0).count() {
+                self.inner.cache.unmark_dirty();
                 return Err(Error::FullStorage);
             }
 
             // If there is a partial open page, we try to write in that first if there is enough space
-            let next_page_to_use = if let Some(partial_open_page) =
-                self.find_first_page(0, PageState::PartialOpen).await?
+            let next_page_to_use = if let Some(partial_open_page) = self
+                .inner
+                .find_first_page(0, PageState::PartialOpen)
+                .await?
             {
                 // We found a partial open page, but at this point it's relatively cheap to do a consistency check
                 if !self
-                    .get_page_state(self.next_page(partial_open_page))
+                    .inner
+                    .get_page_state(self.inner.next_page(partial_open_page))
                     .await?
                     .is_open()
                 {
@@ -407,10 +423,10 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
                 // We've got to search where the free space is since the page starts with items present already
 
                 let page_data_start_address =
-                    calculate_page_address::<S>(self.flash_range.clone(), partial_open_page)
+                    calculate_page_address::<S>(self.flash_range(), partial_open_page)
                         + S::WORD_SIZE as u32;
                 let page_data_end_address =
-                    calculate_page_end_address::<S>(self.flash_range.clone(), partial_open_page)
+                    calculate_page_end_address::<S>(self.flash_range(), partial_open_page)
                         - S::WORD_SIZE as u32;
 
                 let key_len = key.serialize_into(data_buffer)?;
@@ -424,11 +440,12 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
                         > calculate_page_size::<S>()
                             .saturating_sub(ItemHeader::data_address::<S>(0) as usize)
                 {
-                    self.cache.unmark_dirty();
+                    self.inner.cache.unmark_dirty();
                     return Err(Error::ItemTooBig);
                 }
 
                 let free_spot_address = self
+                    .inner
                     .find_next_free_item_spot(
                         page_data_start_address,
                         page_data_end_address,
@@ -437,23 +454,25 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
                     .await?;
 
                 if let Some(free_spot_address) = free_spot_address {
-                    self.cache.notice_key_location(key, free_spot_address, true);
+                    self.inner
+                        .cache
+                        .notice_key_location(key, free_spot_address, true);
                     Item::write_new(
-                        &mut self.flash,
-                        self.flash_range.clone(),
-                        &mut self.cache,
+                        &mut self.inner.flash,
+                        self.inner.flash_range.clone(),
+                        &mut self.inner.cache,
                         free_spot_address,
                         &data_buffer[..item_data_length],
                     )
                     .await?;
 
-                    self.cache.unmark_dirty();
+                    self.inner.cache.unmark_dirty();
                     return Ok(());
                 }
 
                 // The item doesn't fit here, so we need to close this page and move to the next
-                self.close_page(partial_open_page).await?;
-                Some(self.next_page(partial_open_page))
+                self.inner.close_page(partial_open_page).await?;
+                Some(self.inner.next_page(partial_open_page))
             } else {
                 None
             };
@@ -464,7 +483,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
             // If there was no partial page, we just use the first open page.
 
             if let Some(next_page_to_use) = next_page_to_use {
-                let next_page_state = self.get_page_state(next_page_to_use).await?;
+                let next_page_state = self.inner.get_page_state(next_page_to_use).await?;
 
                 if !next_page_state.is_open() {
                     // What was the previous buffer page was not open...
@@ -477,10 +496,10 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
                 // Since we're gonna write data here, let's already partially close the page
                 // This could be done after moving the data, but this is more robust in the
                 // face of shutdowns and cancellations
-                self.partial_close_page(next_page_to_use).await?;
+                self.inner.partial_close_page(next_page_to_use).await?;
 
-                let next_buffer_page = self.next_page(next_page_to_use);
-                let next_buffer_page_state = self.get_page_state(next_buffer_page).await?;
+                let next_buffer_page = self.inner.next_page(next_page_to_use);
+                let next_buffer_page_state = self.inner.get_page_state(next_buffer_page).await?;
 
                 if !next_buffer_page_state.is_open() {
                     self.migrate_items(data_buffer, next_buffer_page, next_page_to_use)
@@ -488,7 +507,8 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
                 }
             } else {
                 // There's no partial open page, so we just gotta turn the first open page into a partial open one
-                let Some(first_open_page) = self.find_first_page(0, PageState::Open).await? else {
+                let Some(first_open_page) = self.inner.find_first_page(0, PageState::Open).await?
+                else {
                     // Uh oh, no open pages.
                     // Something has gone wrong.
                     // We should never get here.
@@ -498,7 +518,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
                     });
                 };
 
-                self.partial_close_page(first_open_page).await?;
+                self.inner.partial_close_page(first_open_page).await?;
             }
 
             // If we get here, we just freshly partially closed a new page, so the next loop iteration should succeed.
@@ -562,42 +582,43 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
         S: MultiwriteNorFlash,
     {
         if let Some(key) = &search_key {
-            self.cache.notice_key_erased(key);
+            self.inner.cache.notice_key_erased(key);
         } else {
-            self.cache.invalidate_cache_state();
+            self.inner.cache.invalidate_cache_state();
         }
 
         // Search for the last used page. We're gonna erase from the one after this first.
         // If we get an early shutoff or cancellation, this will make it so that we don't return
         // an old version of the key on the next fetch.
         let last_used_page = self
+            .inner
             .find_first_page(0, PageState::PartialOpen)
             .await?
             .unwrap_or_default();
 
         // Go through all the pages
-        for page_index in self.get_pages(self.next_page(last_used_page)) {
-            if self.get_page_state(page_index).await?.is_open() {
+        for page_index in self.inner.get_pages(self.inner.next_page(last_used_page)) {
+            if self.inner.get_page_state(page_index).await?.is_open() {
                 // This page is open, we don't have to check it
                 continue;
             }
 
             let page_data_start_address =
-                calculate_page_address::<S>(self.flash_range.clone(), page_index)
-                    + S::WORD_SIZE as u32;
+                calculate_page_address::<S>(self.flash_range(), page_index) + S::WORD_SIZE as u32;
             let page_data_end_address =
-                calculate_page_end_address::<S>(self.flash_range.clone(), page_index)
+                calculate_page_end_address::<S>(self.flash_range(), page_index)
                     - S::WORD_SIZE as u32;
 
             // Go through all items on the page
             let mut item_headers =
                 ItemHeaderIter::new(page_data_start_address, page_data_end_address);
 
-            while let (Some(item_header), item_address) = item_headers.next(&mut self.flash).await?
+            while let (Some(item_header), item_address) =
+                item_headers.next(&mut self.inner.flash).await?
             {
                 let item = item_header
                     .read_item(
-                        &mut self.flash,
+                        &mut self.inner.flash,
                         data_buffer,
                         item_address,
                         page_data_end_address,
@@ -616,9 +637,9 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
                         if item_match {
                             item.header
                                 .erase_data(
-                                    &mut self.flash,
-                                    self.flash_range.clone(),
-                                    &mut self.cache,
+                                    &mut self.inner.flash,
+                                    self.inner.flash_range.clone(),
+                                    &mut self.inner.cache,
                                     item_address,
                                 )
                                 .await?;
@@ -629,7 +650,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
         }
 
         // We're done, we now know the cache is in a good state
-        self.cache.unmark_dirty();
+        self.inner.cache.unmark_dirty();
 
         Ok(())
     }
@@ -653,9 +674,8 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
     ///
     /// The following is a simple example of how to use the iterator:
     /// ```rust
-    /// # use sequential_storage::{Storage, Map};
     /// # use sequential_storage::cache::NoCache;
-    /// # use sequential_storage::map::MapConfig;
+    /// # use sequential_storage::map::{MapConfig, MapStorage};
     /// # use mock_flash::MockFlashBase;
     /// # use futures::executor::block_on;
     /// # use std::collections::HashMap;
@@ -670,7 +690,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
     /// # block_on(async {
     /// let mut flash = init_flash();
     ///
-    /// let mut storage = Storage::<Map<u8>, _, _>::new_map(flash, const { MapConfig::new(0x1000..0x3000) }, NoCache::new());
+    /// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000) }, NoCache::new());
     /// let mut data_buffer = [0; 128];
     ///
     /// // Create the iterator of map items
@@ -703,25 +723,29 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
         // The first page used by the map is the next page of the `PartialOpen` page or the last `Closed` page
         let first_page = run_with_auto_repair!(
             function = {
-                match self.find_first_page(0, PageState::PartialOpen).await? {
+                match self
+                    .inner
+                    .find_first_page(0, PageState::PartialOpen)
+                    .await?
+                {
                     Some(last_used_page) => {
                         // The next page of the `PartialOpen` page is the first page
-                        Ok(self.next_page(last_used_page))
+                        Ok(self.inner.next_page(last_used_page))
                     }
                     None => {
                         // In the event that all pages are still open or the last used page was just closed, we search for the first open page.
                         // If the page one before that is closed, then that's the last used page.
                         if let Some(first_open_page) =
-                            self.find_first_page(0, PageState::Open).await?
+                            self.inner.find_first_page(0, PageState::Open).await?
                         {
-                            let previous_page = self.previous_page(first_open_page);
-                            if self.get_page_state(previous_page).await?.is_closed() {
+                            let previous_page = self.inner.previous_page(first_open_page);
+                            if self.inner.get_page_state(previous_page).await?.is_closed() {
                                 // The previous page is closed, so the first_open_page is what we want
                                 Ok(first_open_page)
                             } else {
                                 // The page before the open page is not closed, so it must be open.
                                 // This means that all pages are open and that we don't have any items yet.
-                                self.cache.unmark_dirty();
+                                self.inner.cache.unmark_dirty();
                                 Ok(0)
                             }
                         } else {
@@ -740,9 +764,9 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
         )?;
 
         let start_address =
-            calculate_page_address::<S>(self.flash_range.clone(), first_page) + S::WORD_SIZE as u32;
-        let end_address = calculate_page_end_address::<S>(self.flash_range.clone(), first_page)
-            - S::WORD_SIZE as u32;
+            calculate_page_address::<S>(self.flash_range(), first_page) + S::WORD_SIZE as u32;
+        let end_address =
+            calculate_page_end_address::<S>(self.flash_range(), first_page) - S::WORD_SIZE as u32;
 
         Ok(MapItemIter {
             storage: self,
@@ -763,20 +787,17 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
         // doesn't have a newer value somewhere else.
 
         let mut next_page_write_address =
-            calculate_page_address::<S>(self.flash_range.clone(), target_page)
-                + S::WORD_SIZE as u32;
+            calculate_page_address::<S>(self.flash_range(), target_page) + S::WORD_SIZE as u32;
 
         let mut it = ItemIter::new(
-            calculate_page_address::<S>(self.flash_range.clone(), source_page)
-                + S::WORD_SIZE as u32,
-            calculate_page_end_address::<S>(self.flash_range.clone(), source_page)
-                - S::WORD_SIZE as u32,
+            calculate_page_address::<S>(self.flash_range(), source_page) + S::WORD_SIZE as u32,
+            calculate_page_end_address::<S>(self.flash_range(), source_page) - S::WORD_SIZE as u32,
         );
-        while let Some((item, item_address)) = it.next(&mut self.flash, data_buffer).await? {
+        while let Some((item, item_address)) = it.next(&mut self.inner.flash, data_buffer).await? {
             let (key, _) = K::deserialize_from(item.data())?;
 
             // We're in a decent state here
-            self.cache.unmark_dirty();
+            self.inner.cache.unmark_dirty();
 
             // Search for the newest item with the key we found
             let Some((found_item, found_address, _)) =
@@ -797,13 +818,14 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
                 })?;
 
             if found_address == item_address {
-                self.cache
+                self.inner
+                    .cache
                     .notice_key_location(&key, next_page_write_address, true);
                 found_item
                     .write(
-                        &mut self.flash,
-                        self.flash_range.clone(),
-                        &mut self.cache,
+                        &mut self.inner.flash,
+                        self.inner.flash_range.clone(),
+                        &mut self.inner.cache,
                         next_page_write_address,
                     )
                     .await?;
@@ -813,7 +835,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
             }
         }
 
-        self.open_page(source_page).await?;
+        self.inner.open_page(source_page).await?;
 
         Ok(())
     }
@@ -829,20 +851,24 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
     /// that the state can be recovered. To at least make everything function again at the cost of losing the data,
     /// erase the flash range.
     async fn try_repair(&mut self, data_buffer: &mut [u8]) -> Result<(), Error<S::Error>> {
-        self.cache.invalidate_cache_state();
+        self.inner.cache.invalidate_cache_state();
 
-        self.try_general_repair().await?;
+        self.inner.try_general_repair().await?;
 
         // Let's check if we corrupted in the middle of a migration
-        if let Some(partial_open_page) = self.find_first_page(0, PageState::PartialOpen).await? {
-            let buffer_page = self.next_page(partial_open_page);
-            if !self.get_page_state(buffer_page).await?.is_open() {
+        if let Some(partial_open_page) = self
+            .inner
+            .find_first_page(0, PageState::PartialOpen)
+            .await?
+        {
+            let buffer_page = self.inner.next_page(partial_open_page);
+            if !self.inner.get_page_state(buffer_page).await?.is_open() {
                 // Yes, the migration got interrupted. Let's redo it.
                 // To do that, we erase the partial open page first because it contains incomplete data.
-                self.open_page(partial_open_page).await?;
+                self.inner.open_page(partial_open_page).await?;
 
                 // Then partially close it again
-                self.partial_close_page(partial_open_page).await?;
+                self.inner.partial_close_page(partial_open_page).await?;
 
                 self.migrate_items(data_buffer, buffer_page, partial_open_page)
                     .await?;
@@ -850,6 +876,45 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
         }
 
         Ok(())
+    }
+
+    /// Resets the flash in the entire given flash range.
+    ///
+    /// This is just a thin helper function as it just calls the flash's erase function.
+    pub fn erase_all(&mut self) -> impl Future<Output = Result<(), Error<S::Error>>> {
+        self.inner.erase_all()
+    }
+
+    /// Get the minimal overhead size per stored item for the given flash type.
+    ///
+    /// The associated data of each item is additionally padded to a full flash word size, but that's not part of this number.\
+    /// This means the full item length is `returned number + (data length).next_multiple_of(S::WORD_SIZE)`.
+    #[must_use]
+    pub const fn item_overhead_size() -> u32 {
+        GenericStorage::<S, C>::item_overhead_size()
+    }
+
+    /// Destroy the instance to get back the flash and the cache.
+    ///
+    /// The cache can be passed to a new storage instance, but only for the same flash region and if nothing has changed in flash.
+    pub fn destroy(self) -> (S, C) {
+        self.inner.destroy()
+    }
+
+    /// Get a reference to the flash. Mutating the memory is at your own risk.
+    pub const fn flash(&mut self) -> &mut S {
+        self.inner.flash()
+    }
+
+    /// Get the flash range being used
+    pub const fn flash_range(&self) -> Range<u32> {
+        self.inner.flash_range()
+    }
+
+    #[cfg(any(test, feature = "std"))]
+    /// Print all items in flash to the returned string
+    pub fn print_items(&mut self) -> impl Future<Output = String> {
+        self.inner.print_items()
     }
 }
 
@@ -860,9 +925,8 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
 ///
 /// The following is a simple example of how to use the iterator:
 /// ```rust
-/// # use sequential_storage::{Storage, Map};
 /// # use sequential_storage::cache::NoCache;
-/// # use sequential_storage::map::MapConfig;
+/// # use sequential_storage::map::{MapConfig, MapStorage};
 /// # use mock_flash::MockFlashBase;
 /// # use futures::executor::block_on;
 /// # use std::collections::HashMap;
@@ -877,7 +941,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
 /// # block_on(async {
 /// let mut flash = init_flash();
 ///
-/// let mut storage = Storage::<Map<u8>, _, _>::new_map(flash, const { MapConfig::new(0x1000..0x3000) }, NoCache::new());
+/// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000) }, NoCache::new());
 /// let mut data_buffer = [0; 128];
 ///
 /// // Create the iterator of map items
@@ -902,15 +966,15 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
 /// }
 /// # })
 /// ```
-pub struct MapItemIter<'s, K: Key, S: NorFlash, C: CacheImpl> {
-    storage: &'s mut Storage<Map<K>, S, C>,
+pub struct MapItemIter<'s, K: Key, S: NorFlash, C: KeyCacheImpl<K>> {
+    storage: &'s mut MapStorage<K, S, C>,
     first_page: usize,
     current_page_index: usize,
     pub(crate) current_iter: ItemIter,
     _key: PhantomData<K>,
 }
 
-impl<K: Key, S: NorFlash, C: CacheImpl> MapItemIter<'_, K, S, C> {
+impl<K: Key, S: NorFlash, C: KeyCacheImpl<K>> MapItemIter<'_, K, S, C> {
     /// Get the next item in the iterator. Be careful that the given `data_buffer` should large enough to contain the serialized key and value.
     pub async fn next<'a, V: Value<'a>>(
         &mut self,
@@ -920,7 +984,7 @@ impl<K: Key, S: NorFlash, C: CacheImpl> MapItemIter<'_, K, S, C> {
         let item = loop {
             if let Some((item, _address)) = self
                 .current_iter
-                .next(&mut self.storage.flash, data_buffer)
+                .next(&mut self.storage.inner.flash, data_buffer)
                 .await?
             {
                 // We've found the next item, quit the loop
@@ -930,22 +994,27 @@ impl<K: Key, S: NorFlash, C: CacheImpl> MapItemIter<'_, K, S, C> {
             // The current page is done, we need to find the next page
             // Find next page which is not open, update `self.current_iter`
             loop {
-                self.current_page_index = self.storage.next_page(self.current_page_index);
+                self.current_page_index = self.storage.inner.next_page(self.current_page_index);
 
                 // We've looped back to the first page, which means all pages are checked, there's nothing left so we return None
                 if self.current_page_index == self.first_page {
                     return Ok(None);
                 }
 
-                match self.storage.get_page_state(self.current_page_index).await {
+                match self
+                    .storage
+                    .inner
+                    .get_page_state(self.current_page_index)
+                    .await
+                {
                     Ok(PageState::Closed | PageState::PartialOpen) => {
                         self.current_iter = ItemIter::new(
                             calculate_page_address::<S>(
-                                self.storage.flash_range.clone(),
+                                self.storage.inner.flash_range.clone(),
                                 self.current_page_index,
                             ) + S::WORD_SIZE as u32,
                             calculate_page_end_address::<S>(
-                                self.storage.flash_range.clone(),
+                                self.storage.inner.flash_range.clone(),
                                 self.current_page_index,
                             ) - S::WORD_SIZE as u32,
                         );
@@ -1265,7 +1334,7 @@ mod tests {
 
     #[test]
     async fn store_and_fetch() {
-        let mut storage = Storage::<Map<u8>, _, _>::new_map(
+        let mut storage = MapStorage::<u8, _, _>::new(
             MockFlashBig::default(),
             MapConfig::new(0x000..0x1000),
             cache::NoCache::new(),
@@ -1273,7 +1342,7 @@ mod tests {
 
         let mut data_buffer = AlignedBuf([0; 128]);
 
-        let start_snapshot = storage.flash.stats_snapshot();
+        let start_snapshot = storage.flash().stats_snapshot();
 
         let item = storage
             .fetch_item::<&[u8]>(&mut data_buffer, &0)
@@ -1366,7 +1435,7 @@ mod tests {
 
         println!(
             "{:?}",
-            start_snapshot.compare_to(storage.flash.stats_snapshot()),
+            start_snapshot.compare_to(storage.flash().stats_snapshot()),
         );
     }
 
@@ -1374,7 +1443,7 @@ mod tests {
     async fn store_too_many_items() {
         const UPPER_BOUND: u8 = 3;
 
-        let mut storage = Storage::new_map(
+        let mut storage = MapStorage::new(
             MockFlashTiny::default(),
             const { MapConfig::new(0x00..0x40) },
             NoCache::new(),
@@ -1418,7 +1487,7 @@ mod tests {
     async fn store_too_many_items_big() {
         const UPPER_BOUND: u8 = 68;
 
-        let mut storage = Storage::new_map(
+        let mut storage = MapStorage::new(
             MockFlashBig::default(),
             const { MapConfig::new(0x0000..0x1000) },
             NoCache::new(),
@@ -1460,7 +1529,7 @@ mod tests {
 
     #[test]
     async fn store_many_items_big() {
-        let mut storage = Storage::new_map(
+        let mut storage = MapStorage::new(
             mock_flash::MockFlashBase::<4, 1, 4096>::default(),
             const { MapConfig::new(0x0000..0x4000) },
             NoCache::new(),
@@ -1501,7 +1570,7 @@ mod tests {
 
     #[test]
     async fn remove_items() {
-        let mut storage = Storage::new_map(
+        let mut storage = MapStorage::new(
             mock_flash::MockFlashBase::<4, 1, 4096>::new(
                 mock_flash::WriteCountCheck::Twice,
                 None,
@@ -1564,7 +1633,7 @@ mod tests {
 
     #[test]
     async fn remove_all() {
-        let mut storage = Storage::new_map(
+        let mut storage = MapStorage::new(
             mock_flash::MockFlashBase::<4, 1, 4096>::new(
                 mock_flash::WriteCountCheck::Twice,
                 None,
@@ -1613,7 +1682,7 @@ mod tests {
 
     #[test]
     async fn store_too_big_item() {
-        let mut storage = Storage::new_map(
+        let mut storage = MapStorage::new(
             MockFlashBig::new(mock_flash::WriteCountCheck::Twice, None, true),
             const { MapConfig::new(0x000..0x1000) },
             NoCache::new(),
@@ -1635,7 +1704,7 @@ mod tests {
     #[test]
     async fn item_iterator() {
         const UPPER_BOUND: u8 = 64;
-        let mut storage = Storage::new_map(
+        let mut storage = MapStorage::new(
             MockFlashBig::default(),
             const { MapConfig::new(0x000..0x1000) },
             NoCache::new(),
@@ -1686,7 +1755,7 @@ mod tests {
 
     #[test]
     async fn store_unit_key() {
-        let mut storage = Storage::new_map(
+        let mut storage = MapStorage::new(
             MockFlashBig::default(),
             const { MapConfig::new(0x000..0x1000) },
             NoCache::new(),
