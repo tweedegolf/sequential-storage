@@ -1,5 +1,4 @@
 //! Implementation of the queue logic.
-//! To use queues, see [`Storage::new_queue`].
 
 use crate::item::{Item, ItemHeader, ItemHeaderIter};
 
@@ -57,10 +56,6 @@ impl<S: NorFlash> QueueConfig<S> {
 /// A fifo queue storage
 ///
 /// Use [`Self::push`] to add data to the fifo and use [`Self::peek`] and [`Self::pop`] to get the data back.
-///
-/// The provided cache instance must be new or must be in the exact correct state for the current flash contents.
-/// If the cache is bad, undesirable things will happen.
-/// So, it's ok to reuse the cache gotten from the [`Self::destroy`] method when the flash hasn't changed since calling destroy.
 ///
 /// ## Basic API
 ///
@@ -121,6 +116,10 @@ pub struct QueueStorage<S: NorFlash, C: CacheImpl> {
 
 impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
     /// Create a new (fifo) queue instance
+    ///
+    /// The provided cache instance must be new or must be in the exact correct state for the current flash contents.
+    /// If the cache is bad, undesirable things will happen.
+    /// So, it's ok to reuse the cache gotten from the [`Self::destroy`] method when the flash hasn't changed since calling destroy.
     pub const fn new(storage: S, config: QueueConfig<S>, cache: C) -> Self {
         Self {
             inner: GenericStorage {
@@ -584,6 +583,8 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
 
     #[cfg(any(test, feature = "std"))]
     /// Print all items in flash to the returned string
+    /// 
+    /// This is meant as a debugging utility. The string format is not stable.
     pub fn print_items(&mut self) -> impl Future<Output = String> {
         self.inner.print_items()
     }
