@@ -13,7 +13,11 @@ use self::{
     item::{ItemHeaderIter, ItemUnborrowed},
 };
 
-use super::*;
+use super::{
+    Debug, Error, MAX_WORD_SIZE, Map, NorFlash, NorFlashExt, PageState, Range, Storage, cache,
+    calculate_page_address, calculate_page_end_address, calculate_page_index, calculate_page_size,
+    item, run_with_auto_repair,
+};
 
 /// Configuration for a map
 pub struct MapConfig<S> {
@@ -24,11 +28,13 @@ pub struct MapConfig<S> {
 impl<S: NorFlash> MapConfig<S> {
     /// Create a new map configuration. Will panic if the data is invalid.
     /// If you want a fallible version, use [`Self::try_new`].
+    #[must_use]
     pub const fn new(flash_range: Range<u32>) -> Self {
         Self::try_new(flash_range).expect("Map config must be correct")
     }
 
     /// Create a new map configuration. Will return None if the data is invalid
+    #[must_use]
     pub const fn try_new(flash_range: Range<u32>) -> Option<Self> {
         if !flash_range.start.is_multiple_of(S::ERASE_SIZE as u32) {
             return None;
@@ -200,9 +206,10 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
                         .await?
                 else {
                     // The cache points to a non-existing item?
-                    if cfg!(feature = "_test") {
-                        panic!("Wrong cache value. Addr: {cached_location}");
-                    }
+                    assert!(
+                        !cfg!(feature = "_test"),
+                        "Wrong cache value. Addr: {cached_location}"
+                    );
                     self.cache.invalidate_cache_state();
                     break 'cache;
                 };
@@ -218,9 +225,10 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> Storage<Map<K>, S, C> {
 
                 match item {
                     item::MaybeItem::Corrupted(_, _) | item::MaybeItem::Erased(_, _) => {
-                        if cfg!(feature = "_test") {
-                            panic!("Wrong cache value. Addr: {cached_location}");
-                        }
+                        assert!(
+                            !cfg!(feature = "_test"),
+                            "Wrong cache value. Addr: {cached_location}"
+                        );
 
                         // The cache points to a corrupted or erased item?
                         self.cache.invalidate_cache_state();
@@ -1075,7 +1083,7 @@ pub trait Value<'a> {
 
 impl<'a> Value<'a> for bool {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        <u8 as Value>::serialize_into(&(*self as u8), buffer)
+        <u8 as Value>::serialize_into(&u8::from(*self), buffer)
     }
 
     fn deserialize_from(buffer: &'a [u8]) -> Result<(Self, usize), SerializationError>
@@ -1241,7 +1249,7 @@ impl core::fmt::Display for SerializationError {
 
 #[cfg(test)]
 mod tests {
-    use crate::cache::NoCache;
+    use crate::{AlignedBuf, cache::NoCache, mock_flash};
 
     use super::*;
     use futures_test::test;

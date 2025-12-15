@@ -16,10 +16,10 @@ use crate::{
 ///
 /// This cache has to be kept around and passed to *every* api call to the same memory region until the cache gets discarded.
 ///
-/// Valid usecase:  
+/// Valid usecase:\
 /// `Create cache 1` -> `use 1` -> `use 1` -> `create cache 2` -> `use 2` -> `use 2`
 ///
-/// Invalid usecase:  
+/// Invalid usecase:\
 /// `Create cache 1` -> `use 1` -> `create cache 2` -> `use 2` -> `❌ use 1 ❌`
 ///
 /// Make sure the page count is correct. If the number is lower than the actual amount, the code will panic at some point.
@@ -32,6 +32,7 @@ pub struct PageStateCache<const PAGE_COUNT: usize> {
 
 impl<const PAGE_COUNT: usize> PageStateCache<PAGE_COUNT> {
     /// Construct a new instance
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             dirt_tracker: DirtTracker::new(),
@@ -95,10 +96,10 @@ impl<KEY: Key, const PAGE_COUNT: usize> PrivateKeyCacheImpl<KEY> for PageStateCa
 ///
 /// This cache has to be kept around and passed to *every* api call to the same memory region until the cache gets discarded.
 ///
-/// Valid usecase:  
+/// Valid usecase:\
 /// `Create cache 1` -> `use 1` -> `use 1` -> `create cache 2` -> `use 2` -> `use 2`
 ///
-/// Invalid usecase:  
+/// Invalid usecase:\
 /// `Create cache 1` -> `use 1` -> `create cache 2` -> `use 2` -> `❌ use 1 ❌`
 ///
 /// Make sure the page count is correct. If the number is lower than the actual amount, the code will panic at some point.
@@ -113,6 +114,7 @@ pub struct PagePointerCache<const PAGE_COUNT: usize> {
 
 impl<const PAGE_COUNT: usize> PagePointerCache<PAGE_COUNT> {
     /// Construct a new instance
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             dirt_tracker: DirtTracker::new(),
@@ -182,10 +184,10 @@ impl<KEY: Key, const PAGE_COUNT: usize> PrivateKeyCacheImpl<KEY> for PagePointer
 ///
 /// This cache has to be kept around and passed to *every* api call to the same memory region until the cache gets discarded.
 ///
-/// Valid usecase:  
+/// Valid usecase:\
 /// `Create cache 1` -> `use 1` -> `use 1` -> `create cache 2` -> `use 2` -> `use 2`
 ///
-/// Invalid usecase:  
+/// Invalid usecase:\
 /// `Create cache 1` -> `use 1` -> `create cache 2` -> `use 2` -> `❌ use 1 ❌`
 ///
 /// Make sure the page count is correct. If the number is lower than the actual amount, the code will panic at some point.
@@ -205,6 +207,7 @@ pub struct KeyPointerCache<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize>
 
 impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> KeyPointerCache<PAGE_COUNT, KEY, KEYS> {
     /// Construct a new instance
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             dirt_tracker: DirtTracker::new(),

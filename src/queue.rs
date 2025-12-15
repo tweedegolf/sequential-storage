@@ -5,7 +5,11 @@ use crate::item::{Item, ItemHeader, ItemHeaderIter};
 
 use self::{cache::CacheImpl, item::ItemUnborrowed};
 
-use super::*;
+use super::{
+    Debug, Deref, DerefMut, Error, MAX_WORD_SIZE, NorFlash, NorFlashExt, PageState, PhantomData,
+    Queue, Range, Storage, cache, calculate_page_address, calculate_page_end_address,
+    calculate_page_index, calculate_page_size, item, run_with_auto_repair,
+};
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 
 /// Configuration for a queue
@@ -17,11 +21,13 @@ pub struct QueueConfig<S> {
 impl<S: NorFlash> QueueConfig<S> {
     /// Create a new queue configuration. Will panic if the data is invalid.
     /// If you want a fallible version, use [`Self::try_new`].
+    #[must_use]
     pub const fn new(flash_range: Range<u32>) -> Self {
         Self::try_new(flash_range).expect("Queue config must be correct")
     }
 
     /// Create a new queue configuration. Will return None if the data is invalid
+    #[must_use]
     pub const fn try_new(flash_range: Range<u32>) -> Option<Self> {
         if !flash_range.start.is_multiple_of(S::ERASE_SIZE as u32) {
             return None;
@@ -339,7 +345,7 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
                     backtrace: std::backtrace::Backtrace::capture(),
                 });
             }
-        };
+        }
 
         // See how much space we can find in the current page.
         let page_data_start_address =
@@ -741,6 +747,7 @@ impl<S: NorFlash, CI: CacheImpl> DerefMut for QueueIteratorEntry<'_, '_, '_, S, 
 impl<'d, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'_, 'd, '_, S, CI> {
     /// Get a mutable reference to the data of this entry, but consume the entry too.
     /// This function has some relaxed lifetime constraints compared to the deref impls.
+    #[must_use]
     pub fn into_buf(self) -> &'d mut [u8] {
         self.item.data_owned()
     }
@@ -781,8 +788,9 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'_, 'd, '_, S, CI> {
 #[cfg(test)]
 mod tests {
     use crate::{
+        AlignedBuf,
         cache::NoCache,
-        mock_flash::{FlashAverageStatsResult, FlashStatsResult, WriteCountCheck},
+        mock_flash::{self, FlashAverageStatsResult, FlashStatsResult, WriteCountCheck},
     };
 
     use super::*;

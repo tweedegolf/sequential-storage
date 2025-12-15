@@ -186,6 +186,7 @@ pub struct NoCache;
 
 impl NoCache {
     /// Construct a new instance
+    #[must_use]
     pub const fn new() -> Self {
         Self
     }

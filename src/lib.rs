@@ -71,8 +71,9 @@ impl<T, S: NorFlash, C: CacheImpl> Storage<T, S, C> {
 
     /// Get the minimal overhead size per stored item for the given flash type.
     ///
-    /// The associated data of each item is additionally padded to a full flash word size, but that's not part of this number.  
+    /// The associated data of each item is additionally padded to a full flash word size, but that's not part of this number.\
     /// This means the full item length is `returned number + (data length).next_multiple_of(S::WORD_SIZE)`.
+    #[must_use]
     pub const fn item_overhead_size() -> u32 {
         item::ItemHeader::data_address::<S>(0)
     }

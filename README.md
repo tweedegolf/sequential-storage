@@ -71,8 +71,8 @@ A cache performance regression might be a bug though. Open an issue to discus yo
 
 ## MSRV
 
-This crate has no further guarantees other than being able to run on the latest stable compiler.  
-Increasing the MSRV is not seen as a breaking change semver-wise.  
+This crate has no further guarantees other than being able to run on the latest stable compiler.\
+Increasing the MSRV is not seen as a breaking change semver-wise.\
 If you find yourself in trouble with this, feel free to open an issue.
 
 ## Example

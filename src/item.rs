@@ -21,7 +21,7 @@
 //! and has some other modifications to make corruption less likely to happen.
 //!
 
-use core::num::NonZeroU32;
+use core::num::{NonZero, NonZeroU32};
 use core::ops::Range;
 
 use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
@@ -174,7 +174,7 @@ impl ItemHeader {
         let mut buffer = AlignedBuf([0xFF; MAX_WORD_SIZE]);
 
         buffer[Self::DATA_CRC_FIELD]
-            .copy_from_slice(&self.crc.map(|crc| crc.get()).unwrap_or(0).to_le_bytes());
+            .copy_from_slice(&self.crc.map_or(0, NonZero::get).to_le_bytes());
         buffer[Self::LENGTH_FIELD].copy_from_slice(&self.length.to_le_bytes());
         buffer[Self::LENGTH_CRC_FIELD]
             .copy_from_slice(&crc16(&self.length.to_le_bytes()).to_le_bytes());
@@ -415,7 +415,7 @@ impl<'d> MaybeItem<'d> {
 fn crc16(data: &[u8]) -> u16 {
     let mut crc = 0xffff;
     for byte in data {
-        crc ^= *byte as u16;
+        crc ^= u16::from(*byte);
         for _ in 0..8 {
             if crc & 1 == 1 {
                 crc = (crc >> 1) ^ 0x1a2e; // CRC-16F/4.2 @ https://users.ece.cmu.edu/~koopman/crc/crc16.html
@@ -458,7 +458,7 @@ fn crc32_with_initial(data: &[u8], initial: u32) -> u32 {
     let mut crc = initial;
 
     for byte in data {
-        crc ^= *byte as u32;
+        crc ^= u32::from(*byte);
 
         for _ in 0..8 {
             let lowest_bit_set = crc & 1 > 0;
