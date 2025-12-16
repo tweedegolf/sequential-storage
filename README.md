@@ -9,7 +9,7 @@ There are two datastructures:
 - Map: A key-value pair store
 - Queue: A fifo store
 
-Each are implemented on the `Storage` struct. See the [documentation](https://docs.rs/sequential-storage) for examples and API docs.
+See the [documentation](https://docs.rs/sequential-storage) for examples and API docs.
 
 To search for data, the crate first searches for the flash page that is likeliest to contain it and
 then performs a linear scan over the data, skipping data blocks where it can.
