@@ -27,7 +27,7 @@ use core::ops::Range;
 use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
 
 use crate::{
-    AlignedBuf, Error, MAX_WORD_SIZE, NorFlashExt, PageState, Storage,
+    AlignedBuf, Error, GenericStorage, MAX_WORD_SIZE, NorFlashExt, PageState,
     cache::{CacheImpl, PrivateCacheImpl},
     calculate_page_address, calculate_page_end_address, calculate_page_index,
     round_down_to_alignment, round_down_to_alignment_usize, round_up_to_alignment,
@@ -472,7 +472,7 @@ fn crc32_with_initial(data: &[u8], initial: u32) -> u32 {
     !crc
 }
 
-impl<T, S: NorFlash, C: CacheImpl> Storage<T, S, C> {
+impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     /// Scans through the items to find the first spot that is free to store a new item.
     ///
     /// - `end_address` is exclusive.
@@ -512,6 +512,7 @@ impl<T, S: NorFlash, C: CacheImpl> Storage<T, S, C> {
             Ok(None)
         }
     }
+
     /// Checks if the page is open or closed with all items erased.
     /// By definition a partial-open page is not empty since it can still be written.
     ///

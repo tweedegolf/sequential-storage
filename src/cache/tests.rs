@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod queue_tests {
     use crate::{
-        AlignedBuf, Storage,
+        AlignedBuf,
         cache::{CacheImpl, NoCache, PagePointerCache, PageStateCache},
         mock_flash::{self, FlashStatsResult, WriteCountCheck},
-        queue::QueueConfig,
+        queue::{QueueConfig, QueueStorage},
     };
 
     use futures_test::test;
@@ -55,14 +55,14 @@ mod queue_tests {
     }
 
     async fn run_test(cache: impl CacheImpl) -> FlashStatsResult {
-        let mut storage = Storage::new_queue(
+        let mut storage = QueueStorage::new(
             mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x00..0x400) },
             cache,
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
 
-        let start_snapshot = storage.flash.stats_snapshot();
+        let start_snapshot = storage.flash().stats_snapshot();
 
         for i in 0..LOOP_COUNT {
             println!("{i}");
@@ -90,16 +90,16 @@ mod queue_tests {
             println!("DONE");
         }
 
-        start_snapshot.compare_to(storage.flash.stats_snapshot())
+        start_snapshot.compare_to(storage.flash().stats_snapshot())
     }
 }
 
 #[cfg(test)]
 mod map_tests {
     use crate::{
-        AlignedBuf, Storage,
+        AlignedBuf,
         cache::{KeyCacheImpl, KeyPointerCache, NoCache, PagePointerCache, PageStateCache},
-        map::MapConfig,
+        map::{MapConfig, MapStorage},
         mock_flash::{self, FlashStatsResult, WriteCountCheck},
     };
 
@@ -178,7 +178,7 @@ mod map_tests {
     }
 
     async fn run_test(cache: impl KeyCacheImpl<u16>) -> FlashStatsResult {
-        let mut storage = Storage::new_map(
+        let mut storage = MapStorage::new(
             mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true),
             const { MapConfig::new(0x00..0x400) },
             cache,
@@ -189,7 +189,7 @@ mod map_tests {
             11, 13, 6, 13, 13, 10, 2, 3, 5, 36, 1, 65, 4, 6, 1, 15, 10, 7, 3, 15, 9, 3, 4, 5,
         ];
 
-        let start_snapshot = storage.flash.stats_snapshot();
+        let start_snapshot = storage.flash().stats_snapshot();
 
         for _ in 0..100 {
             const WRITE_ORDER: [usize; 24] = [
@@ -226,6 +226,6 @@ mod map_tests {
             }
         }
 
-        start_snapshot.compare_to(storage.flash.stats_snapshot())
+        start_snapshot.compare_to(storage.flash().stats_snapshot())
     }
 }

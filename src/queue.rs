@@ -1,13 +1,12 @@
 //! Implementation of the queue logic.
-//! To use queues, see [`Storage::new_queue`].
 
 use crate::item::{Item, ItemHeader, ItemHeaderIter};
 
 use self::{cache::CacheImpl, item::ItemUnborrowed};
 
 use super::{
-    Debug, Deref, DerefMut, Error, MAX_WORD_SIZE, NorFlash, NorFlashExt, PageState, PhantomData,
-    Queue, Range, Storage, cache, calculate_page_address, calculate_page_end_address,
+    Debug, Deref, DerefMut, Error, GenericStorage, MAX_WORD_SIZE, NorFlash, NorFlashExt, PageState,
+    PhantomData, Range, cache, calculate_page_address, calculate_page_end_address,
     calculate_page_index, calculate_page_size, item, run_with_auto_repair,
 };
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
@@ -54,75 +53,80 @@ impl<S: NorFlash> QueueConfig<S> {
     }
 }
 
-impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
+/// A fifo queue storage
+///
+/// Use [`Self::push`] to add data to the fifo and use [`Self::peek`] and [`Self::pop`] to get the data back.
+///
+/// ## Basic API
+///
+/// ```rust
+/// # use sequential_storage::cache::NoCache;
+/// # use sequential_storage::queue::{QueueConfig, QueueStorage};
+/// # use mock_flash::MockFlashBase;
+/// # use futures::executor::block_on;
+/// # type Flash = MockFlashBase<10, 1, 4096>;
+/// # mod mock_flash {
+/// #   include!("mock_flash.rs");
+/// # }
+/// #
+/// # fn init_flash() -> Flash {
+/// #     Flash::new(mock_flash::WriteCountCheck::Twice, None, false)
+/// # }
+/// #
+/// # block_on(async {
+///
+/// // Initialize the flash. This can be internal or external
+/// let mut flash = init_flash();
+///
+/// let mut storage = QueueStorage::new(flash, const { QueueConfig::new(0x1000..0x3000) }, NoCache::new());
+/// // We need to give the crate a buffer to work with.
+/// // It must be big enough to serialize the biggest value of your storage type in.
+/// let mut data_buffer = [0; 128];
+///
+/// let my_data = [10, 47, 29];
+///
+/// // We can push some data to the queue
+/// storage.push(&my_data, false).await.unwrap();
+///
+/// // We can peek at the oldest data
+///
+/// assert_eq!(
+///     &storage.peek(&mut data_buffer).await.unwrap().unwrap()[..],
+///     &my_data[..]
+/// );
+///
+/// // With popping we get back the oldest data, but that data is now also removed
+///
+/// assert_eq!(
+///     &storage.pop(&mut data_buffer).await.unwrap().unwrap()[..],
+///     &my_data[..]
+/// );
+///
+/// // If we pop again, we find there's no data anymore
+///
+/// assert_eq!(
+///     storage.pop(&mut data_buffer).await,
+///     Ok(None)
+/// );
+/// # });
+/// ```
+pub struct QueueStorage<S: NorFlash, C: CacheImpl> {
+    inner: GenericStorage<S, C>,
+}
+
+impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
     /// Create a new (fifo) queue instance
-    ///
-    /// Use [`Self::push`] to add data to the fifo and use [`Self::peek`] and [`Self::pop`] to get the data back.
     ///
     /// The provided cache instance must be new or must be in the exact correct state for the current flash contents.
     /// If the cache is bad, undesirable things will happen.
     /// So, it's ok to reuse the cache gotten from the [`Self::destroy`] method when the flash hasn't changed since calling destroy.
-    ///
-    /// ## Basic API
-    ///
-    /// ```rust
-    /// # use sequential_storage::cache::NoCache;
-    /// # use sequential_storage::Storage;
-    /// # use sequential_storage::queue::QueueConfig;
-    /// # use mock_flash::MockFlashBase;
-    /// # use futures::executor::block_on;
-    /// # type Flash = MockFlashBase<10, 1, 4096>;
-    /// # mod mock_flash {
-    /// #   include!("mock_flash.rs");
-    /// # }
-    /// #
-    /// # fn init_flash() -> Flash {
-    /// #     Flash::new(mock_flash::WriteCountCheck::Twice, None, false)
-    /// # }
-    /// #
-    /// # block_on(async {
-    ///
-    /// // Initialize the flash. This can be internal or external
-    /// let mut flash = init_flash();
-    ///
-    /// let mut storage = Storage::new_queue(flash, const { QueueConfig::new(0x1000..0x3000) }, NoCache::new());
-    /// // We need to give the crate a buffer to work with.
-    /// // It must be big enough to serialize the biggest value of your storage type in.
-    /// let mut data_buffer = [0; 128];
-    ///
-    /// let my_data = [10, 47, 29];
-    ///
-    /// // We can push some data to the queue
-    /// storage.push(&my_data, false).await.unwrap();
-    ///
-    /// // We can peek at the oldest data
-    ///
-    /// assert_eq!(
-    ///     &storage.peek(&mut data_buffer).await.unwrap().unwrap()[..],
-    ///     &my_data[..]
-    /// );
-    ///
-    /// // With popping we get back the oldest data, but that data is now also removed
-    ///
-    /// assert_eq!(
-    ///     &storage.pop(&mut data_buffer).await.unwrap().unwrap()[..],
-    ///     &my_data[..]
-    /// );
-    ///
-    /// // If we pop again, we find there's no data anymore
-    ///
-    /// assert_eq!(
-    ///     storage.pop(&mut data_buffer).await,
-    ///     Ok(None)
-    /// );
-    /// # });
-    /// ```
-    pub const fn new_queue(storage: S, config: QueueConfig<S>, cache: C) -> Self {
+    pub const fn new(storage: S, config: QueueConfig<S>, cache: C) -> Self {
         Self {
-            flash: storage,
-            flash_range: config.flash_range,
-            cache,
-            _phantom: PhantomData,
+            inner: GenericStorage {
+                flash: storage,
+                flash_range: config.flash_range,
+                cache,
+            },
         }
     }
 
@@ -150,8 +154,8 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
         data: &[u8],
         allow_overwrite_old_data: bool,
     ) -> Result<(), Error<S::Error>> {
-        if self.cache.is_dirty() {
-            self.cache.invalidate_cache_state();
+        if self.inner.cache.is_dirty() {
+            self.inner.cache.invalidate_cache_state();
         }
 
         // Data must fit in a single page
@@ -160,24 +164,23 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
                 > calculate_page_size::<S>()
                     .saturating_sub(ItemHeader::data_address::<S>(0) as usize)
         {
-            self.cache.unmark_dirty();
+            self.inner.cache.unmark_dirty();
             return Err(Error::ItemTooBig);
         }
 
         let current_page = self.find_youngest_page().await?;
 
         let page_data_start_address =
-            calculate_page_address::<S>(self.flash_range.clone(), current_page)
-                + S::WORD_SIZE as u32;
+            calculate_page_address::<S>(self.flash_range(), current_page) + S::WORD_SIZE as u32;
         let page_data_end_address =
-            calculate_page_end_address::<S>(self.flash_range.clone(), current_page)
-                - S::WORD_SIZE as u32;
+            calculate_page_end_address::<S>(self.flash_range(), current_page) - S::WORD_SIZE as u32;
 
-        self.partial_close_page(current_page).await?;
+        self.inner.partial_close_page(current_page).await?;
 
         // Find the last item on the page so we know where we need to write
 
         let mut next_address = self
+            .inner
             .find_next_free_item_spot(
                 page_data_start_address,
                 page_data_end_address,
@@ -187,36 +190,39 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
 
         if next_address.is_none() {
             // No cap left on this page, move to the next page
-            let next_page = self.next_page(current_page);
-            let next_page_state = self.get_page_state(next_page).await?;
+            let next_page = self.inner.next_page(current_page);
+            let next_page_state = self.inner.get_page_state(next_page).await?;
             let single_page = next_page == current_page;
 
             match (next_page_state, single_page) {
                 (PageState::Open, _) => {
-                    self.close_page(current_page).await?;
-                    self.partial_close_page(next_page).await?;
+                    self.inner.close_page(current_page).await?;
+                    self.inner.partial_close_page(next_page).await?;
                     next_address = Some(
-                        calculate_page_address::<S>(self.flash_range.clone(), next_page)
+                        calculate_page_address::<S>(self.flash_range(), next_page)
                             + S::WORD_SIZE as u32,
                     );
                 }
                 (PageState::Closed, _) | (PageState::PartialOpen, true) => {
                     let next_page_data_start_address =
-                        calculate_page_address::<S>(self.flash_range.clone(), next_page)
+                        calculate_page_address::<S>(self.flash_range(), next_page)
                             + S::WORD_SIZE as u32;
 
                     if !allow_overwrite_old_data
-                        && !self.is_page_empty(next_page, Some(next_page_state)).await?
+                        && !self
+                            .inner
+                            .is_page_empty(next_page, Some(next_page_state))
+                            .await?
                     {
-                        self.cache.unmark_dirty();
+                        self.inner.cache.unmark_dirty();
                         return Err(Error::FullStorage);
                     }
 
-                    self.open_page(next_page).await?;
+                    self.inner.open_page(next_page).await?;
                     if !single_page {
-                        self.close_page(current_page).await?;
+                        self.inner.close_page(current_page).await?;
                     }
-                    self.partial_close_page(next_page).await?;
+                    self.inner.partial_close_page(next_page).await?;
                     next_address = Some(next_page_data_start_address);
                 }
                 (PageState::PartialOpen, false) => {
@@ -230,15 +236,15 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
         }
 
         Item::write_new(
-            &mut self.flash,
-            self.flash_range.clone(),
-            &mut self.cache,
+            &mut self.inner.flash,
+            self.inner.flash_range.clone(),
+            &mut self.inner.cache,
             next_address.unwrap(),
             data,
         )
         .await?;
 
-        self.cache.unmark_dirty();
+        self.inner.cache.unmark_dirty();
         Ok(())
     }
 
@@ -319,23 +325,23 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
     }
 
     async fn find_max_fit_inner(&mut self) -> Result<Option<u32>, Error<S::Error>> {
-        if self.cache.is_dirty() {
-            self.cache.invalidate_cache_state();
+        if self.inner.cache.is_dirty() {
+            self.inner.cache.invalidate_cache_state();
         }
 
         let current_page = self.find_youngest_page().await?;
 
         // Check if we have space on the next page
-        let next_page = self.next_page(current_page);
-        match self.get_page_state(next_page).await? {
+        let next_page = self.inner.next_page(current_page);
+        match self.inner.get_page_state(next_page).await? {
             state @ PageState::Closed => {
-                if self.is_page_empty(next_page, Some(state)).await? {
-                    self.cache.unmark_dirty();
+                if self.inner.is_page_empty(next_page, Some(state)).await? {
+                    self.inner.cache.unmark_dirty();
                     return Ok(Some((S::ERASE_SIZE - (2 * S::WORD_SIZE)) as u32));
                 }
             }
             PageState::Open => {
-                self.cache.unmark_dirty();
+                self.inner.cache.unmark_dirty();
                 return Ok(Some((S::ERASE_SIZE - (2 * S::WORD_SIZE)) as u32));
             }
             PageState::PartialOpen => {
@@ -349,28 +355,27 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
 
         // See how much space we can find in the current page.
         let page_data_start_address =
-            calculate_page_address::<S>(self.flash_range.clone(), current_page)
-                + S::WORD_SIZE as u32;
+            calculate_page_address::<S>(self.flash_range(), current_page) + S::WORD_SIZE as u32;
         let page_data_end_address =
-            calculate_page_end_address::<S>(self.flash_range.clone(), current_page)
-                - S::WORD_SIZE as u32;
+            calculate_page_end_address::<S>(self.flash_range(), current_page) - S::WORD_SIZE as u32;
 
-        let next_item_address = match self.cache.first_item_after_written(current_page) {
+        let next_item_address = match self.inner.cache.first_item_after_written(current_page) {
             Some(next_item_address) => next_item_address,
             None => {
                 ItemHeaderIter::new(
-                    self.cache
+                    self.inner
+                        .cache
                         .first_item_after_erased(current_page)
                         .unwrap_or(page_data_start_address),
                     page_data_end_address,
                 )
-                .traverse(&mut self.flash, |_, _| true)
+                .traverse(&mut self.inner.flash, |_, _| true)
                 .await?
                 .1
             }
         };
 
-        self.cache.unmark_dirty();
+        self.inner.cache.unmark_dirty();
         Ok(ItemHeader::available_data_bytes::<S>(
             page_data_end_address - next_item_address,
         ))
@@ -393,15 +398,15 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
     }
 
     async fn space_left_inner(&mut self) -> Result<u32, Error<S::Error>> {
-        if self.cache.is_dirty() {
-            self.cache.invalidate_cache_state();
+        if self.inner.cache.is_dirty() {
+            self.inner.cache.invalidate_cache_state();
         }
 
         let mut total_free_space = 0;
 
-        for page in self.get_pages(0) {
-            let state = self.get_page_state(page).await?;
-            let page_empty = self.is_page_empty(page, Some(state)).await?;
+        for page in self.inner.get_pages(0) {
+            let state = self.inner.get_page_state(page).await?;
+            let page_empty = self.inner.is_page_empty(page, Some(state)).await?;
 
             if state.is_closed() && !page_empty {
                 continue;
@@ -409,10 +414,9 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
 
             // See how much space we can find in the current page.
             let page_data_start_address =
-                calculate_page_address::<S>(self.flash_range.clone(), page) + S::WORD_SIZE as u32;
+                calculate_page_address::<S>(self.flash_range(), page) + S::WORD_SIZE as u32;
             let page_data_end_address =
-                calculate_page_end_address::<S>(self.flash_range.clone(), page)
-                    - S::WORD_SIZE as u32;
+                calculate_page_end_address::<S>(self.flash_range(), page) - S::WORD_SIZE as u32;
 
             if page_empty {
                 total_free_space += page_data_end_address - page_data_start_address;
@@ -420,16 +424,17 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
             }
 
             // Partial open page
-            let next_item_address = match self.cache.first_item_after_written(page) {
+            let next_item_address = match self.inner.cache.first_item_after_written(page) {
                 Some(next_item_address) => next_item_address,
                 None => {
                     ItemHeaderIter::new(
-                        self.cache
+                        self.inner
+                            .cache
                             .first_item_after_erased(page)
                             .unwrap_or(page_data_start_address),
                         page_data_end_address,
                     )
-                    .traverse(&mut self.flash, |_, _| true)
+                    .traverse(&mut self.inner.flash, |_, _| true)
                     .await?
                     .1
                 }
@@ -441,7 +446,11 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
                 // No data fits on this partial open page anymore.
                 // So if all data on this is already erased, then this page might as well be counted as empty.
                 // We can use [is_page_empty] and lie to to it so it checks the items.
-                if self.is_page_empty(page, Some(PageState::Closed)).await? {
+                if self
+                    .inner
+                    .is_page_empty(page, Some(PageState::Closed))
+                    .await?
+                {
                     total_free_space += page_data_end_address - page_data_start_address;
                     continue;
                 }
@@ -450,25 +459,28 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
             total_free_space += page_data_end_address - next_item_address;
         }
 
-        self.cache.unmark_dirty();
+        self.inner.cache.unmark_dirty();
         Ok(total_free_space)
     }
 
     async fn find_youngest_page(&mut self) -> Result<usize, Error<S::Error>> {
-        let last_used_page = self.find_first_page(0, PageState::PartialOpen).await?;
+        let last_used_page = self
+            .inner
+            .find_first_page(0, PageState::PartialOpen)
+            .await?;
 
         if let Some(last_used_page) = last_used_page {
             return Ok(last_used_page);
         }
 
         // We have no partial open page. Search for a closed page to anker ourselves to
-        let first_closed_page = self.find_first_page(0, PageState::Closed).await?;
+        let first_closed_page = self.inner.find_first_page(0, PageState::Closed).await?;
 
         let first_open_page = match first_closed_page {
             Some(anchor) => {
                 // We have at least one closed page
                 // The first one after is the page we need to use
-                self.find_first_page(anchor, PageState::Open).await?
+                self.inner.find_first_page(anchor, PageState::Open).await?
             }
             None => {
                 // No closed pages and no partial open pages, so all pages should be open
@@ -493,6 +505,7 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
 
         // The oldest page is the first non-open page after the youngest page
         let oldest_closed_page = self
+            .inner
             .find_first_page(youngest_page, PageState::Closed)
             .await?;
 
@@ -510,29 +523,70 @@ impl<S: NorFlash, C: CacheImpl> Storage<Queue, S, C> {
     /// that the state can be recovered. To at least make everything function again at the cost of losing the data,
     /// erase the flash range.
     async fn try_repair(&mut self) -> Result<(), Error<S::Error>> {
-        self.cache.invalidate_cache_state();
+        self.inner.cache.invalidate_cache_state();
 
-        self.try_general_repair().await?;
+        self.inner.try_general_repair().await?;
         Ok(())
     }
 
     async fn find_start_address(&mut self) -> Result<NextAddress, Error<S::Error>> {
-        if self.cache.is_dirty() {
-            self.cache.invalidate_cache_state();
+        if self.inner.cache.is_dirty() {
+            self.inner.cache.invalidate_cache_state();
         }
 
         let oldest_page = self.find_oldest_page().await?;
 
         // We start at the start of the oldest page
-        let current_address = match self.cache.first_item_after_erased(oldest_page) {
+        let current_address = match self.inner.cache.first_item_after_erased(oldest_page) {
             Some(address) => address,
             None => {
-                calculate_page_address::<S>(self.flash_range.clone(), oldest_page)
+                calculate_page_address::<S>(self.inner.flash_range.clone(), oldest_page)
                     + S::WORD_SIZE as u32
             }
         };
 
         Ok(NextAddress::Address(current_address))
+    }
+
+    /// Resets the flash in the entire given flash range.
+    ///
+    /// This is just a thin helper function as it just calls the flash's erase function.
+    pub fn erase_all(&mut self) -> impl Future<Output = Result<(), Error<S::Error>>> {
+        self.inner.erase_all()
+    }
+
+    /// Get the minimal overhead size per stored item for the given flash type.
+    ///
+    /// The associated data of each item is additionally padded to a full flash word size, but that's not part of this number.\
+    /// This means the full item length is `returned number + (data length).next_multiple_of(S::WORD_SIZE)`.
+    #[must_use]
+    pub const fn item_overhead_size() -> u32 {
+        GenericStorage::<S, C>::item_overhead_size()
+    }
+
+    /// Destroy the instance to get back the flash and the cache.
+    ///
+    /// The cache can be passed to a new storage instance, but only for the same flash region and if nothing has changed in flash.
+    pub fn destroy(self) -> (S, C) {
+        self.inner.destroy()
+    }
+
+    /// Get a reference to the flash. Mutating the memory is at your own risk.
+    pub const fn flash(&mut self) -> &mut S {
+        self.inner.flash()
+    }
+
+    /// Get the flash range being used
+    pub const fn flash_range(&self) -> Range<u32> {
+        self.inner.flash_range()
+    }
+
+    #[cfg(any(test, feature = "std"))]
+    /// Print all items in flash to the returned string
+    ///
+    /// This is meant as a debugging utility. The string format is not stable.
+    pub fn print_items(&mut self) -> impl Future<Output = String> {
+        self.inner.print_items()
     }
 }
 
@@ -545,7 +599,7 @@ enum PreviousItemStates {
 
 /// An iterator-like interface for peeking into data stored in flash with the option to pop it.
 pub struct QueueIterator<'s, S: NorFlash, C: CacheImpl> {
-    storage: &'s mut Storage<Queue, S, C>,
+    storage: &'s mut QueueStorage<S, C>,
     next_address: NextAddress,
     previous_item_states: PreviousItemStates,
     oldest_page: usize,
@@ -566,7 +620,7 @@ enum NextAddress {
 }
 
 impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
-    async fn new(storage: &'s mut Storage<Queue, S, C>) -> Result<Self, Error<S::Error>> {
+    async fn new(storage: &'s mut QueueStorage<S, C>) -> Result<Self, Error<S::Error>> {
         let start_address = run_with_auto_repair!(
             function = storage.find_start_address().await,
             repair = storage.try_repair().await?
@@ -574,9 +628,9 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
 
         let oldest_page = match start_address {
             NextAddress::Address(address) => {
-                calculate_page_index::<S>(storage.flash_range.clone(), address)
+                calculate_page_index::<S>(storage.inner.flash_range.clone(), address)
             }
-            NextAddress::PageAfter(index) => storage.next_page(index),
+            NextAddress::PageAfter(index) => storage.inner.next_page(index),
         };
 
         Ok(Self {
@@ -625,19 +679,24 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
         &mut self,
         data_buffer: &mut [u8],
     ) -> Result<Option<(ItemUnborrowed, u32)>, Error<S::Error>> {
-        if self.storage.cache.is_dirty() {
-            self.storage.cache.invalidate_cache_state();
+        if self.storage.inner.cache.is_dirty() {
+            self.storage.inner.cache.invalidate_cache_state();
         }
 
         loop {
             // Get the current page and address based on what was stored
             let (current_page, current_address) = match self.next_address {
                 NextAddress::PageAfter(previous_page) => {
-                    let next_page = self.storage.next_page(previous_page);
-                    if self.storage.get_page_state(next_page).await?.is_open()
+                    let next_page = self.storage.inner.next_page(previous_page);
+                    if self
+                        .storage
+                        .inner
+                        .get_page_state(next_page)
+                        .await?
+                        .is_open()
                         || next_page == self.oldest_page
                     {
-                        self.storage.cache.unmark_dirty();
+                        self.storage.inner.cache.unmark_dirty();
                         return Ok(None);
                     }
 
@@ -645,37 +704,41 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
                     // If we know all those items were popped, we can proactively open the previous page
                     // This is amazing for performance
                     if self.previous_item_states == PreviousItemStates::AllPopped {
-                        self.storage.open_page(previous_page).await?;
+                        self.storage.inner.open_page(previous_page).await?;
                     }
 
-                    let current_address =
-                        calculate_page_address::<S>(self.storage.flash_range.clone(), next_page)
-                            + S::WORD_SIZE as u32;
+                    let current_address = calculate_page_address::<S>(
+                        self.storage.inner.flash_range.clone(),
+                        next_page,
+                    ) + S::WORD_SIZE as u32;
 
                     self.next_address = NextAddress::Address(current_address);
 
                     (next_page, current_address)
                 }
                 NextAddress::Address(address) => (
-                    calculate_page_index::<S>(self.storage.flash_range.clone(), address),
+                    calculate_page_index::<S>(self.storage.inner.flash_range.clone(), address),
                     address,
                 ),
             };
 
-            let page_data_end_address =
-                calculate_page_end_address::<S>(self.storage.flash_range.clone(), current_page)
-                    - S::WORD_SIZE as u32;
+            let page_data_end_address = calculate_page_end_address::<S>(
+                self.storage.inner.flash_range.clone(),
+                current_page,
+            ) - S::WORD_SIZE as u32;
 
             // Search for the first item with data
             let mut it = ItemHeaderIter::new(current_address, page_data_end_address);
             // No need to worry about cache here since that has been dealt with at the creation of this iterator
             if let (Some(found_item_header), found_item_address) = it
-                .traverse(&mut self.storage.flash, |header, _| header.crc.is_none())
+                .traverse(&mut self.storage.inner.flash, |header, _| {
+                    header.crc.is_none()
+                })
                 .await?
             {
                 let maybe_item = found_item_header
                     .read_item(
-                        &mut self.storage.flash,
+                        &mut self.storage.inner.flash,
                         data_buffer,
                         found_item_address,
                         page_data_end_address,
@@ -712,7 +775,7 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
                         }
 
                         // Return the item we found
-                        self.storage.cache.unmark_dirty();
+                        self.storage.inner.cache.unmark_dirty();
                         return Ok(Some((item.unborrow(), found_item_address)));
                     }
                 }
@@ -767,14 +830,14 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'_, 'd, '_, S, CI> {
 
         header
             .erase_data(
-                &mut self.iter.storage.flash,
-                self.iter.storage.flash_range.clone(),
-                &mut self.iter.storage.cache,
+                &mut self.iter.storage.inner.flash,
+                self.iter.storage.inner.flash_range.clone(),
+                &mut self.iter.storage.inner.cache,
                 self.address,
             )
             .await?;
 
-        self.iter.storage.cache.unmark_dirty();
+        self.iter.storage.inner.cache.unmark_dirty();
         Ok(item_data_buffer)
     }
 
@@ -801,7 +864,7 @@ mod tests {
 
     #[test]
     async fn peek_and_overwrite_old_data() {
-        let mut storage = Storage::new_queue(
+        let mut storage = QueueStorage::new(
             MockFlashTiny::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x00..0x40) },
             NoCache::new(),
@@ -876,7 +939,7 @@ mod tests {
 
     #[test]
     async fn push_pop() {
-        let mut storage = Storage::new_queue(
+        let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x1000) },
             NoCache::new(),
@@ -909,7 +972,7 @@ mod tests {
 
     #[test]
     async fn push_pop_tiny() {
-        let mut storage = Storage::new_queue(
+        let mut storage = QueueStorage::new(
             MockFlashTiny::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x00..0x40) },
             NoCache::new(),
@@ -946,7 +1009,7 @@ mod tests {
     #[test]
     /// Same as [push_lots_then_pop_lots], except with added peeking and using the iterator style
     async fn push_peek_pop_many() {
-        let mut storage = Storage::new_queue(
+        let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x1000) },
             NoCache::new(),
@@ -964,18 +1027,18 @@ mod tests {
             println!("Loop index: {loop_index}");
 
             for i in 0..20 {
-                let start_snapshot = storage.flash.stats_snapshot();
+                let start_snapshot = storage.flash().stats_snapshot();
                 let data = vec![i as u8; 50];
                 storage.push(&data, false).await.unwrap();
                 pushes += 1;
-                push_stats += start_snapshot.compare_to(storage.flash.stats_snapshot());
+                push_stats += start_snapshot.compare_to(storage.flash().stats_snapshot());
             }
 
-            let start_snapshot = storage.flash.stats_snapshot();
+            let start_snapshot = storage.flash().stats_snapshot();
             let mut iterator = storage.iter().await.unwrap();
-            peek_stats += start_snapshot.compare_to(iterator.storage.flash.stats_snapshot());
+            peek_stats += start_snapshot.compare_to(iterator.storage.flash().stats_snapshot());
             for i in 0..5 {
-                let start_snapshot = iterator.storage.flash.stats_snapshot();
+                let start_snapshot = iterator.storage.flash().stats_snapshot();
                 let data = [i as u8; 50];
                 assert_eq!(
                     iterator
@@ -988,14 +1051,14 @@ mod tests {
                     "At {i}"
                 );
                 peeks += 1;
-                peek_stats += start_snapshot.compare_to(iterator.storage.flash.stats_snapshot());
+                peek_stats += start_snapshot.compare_to(iterator.storage.flash().stats_snapshot());
             }
 
-            let start_snapshot = storage.flash.stats_snapshot();
+            let start_snapshot = storage.flash().stats_snapshot();
             let mut iterator = storage.iter().await.unwrap();
-            pop_stats += start_snapshot.compare_to(iterator.storage.flash.stats_snapshot());
+            pop_stats += start_snapshot.compare_to(iterator.storage.flash().stats_snapshot());
             for i in 0..5 {
-                let start_snapshot = iterator.storage.flash.stats_snapshot();
+                let start_snapshot = iterator.storage.flash().stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
                     iterator
@@ -1010,22 +1073,22 @@ mod tests {
                     "At {i}"
                 );
                 pops += 1;
-                pop_stats += start_snapshot.compare_to(iterator.storage.flash.stats_snapshot());
+                pop_stats += start_snapshot.compare_to(iterator.storage.flash().stats_snapshot());
             }
 
             for i in 20..25 {
-                let start_snapshot = storage.flash.stats_snapshot();
+                let start_snapshot = storage.flash().stats_snapshot();
                 let data = vec![i as u8; 50];
                 storage.push(&data, false).await.unwrap();
                 pushes += 1;
-                push_stats += start_snapshot.compare_to(storage.flash.stats_snapshot());
+                push_stats += start_snapshot.compare_to(storage.flash().stats_snapshot());
             }
 
-            let start_snapshot = storage.flash.stats_snapshot();
+            let start_snapshot = storage.flash().stats_snapshot();
             let mut iterator = storage.iter().await.unwrap();
-            peek_stats += start_snapshot.compare_to(iterator.storage.flash.stats_snapshot());
+            peek_stats += start_snapshot.compare_to(iterator.storage.flash().stats_snapshot());
             for i in 5..25 {
-                let start_snapshot = iterator.storage.flash.stats_snapshot();
+                let start_snapshot = iterator.storage.flash().stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
                     iterator
@@ -1038,14 +1101,14 @@ mod tests {
                     "At {i}"
                 );
                 peeks += 1;
-                peek_stats += start_snapshot.compare_to(iterator.storage.flash.stats_snapshot());
+                peek_stats += start_snapshot.compare_to(iterator.storage.flash().stats_snapshot());
             }
 
-            let start_snapshot = storage.flash.stats_snapshot();
+            let start_snapshot = storage.flash().stats_snapshot();
             let mut iterator = storage.iter().await.unwrap();
-            pop_stats += start_snapshot.compare_to(iterator.storage.flash.stats_snapshot());
+            pop_stats += start_snapshot.compare_to(iterator.storage.flash().stats_snapshot());
             for i in 5..25 {
-                let start_snapshot = iterator.storage.flash.stats_snapshot();
+                let start_snapshot = iterator.storage.flash().stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
                     iterator
@@ -1060,7 +1123,7 @@ mod tests {
                     "At {i}"
                 );
                 pops += 1;
-                pop_stats += start_snapshot.compare_to(iterator.storage.flash.stats_snapshot());
+                pop_stats += start_snapshot.compare_to(iterator.storage.flash().stats_snapshot());
             }
         }
 
@@ -1099,7 +1162,7 @@ mod tests {
 
     #[test]
     async fn push_lots_then_pop_lots() {
-        let mut storage = Storage::new_queue(
+        let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x1000) },
             NoCache::new(),
@@ -1115,15 +1178,15 @@ mod tests {
             println!("Loop index: {loop_index}");
 
             for i in 0..20 {
-                let start_snapshot = storage.flash.stats_snapshot();
+                let start_snapshot = storage.flash().stats_snapshot();
                 let data = vec![i as u8; 50];
                 storage.push(&data, false).await.unwrap();
                 pushes += 1;
-                push_stats += start_snapshot.compare_to(storage.flash.stats_snapshot());
+                push_stats += start_snapshot.compare_to(storage.flash().stats_snapshot());
             }
 
             for i in 0..5 {
-                let start_snapshot = storage.flash.stats_snapshot();
+                let start_snapshot = storage.flash().stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
                     storage.pop(&mut data_buffer).await.unwrap().unwrap(),
@@ -1131,19 +1194,19 @@ mod tests {
                     "At {i}"
                 );
                 pops += 1;
-                pop_stats += start_snapshot.compare_to(storage.flash.stats_snapshot());
+                pop_stats += start_snapshot.compare_to(storage.flash().stats_snapshot());
             }
 
             for i in 20..25 {
-                let start_snapshot = storage.flash.stats_snapshot();
+                let start_snapshot = storage.flash().stats_snapshot();
                 let data = vec![i as u8; 50];
                 storage.push(&data, false).await.unwrap();
                 pushes += 1;
-                push_stats += start_snapshot.compare_to(storage.flash.stats_snapshot());
+                push_stats += start_snapshot.compare_to(storage.flash().stats_snapshot());
             }
 
             for i in 5..25 {
-                let start_snapshot = storage.flash.stats_snapshot();
+                let start_snapshot = storage.flash().stats_snapshot();
                 let data = vec![i as u8; 50];
                 assert_eq!(
                     storage.pop(&mut data_buffer).await.unwrap().unwrap(),
@@ -1151,7 +1214,7 @@ mod tests {
                     "At {i}"
                 );
                 pops += 1;
-                pop_stats += start_snapshot.compare_to(storage.flash.stats_snapshot());
+                pop_stats += start_snapshot.compare_to(storage.flash().stats_snapshot());
             }
         }
 
@@ -1180,7 +1243,7 @@ mod tests {
 
     #[test]
     async fn pop_with_empty_section() {
-        let mut storage = Storage::new_queue(
+        let mut storage = QueueStorage::new(
             MockFlashTiny::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x00..0x40) },
             NoCache::new(),
@@ -1207,15 +1270,15 @@ mod tests {
 
     #[test]
     async fn search_pages() {
-        let mut storage = Storage::new_queue(
+        let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x1000) },
             NoCache::new(),
         );
 
-        storage.close_page(0).await.unwrap();
-        storage.close_page(1).await.unwrap();
-        storage.partial_close_page(2).await.unwrap();
+        storage.inner.close_page(0).await.unwrap();
+        storage.inner.close_page(1).await.unwrap();
+        storage.inner.partial_close_page(2).await.unwrap();
 
         assert_eq!(storage.find_youngest_page().await.unwrap(), 2);
         assert_eq!(storage.find_oldest_page().await.unwrap(), 0);
@@ -1223,7 +1286,7 @@ mod tests {
 
     #[test]
     async fn store_too_big_item() {
-        let mut storage = Storage::new_queue(
+        let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x1000) },
             NoCache::new(),
@@ -1244,7 +1307,7 @@ mod tests {
 
     #[test]
     async fn push_on_single_page() {
-        let mut storage = Storage::new_queue(
+        let mut storage = QueueStorage::new(
             mock_flash::MockFlashBase::<1, 4, 256>::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x400) },
             NoCache::new(),

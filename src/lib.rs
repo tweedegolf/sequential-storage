@@ -35,26 +35,21 @@ pub mod mock_flash;
 /// Many flashes have 4-byte or 1-byte words.
 const MAX_WORD_SIZE: usize = 32;
 
-/// Typestate struct for maps
-pub struct Map<Key>(PhantomData<Key>);
-/// Typestate struct for queues
-pub struct Queue(());
-
-/// The object that manages the flash.
+/// The generic object that manages the flash.
+/// This is mostly an internal type.
 ///
-/// It has a couple of modes in which it can operate:
-/// - map: [`Self::new_map`]
-/// - queue: [`Self::new_queue`]
+/// To create real instances, call:
+/// - map: [`map::MapStorage::new`]
+/// - queue: [`queue::QueueStorage::new`]
 ///
 /// You can [`Self::destroy`] this type to get back the flash and the cache.
-pub struct Storage<T, S: NorFlash, C: CacheImpl> {
+struct GenericStorage<S: NorFlash, C: CacheImpl> {
     flash: S,
     flash_range: Range<u32>,
     cache: C,
-    _phantom: PhantomData<T>,
 }
 
-impl<T, S: NorFlash, C: CacheImpl> Storage<T, S, C> {
+impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     /// Resets the flash in the entire given flash range.
     ///
     /// This is just a thin helper function as it just calls the flash's erase function.
@@ -123,7 +118,7 @@ impl<T, S: NorFlash, C: CacheImpl> Storage<T, S, C> {
     fn get_pages(
         &self,
         starting_page_index: usize,
-    ) -> impl DoubleEndedIterator<Item = usize> + use<T, S, C> {
+    ) -> impl DoubleEndedIterator<Item = usize> + use<S, C> {
         let page_count = self.page_count();
         (0..page_count.get()).map(move |index| (index + starting_page_index) % page_count)
     }
@@ -365,8 +360,8 @@ impl<T, S: NorFlash, C: CacheImpl> Storage<T, S, C> {
     }
 
     /// Get the flash range being used
-    pub const fn flash_range(&self) -> &Range<u32> {
-        &self.flash_range
+    pub const fn flash_range(&self) -> Range<u32> {
+        self.flash_range.start..self.flash_range.end
     }
 }
 
@@ -532,6 +527,7 @@ where
             Error::Corrupted { .. } => write!(f, "Storage is corrupted"),
             #[cfg(feature = "_test")]
             Error::Corrupted { backtrace } => write!(f, "Storage is corrupted\n{backtrace}"),
+            #[cfg(not(feature = "_test"))]
             Error::LogicBug { .. } => write!(f, "Logic bug"),
             #[cfg(feature = "_test")]
             Error::LogicBug { backtrace } => write!(f, "Logic bug\n{backtrace}"),
@@ -662,11 +658,10 @@ mod tests {
             .await
             .unwrap();
 
-        let mut storage = Storage {
+        let mut storage = GenericStorage {
             flash: flash,
             flash_range: 0x000..0x400,
             cache: NoCache::new(),
-            _phantom: PhantomData::<()>,
         };
 
         assert_eq!(
