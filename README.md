@@ -42,10 +42,6 @@ This crate has no further guarantees other than being able to run on the latest 
 Increasing the MSRV is not seen as a breaking change semver-wise.\
 If you find yourself in trouble with this, feel free to open an issue.
 
-## Example
-
-See the `map` and `queue` module level documentation for examples.
-
 ## Features
 
 - Key value datastore (Map)
