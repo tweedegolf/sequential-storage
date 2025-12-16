@@ -4,7 +4,7 @@
 
 ## Unreleased
 
-## 7.0.0 - 15-12-25
+## 7.0.0 - 16-12-25
 
 - *Breaking:* Changed the API to revolve around new `xxStorage` structs. Instead of having to call a bunch of free-standing
   functions and passing all parameters in every time, you can now create a new storage using `MapStorage::new` or `QueueStorage::new`.
