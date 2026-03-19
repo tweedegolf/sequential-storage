@@ -13,8 +13,9 @@
 //!
 //! # Ordering
 //!
-//! FIFO ordering is preserved. [`pop`][BufferedQueue::pop] and [`peek`][BufferedQueue::peek]
-//! drain any pending RAM items to flash first, then read from flash.
+//! FIFO ordering is preserved: flash items are always older than RAM items.
+//! [`pop`][BufferedQueue::pop] and [`peek`][BufferedQueue::peek] read from flash first,
+//! falling back to the oldest RAM item if flash is empty.
 //!
 //! # Power-fail note
 //!
@@ -204,8 +205,8 @@ pub enum OverflowPolicy {
 /// // Slow path — called from a lower-priority task or on a timer:
 /// queue.drain_all(&mut scratch, false).await?;
 ///
-/// // Read path (drains any remaining RAM items to flash first, then pops):
-/// if let Some(data) = queue.pop(&mut buf, false).await? {
+/// // Read path — flash items are popped first, then RAM items:
+/// if let Some(data) = queue.pop(&mut buf).await? {
 ///     // process data
 /// }
 /// ```
@@ -240,7 +241,7 @@ impl<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_
     /// Drain one item from the RAM ring to flash.
     ///
     /// `scratch` is caller-provided temporary storage; it must be at least as large as the
-    /// oldest pending item (check [`oldest_ram_item_len`][Self::oldest_ram_item_len]).
+    /// oldest pending item.
     ///
     /// Returns `Ok(true)` if an item was committed to flash, `Ok(false)` if the ring was empty.
     pub async fn drain_one(
@@ -271,38 +272,49 @@ impl<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_
 
     /// Pop the oldest item from the queue.
     ///
-    /// Any pending RAM items are drained to flash first to preserve FIFO ordering.
-    /// `data_buffer` is used as both the drain scratch space and the pop output buffer;
-    /// size it for your largest expected item.
+    /// Flash items are always older than RAM items, so flash is read first. If flash is
+    /// empty the oldest item is taken directly from the RAM ring without writing to flash.
     pub async fn pop<'d>(
         &mut self,
         data_buffer: &'d mut [u8],
-        allow_overwrite: bool,
     ) -> Result<Option<&'d mut [u8]>, Error<S::Error>>
     where
         S: MultiwriteNorFlash,
     {
-        if !self.ram.is_empty() {
-            self.drain_all(data_buffer, allow_overwrite).await?;
+        // Reborrow so we can reuse data_buffer if flash returns None.
+        let flash_len = self.storage.pop(&mut *data_buffer).await?.map(|s| s.len());
+        if let Some(len) = flash_len {
+            return Ok(Some(&mut data_buffer[..len]));
         }
-        self.storage.pop(data_buffer).await
+        let len = self.ram.peek_into(data_buffer).map(|s| s.len());
+        if let Some(len) = len {
+            self.ram.discard_oldest();
+            return Ok(Some(&mut data_buffer[..len]));
+        }
+        Ok(None)
     }
 
     /// Peek at the oldest item without removing it.
     ///
-    /// Any pending RAM items are drained to flash first to preserve FIFO ordering.
+    /// Flash items are always older than RAM items, so flash is read first. If flash is
+    /// empty the oldest item is read directly from the RAM ring without writing to flash.
     pub async fn peek<'d>(
         &mut self,
         data_buffer: &'d mut [u8],
-        allow_overwrite: bool,
     ) -> Result<Option<&'d mut [u8]>, Error<S::Error>>
     where
         S: MultiwriteNorFlash,
     {
-        if !self.ram.is_empty() {
-            self.drain_all(data_buffer, allow_overwrite).await?;
+        // Reborrow so we can reuse data_buffer if flash returns None.
+        let flash_len = self.storage.peek(&mut *data_buffer).await?.map(|s| s.len());
+        if let Some(len) = flash_len {
+            return Ok(Some(&mut data_buffer[..len]));
         }
-        self.storage.peek(data_buffer).await
+        let len = self.ram.peek_into(data_buffer).map(|s| s.len());
+        if let Some(len) = len {
+            return Ok(Some(&mut data_buffer[..len]));
+        }
+        Ok(None)
     }
 
     /// Total capacity of the RAM ring in bytes (including 2-byte per-item length prefixes).
@@ -315,13 +327,6 @@ impl<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_
         RAM_BYTES - self.ram.bytes_used()
     }
 
-    /// Byte length of the oldest item in the RAM ring, or `None` if the ring is empty.
-    ///
-    /// Use this to size the `scratch` buffer passed to [`drain_one`][Self::drain_one].
-    pub fn oldest_ram_item_len(&self) -> Option<usize> {
-        self.ram.oldest_len()
-    }
-
     /// Number of items currently buffered in RAM (not yet committed to flash).
     pub fn ram_pending_count(&self) -> usize {
         self.ram.len()
@@ -330,11 +335,6 @@ impl<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_
     /// Bytes currently occupied in the RAM ring (including 2-byte per-item length prefixes).
     pub fn ram_bytes_used(&self) -> usize {
         self.ram.bytes_used()
-    }
-
-    /// Mutable reference to the underlying [`QueueStorage`] for direct access.
-    pub fn storage(&mut self) -> &mut QueueStorage<S, C> {
-        &mut self.storage
     }
 
     /// Consume this [`BufferedQueue`] and return the inner [`QueueStorage`].
@@ -615,11 +615,14 @@ mod tests {
         // 4 pages × 64 words × 4 bytes/word = 1 KiB flash
         type MockFlash = MockFlashBase<4, 4, 64>;
 
-        fn make_queue() -> BufferedQueue<MockFlash, NoCache, 256> {
+        fn make_storage() -> QueueStorage<MockFlash, NoCache> {
             let flash = MockFlash::new(crate::mock_flash::WriteCountCheck::Twice, None, true);
             let config = QueueConfig::new(MockFlash::FULL_FLASH_RANGE);
-            let storage = QueueStorage::new(flash, config, NoCache::new());
-            BufferedQueue::new(storage)
+            QueueStorage::new(flash, config, NoCache::new())
+        }
+
+        fn make_queue() -> BufferedQueue<MockFlash, NoCache, 256> {
+            BufferedQueue::new(make_storage())
         }
 
         #[test]
@@ -639,39 +642,41 @@ mod tests {
                 assert_eq!(queue.ram_pending_count(), 0);
 
                 // Pop from flash in FIFO order.
-                let data = queue.pop(&mut out, false).await.unwrap().unwrap();
+                let data = queue.pop(&mut out).await.unwrap().unwrap();
                 assert_eq!(data, b"hello");
 
-                let data = queue.pop(&mut out, false).await.unwrap().unwrap();
+                let data = queue.pop(&mut out).await.unwrap().unwrap();
                 assert_eq!(data, b"world");
 
-                assert!(queue.pop(&mut out, false).await.unwrap().is_none());
+                assert!(queue.pop(&mut out).await.unwrap().is_none());
             });
         }
 
         #[test]
         fn pop_reads_flash_before_ram() {
             block_on(async {
-                let mut queue = make_queue();
-                let mut out = [0u8; 64];
-
-                // Commit "first" to flash directly via an aligned stack buffer (the mock flash
-                // requires write buffers to be aligned to BYTES_PER_WORD = 4 bytes).
+                // Push "first" directly to flash, then wrap in a BufferedQueue with "second" in RAM.
+                // The mock flash requires write buffers aligned to BYTES_PER_WORD = 4 bytes.
+                let mut storage = make_storage();
                 let mut aligned = [0u8; 8];
                 aligned[..5].copy_from_slice(b"first");
-                queue.storage().push(&aligned[..5], false).await.unwrap();
+                storage.push(&aligned[..5], false).await.unwrap();
+
+                let mut queue: BufferedQueue<MockFlash, NoCache, 256> =
+                    BufferedQueue::new(storage);
+                let mut out = [0u8; 64];
 
                 // Buffer "second" in RAM only.
                 queue.enqueue(b"second", OverflowPolicy::Err).unwrap();
 
-                // pop drains RAM to flash first, then pops the oldest flash item ("first").
-                let data = queue.pop(&mut out, false).await.unwrap().unwrap();
+                // pop returns flash items (older) before RAM items.
+                let data = queue.pop(&mut out).await.unwrap().unwrap();
                 assert_eq!(data, b"first");
 
-                let data = queue.pop(&mut out, false).await.unwrap().unwrap();
+                let data = queue.pop(&mut out).await.unwrap().unwrap();
                 assert_eq!(data, b"second");
 
-                assert!(queue.pop(&mut out, false).await.unwrap().is_none());
+                assert!(queue.pop(&mut out).await.unwrap().is_none());
             });
         }
 
@@ -704,14 +709,13 @@ mod tests {
                 .unwrap();
 
             assert_eq!(queue.ram_pending_count(), 2);
-            assert_eq!(queue.oldest_ram_item_len(), Some(4));
 
             // Drain to flash and pop to verify FIFO order with "aaaa" evicted.
             block_on(async {
                 let mut out = [0u8; 64];
-                let data = queue.pop(&mut out, false).await.unwrap().unwrap();
+                let data = queue.pop(&mut out).await.unwrap().unwrap();
                 assert_eq!(data, b"bbbb");
-                let data = queue.pop(&mut out, false).await.unwrap().unwrap();
+                let data = queue.pop(&mut out).await.unwrap().unwrap();
                 assert_eq!(data, b"cccc");
             });
         }
