@@ -2,7 +2,7 @@
 
 pub mod buffer;
 pub use buffer::{BufferedQueue, OverflowPolicy, RamRing};
-#[cfg(feature = "critical-section")]
+#[cfg(feature = "embassy")]
 pub use buffer::SharedRamRing;
 
 use crate::item::{Item, ItemHeader, ItemHeaderIter};

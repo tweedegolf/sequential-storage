@@ -342,90 +342,10 @@ impl<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_
     }
 }
 
-// ── WakeSignal (critical-section + core::task) ───────────────────────────────
-
-/// A minimal async signal: set from any context (including ISR), awaited from task context.
-///
-/// Uses an atomic flag plus a stored [`Waker`][core::task::Waker]; no runtime dependency.
-#[cfg(feature = "critical-section")]
-struct WakeSignal {
-    pending: core::sync::atomic::AtomicBool,
-    waker: critical_section::Mutex<core::cell::RefCell<Option<core::task::Waker>>>,
-}
-
-#[cfg(feature = "critical-section")]
-impl WakeSignal {
-    const fn new() -> Self {
-        Self {
-            pending: core::sync::atomic::AtomicBool::new(false),
-            waker: critical_section::Mutex::new(core::cell::RefCell::new(None)),
-        }
-    }
-
-    /// Mark the signal as pending and wake any registered task.
-    /// Safe to call from interrupt context.
-    fn signal(&self) {
-        self.pending
-            .store(true, core::sync::atomic::Ordering::Release);
-        critical_section::with(|cs| {
-            if let Some(waker) = self.waker.borrow(cs).borrow_mut().take() {
-                waker.wake();
-            }
-        });
-    }
-
-    /// Future that resolves once [`signal`][Self::signal] has been called.
-    fn wait(&self) -> WakeSignalFuture<'_> {
-        WakeSignalFuture { signal: self }
-    }
-}
-
-#[cfg(feature = "critical-section")]
-struct WakeSignalFuture<'a> {
-    signal: &'a WakeSignal,
-}
-
-#[cfg(feature = "critical-section")]
-impl core::future::Future for WakeSignalFuture<'_> {
-    type Output = ();
-
-    fn poll(
-        self: core::pin::Pin<&mut Self>,
-        cx: &mut core::task::Context<'_>,
-    ) -> core::task::Poll<()> {
-        // Fast path: already signaled.
-        if self
-            .signal
-            .pending
-            .swap(false, core::sync::atomic::Ordering::Acquire)
-        {
-            return core::task::Poll::Ready(());
-        }
-
-        // Register the waker so signal() can wake us.
-        critical_section::with(|cs| {
-            *self.signal.waker.borrow(cs).borrow_mut() = Some(cx.waker().clone());
-        });
-
-        // Re-check: signal() may have run between the first load and waker registration.
-        if self
-            .signal
-            .pending
-            .swap(false, core::sync::atomic::Ordering::Acquire)
-        {
-            critical_section::with(|cs| {
-                self.signal.waker.borrow(cs).borrow_mut().take();
-            });
-            core::task::Poll::Ready(())
-        } else {
-            core::task::Poll::Pending
-        }
-    }
-}
-
 // ── SharedRamRing ─────────────────────────────────────────────────────────────
 
-/// An ISR-safe RAM ring buffer that wakes a drain task on enqueue.
+/// An ISR-safe RAM ring buffer with an Embassy [`Signal`][embassy_sync::signal::Signal] that
+/// wakes a drain task on enqueue.
 ///
 /// Designed to be placed in a `static`:
 /// ```ignore
@@ -446,6 +366,7 @@ impl core::future::Future for WakeSignalFuture<'_> {
 /// RING.enqueue(&sensor_sample, OverflowPolicy::DiscardOldest);
 ///
 /// // In the drain task:
+/// #[embassy_executor::task]
 /// async fn drain(mut storage: QueueStorage<Flash, NoCache>) {
 ///     let mut scratch = [0u8; 64];
 ///     loop {
@@ -453,19 +374,25 @@ impl core::future::Future for WakeSignalFuture<'_> {
 ///     }
 /// }
 /// ```
-#[cfg(feature = "critical-section")]
+#[cfg(feature = "embassy")]
 pub struct SharedRamRing<const N: usize> {
-    ring: critical_section::Mutex<core::cell::RefCell<RamRing<N>>>,
-    signal: WakeSignal,
+    ring: embassy_sync::blocking_mutex::Mutex<
+        embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+        core::cell::RefCell<RamRing<N>>,
+    >,
+    signal: embassy_sync::signal::Signal<
+        embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+        (),
+    >,
 }
 
-#[cfg(feature = "critical-section")]
+#[cfg(feature = "embassy")]
 impl<const N: usize> SharedRamRing<N> {
     /// Create a new `SharedRamRing`. Suitable for `static` initialisation.
     pub const fn new() -> Self {
         Self {
-            ring: critical_section::Mutex::new(core::cell::RefCell::new(RamRing::new())),
-            signal: WakeSignal::new(),
+            ring: embassy_sync::blocking_mutex::Mutex::new(core::cell::RefCell::new(RamRing::new())),
+            signal: embassy_sync::signal::Signal::new(),
         }
     }
 
@@ -473,17 +400,15 @@ impl<const N: usize> SharedRamRing<N> {
 
     /// Enqueue an item. Safe to call from any context, including interrupt handlers.
     ///
-    /// Wakes the drain task after a successful enqueue.
+    /// Signals the drain task after a successful enqueue so it wakes without polling.
     /// Returns `Err(())` if the ring is full and `policy` is [`OverflowPolicy::Err`].
     pub fn enqueue(&self, data: &[u8], policy: OverflowPolicy) -> Result<(), ()> {
-        let result = critical_section::with(|cs| match policy {
-            OverflowPolicy::Err => self.ring.borrow(cs).borrow_mut().push(data),
-            OverflowPolicy::DiscardOldest => {
-                self.ring.borrow(cs).borrow_mut().push_overwriting(data)
-            }
+        let result = self.ring.lock(|r| match policy {
+            OverflowPolicy::Err => r.borrow_mut().push(data),
+            OverflowPolicy::DiscardOldest => r.borrow_mut().push_overwriting(data),
         });
         if result.is_ok() {
-            self.signal.signal();
+            self.signal.signal(());
         }
         result
     }
@@ -508,14 +433,12 @@ impl<const N: usize> SharedRamRing<N> {
         scratch: &mut [u8],
         allow_overwrite: bool,
     ) -> Result<bool, Error<S::Error>> {
-        let len = critical_section::with(|cs| {
-            self.ring.borrow(cs).borrow().peek_into(scratch).map(|s| s.len())
-        });
+        let len = self.ring.lock(|r| r.borrow().peek_into(scratch).map(|s| s.len()));
         let Some(len) = len else {
             return Ok(false);
         };
         storage.push(&scratch[..len], allow_overwrite).await?;
-        critical_section::with(|cs| self.ring.borrow(cs).borrow_mut().discard_oldest());
+        self.ring.lock(|r| r.borrow_mut().discard_oldest());
         Ok(true)
     }
 
@@ -585,21 +508,21 @@ impl<const N: usize> SharedRamRing<N> {
 
     /// Free bytes remaining in the ring.
     pub fn ram_free_bytes(&self) -> usize {
-        critical_section::with(|cs| N - self.ring.borrow(cs).borrow().bytes_used())
+        self.ring.lock(|r| N - r.borrow().bytes_used())
     }
 
     /// Number of items currently buffered in the ring.
     pub fn ram_pending_count(&self) -> usize {
-        critical_section::with(|cs| self.ring.borrow(cs).borrow().len())
+        self.ring.lock(|r| r.borrow().len())
     }
 
     /// Byte length of the oldest item in the ring, or `None` if the ring is empty.
     pub fn oldest_ram_item_len(&self) -> Option<usize> {
-        critical_section::with(|cs| self.ring.borrow(cs).borrow().oldest_len())
+        self.ring.lock(|r| r.borrow().oldest_len())
     }
 }
 
-#[cfg(feature = "critical-section")]
+#[cfg(feature = "embassy")]
 impl<const N: usize> Default for SharedRamRing<N> {
     fn default() -> Self {
         Self::new()
