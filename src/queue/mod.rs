@@ -1,5 +1,10 @@
 //! Implementation of the queue logic.
 
+pub mod buffer;
+pub use buffer::{BufferedQueue, OverflowPolicy, RamRing};
+#[cfg(feature = "embassy")]
+pub use buffer::SharedRamRing;
+
 use crate::item::{Item, ItemHeader, ItemHeaderIter};
 
 use self::{cache::CacheImpl, item::ItemUnborrowed};
