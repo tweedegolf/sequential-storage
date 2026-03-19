@@ -24,14 +24,14 @@
 //!
 //! # Embassy / ISR-safe use
 //!
-//! Enable the `embassy` feature for [`SharedRamRing`], which wraps the ring in a critical-section
-//! mutex so it can be enqueued to from an interrupt handler, and provides an Embassy
-//! [`Signal`][embassy_sync::signal::Signal] to wake a drain task the moment data arrives.
+//! Enable the `shared-ram-ring` feature for [`SharedRamRing`], which wraps the ring in a
+//! critical-section mutex so it can be enqueued to from an interrupt handler, and signals
+//! a drain task the moment data arrives.
 
 use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
 
-use crate::{Error, cache::CacheImpl};
 use super::QueueStorage;
+use crate::{Error, cache::CacheImpl};
 
 // ── RamRing ──────────────────────────────────────────────────────────────────
 
@@ -88,6 +88,7 @@ impl<const N: usize> RamRing<N> {
     /// Push an item into the ring.
     ///
     /// Returns `Err(())` if there is insufficient space or the item exceeds `u16::MAX` bytes.
+    #[allow(clippy::result_unit_err)]
     pub fn push(&mut self, data: &[u8]) -> Result<(), ()> {
         let len = data.len();
         if len > u16::MAX as usize {
@@ -104,6 +105,7 @@ impl<const N: usize> RamRing<N> {
     /// Push an item, discarding the oldest item(s) to make room if necessary.
     ///
     /// Returns `Err(())` only if the item is larger than the entire ring capacity.
+    #[allow(clippy::result_unit_err)]
     pub fn push_overwriting(&mut self, data: &[u8]) -> Result<(), ()> {
         let len = data.len();
         if len > u16::MAX as usize {
@@ -208,7 +210,7 @@ pub enum OverflowPolicy {
 /// }
 /// ```
 ///
-/// For ISR-safe use, enable the `embassy` feature and use [`SharedRamRing`] instead.
+/// For ISR-safe use, enable the `shared-ram-ring` feature and use [`SharedRamRing`] instead.
 pub struct BufferedQueue<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> {
     storage: QueueStorage<S, C>,
     ram: RamRing<RAM_BYTES>,
@@ -227,6 +229,7 @@ impl<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_
     ///
     /// This is **synchronous and never touches flash**. When the ring is full the behaviour
     /// is determined by `policy`: return `Err(())` or evict the oldest item.
+    #[allow(clippy::result_unit_err)]
     pub fn enqueue(&mut self, data: &[u8], policy: OverflowPolicy) -> Result<(), ()> {
         match policy {
             OverflowPolicy::Err => self.ram.push(data),
@@ -374,7 +377,7 @@ impl<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_
 ///     }
 /// }
 /// ```
-#[cfg(feature = "embassy")]
+#[cfg(feature = "shared-ram-ring")]
 pub struct SharedRamRing<const N: usize> {
     ring: embassy_sync::blocking_mutex::Mutex<
         embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
@@ -386,12 +389,14 @@ pub struct SharedRamRing<const N: usize> {
     >,
 }
 
-#[cfg(feature = "embassy")]
+#[cfg(feature = "shared-ram-ring")]
 impl<const N: usize> SharedRamRing<N> {
     /// Create a new `SharedRamRing`. Suitable for `static` initialisation.
     pub const fn new() -> Self {
         Self {
-            ring: embassy_sync::blocking_mutex::Mutex::new(core::cell::RefCell::new(RamRing::new())),
+            ring: embassy_sync::blocking_mutex::Mutex::new(
+                core::cell::RefCell::new(RamRing::new()),
+            ),
             signal: embassy_sync::signal::Signal::new(),
         }
     }
@@ -402,6 +407,7 @@ impl<const N: usize> SharedRamRing<N> {
     ///
     /// Signals the drain task after a successful enqueue so it wakes without polling.
     /// Returns `Err(())` if the ring is full and `policy` is [`OverflowPolicy::Err`].
+    #[allow(clippy::result_unit_err)]
     pub fn enqueue(&self, data: &[u8], policy: OverflowPolicy) -> Result<(), ()> {
         let result = self.ring.lock(|r| match policy {
             OverflowPolicy::Err => r.borrow_mut().push(data),
@@ -433,7 +439,9 @@ impl<const N: usize> SharedRamRing<N> {
         scratch: &mut [u8],
         allow_overwrite: bool,
     ) -> Result<bool, Error<S::Error>> {
-        let len = self.ring.lock(|r| r.borrow().peek_into(scratch).map(|s| s.len()));
+        let len = self
+            .ring
+            .lock(|r| r.borrow().peek_into(scratch).map(|s| s.len()));
         let Some(len) = len else {
             return Ok(false);
         };
@@ -481,7 +489,8 @@ impl<const N: usize> SharedRamRing<N> {
         allow_overwrite: bool,
     ) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
         if self.ram_pending_count() > 0 {
-            self.drain_all(storage, data_buffer, allow_overwrite).await?;
+            self.drain_all(storage, data_buffer, allow_overwrite)
+                .await?;
         }
         storage.pop(data_buffer).await
     }
@@ -494,7 +503,8 @@ impl<const N: usize> SharedRamRing<N> {
         allow_overwrite: bool,
     ) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
         if self.ram_pending_count() > 0 {
-            self.drain_all(storage, data_buffer, allow_overwrite).await?;
+            self.drain_all(storage, data_buffer, allow_overwrite)
+                .await?;
         }
         storage.peek(data_buffer).await
     }
@@ -522,7 +532,7 @@ impl<const N: usize> SharedRamRing<N> {
     }
 }
 
-#[cfg(feature = "embassy")]
+#[cfg(feature = "shared-ram-ring")]
 impl<const N: usize> Default for SharedRamRing<N> {
     fn default() -> Self {
         Self::new()
@@ -597,20 +607,16 @@ mod tests {
     #[cfg(feature = "_test")]
     mod integration {
         use super::*;
-        use futures::executor::block_on;
         use crate::cache::NoCache;
         use crate::mock_flash::MockFlashBase;
         use crate::queue::{QueueConfig, QueueStorage};
+        use futures::executor::block_on;
 
         // 4 pages × 64 words × 4 bytes/word = 1 KiB flash
         type MockFlash = MockFlashBase<4, 4, 64>;
 
         fn make_queue() -> BufferedQueue<MockFlash, NoCache, 256> {
-            let flash = MockFlash::new(
-                crate::mock_flash::WriteCountCheck::Twice,
-                None,
-                true,
-            );
+            let flash = MockFlash::new(crate::mock_flash::WriteCountCheck::Twice, None, true);
             let config = QueueConfig::new(MockFlash::FULL_FLASH_RANGE);
             let storage = QueueStorage::new(flash, config, NoCache::new());
             BufferedQueue::new(storage)
@@ -673,11 +679,7 @@ mod tests {
         fn overflow_policy_err() {
             // 16-byte ring: each item costs 2 (prefix) + data.len() bytes.
             // 3 items of 4 bytes = 3*6 = 18 bytes — won't all fit.
-            let flash = MockFlash::new(
-                crate::mock_flash::WriteCountCheck::Twice,
-                None,
-                true,
-            );
+            let flash = MockFlash::new(crate::mock_flash::WriteCountCheck::Twice, None, true);
             let config = QueueConfig::new(MockFlash::FULL_FLASH_RANGE);
             let storage = QueueStorage::new(flash, config, NoCache::new());
             let mut queue: BufferedQueue<MockFlash, NoCache, 16> = BufferedQueue::new(storage);
@@ -689,11 +691,7 @@ mod tests {
 
         #[test]
         fn overflow_policy_discard_oldest() {
-            let flash = MockFlash::new(
-                crate::mock_flash::WriteCountCheck::Twice,
-                None,
-                true,
-            );
+            let flash = MockFlash::new(crate::mock_flash::WriteCountCheck::Twice, None, true);
             let config = QueueConfig::new(MockFlash::FULL_FLASH_RANGE);
             let storage = QueueStorage::new(flash, config, NoCache::new());
             let mut queue: BufferedQueue<MockFlash, NoCache, 16> = BufferedQueue::new(storage);
@@ -701,7 +699,9 @@ mod tests {
             queue.enqueue(b"aaaa", OverflowPolicy::Err).unwrap();
             queue.enqueue(b"bbbb", OverflowPolicy::Err).unwrap();
             // "aaaa" is evicted to make room for "cccc"
-            queue.enqueue(b"cccc", OverflowPolicy::DiscardOldest).unwrap();
+            queue
+                .enqueue(b"cccc", OverflowPolicy::DiscardOldest)
+                .unwrap();
 
             assert_eq!(queue.ram_pending_count(), 2);
             assert_eq!(queue.oldest_ram_item_len(), Some(4));
@@ -719,7 +719,10 @@ mod tests {
         #[test]
         fn capacity_helpers() {
             let queue = make_queue();
-            assert_eq!(BufferedQueue::<MockFlash, NoCache, 256>::ram_capacity_bytes(), 256);
+            assert_eq!(
+                BufferedQueue::<MockFlash, NoCache, 256>::ram_capacity_bytes(),
+                256
+            );
             assert_eq!(queue.ram_free_bytes(), 256);
             assert_eq!(queue.ram_bytes_used(), 0);
         }

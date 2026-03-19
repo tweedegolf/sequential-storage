@@ -44,8 +44,8 @@ heapless = ["dep:heapless"]
 heapless-09 = ["dep:heapless-09"]
 # Enable convenience implementations for postcard
 postcard = ["dep:postcard", "dep:serde"]
-# Enable ISR-safe SharedRamRing with Embassy Signal wakeup for the drain task
-embassy = ["dep:embassy-sync"]
+# Enable ISR-safe SharedRamRing (backed by embassy-sync, may change in future)
+shared-ram-ring = ["dep:embassy-sync"]
 
 # Internal feature. Do not use. Anything here is semver exempt.
 _test = ["dep:futures", "dep:approx", "std", "arrayvec", "alloc", "heapless"]
