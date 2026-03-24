@@ -662,8 +662,7 @@ mod tests {
                 aligned[..5].copy_from_slice(b"first");
                 storage.push(&aligned[..5], false).await.unwrap();
 
-                let mut queue: BufferedQueue<MockFlash, NoCache, 256> =
-                    BufferedQueue::new(storage);
+                let mut queue: BufferedQueue<MockFlash, NoCache, 256> = BufferedQueue::new(storage);
                 let mut out = [0u8; 64];
 
                 // Buffer "second" in RAM only.
