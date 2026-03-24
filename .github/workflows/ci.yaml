@@ -20,14 +20,14 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --features arrayvec,heapless,heapless-09,alloc
+      - run: cargo test --features arrayvec,heapless,heapless-09,alloc,postcard,shared-ram-ring
 
   clippy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo clippy --features arrayvec,heapless,heapless-09,alloc -- -D warnings
+      - run: cargo clippy --features arrayvec,heapless,heapless-09,alloc,postcard,shared-ram-ring -- -D warnings
 
   fuzz:
     runs-on: ubuntu-latest

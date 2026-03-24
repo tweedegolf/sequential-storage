@@ -40,7 +40,7 @@ use crate::{Error, cache::CacheImpl};
 ///
 /// Each item is stored as a 2-byte little-endian length prefix followed by the item's bytes,
 /// so the usable capacity for data is `N - 2` bytes per item at most.
-pub struct RamRing<const N: usize> {
+struct RamRing<const N: usize> {
     buf: [u8; N],
     read_pos: usize,
     write_pos: usize,
@@ -67,6 +67,7 @@ impl<const N: usize> RamRing<N> {
     }
 
     /// Returns `true` if the ring contains no items.
+    #[allow(unused)]
     pub fn is_empty(&self) -> bool {
         self.item_count == 0
     }

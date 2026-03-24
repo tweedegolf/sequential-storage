@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+## 7.2.0 - 24-03-26
+
+- Added a RAM-buffered queue
+
 ## 7.1.0 - 19-01-26
 
 - Added `postcard` feature, disabled by default. This enables the `PostcardValue` trait.

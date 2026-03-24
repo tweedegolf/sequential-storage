@@ -1,9 +1,6 @@
 //! Implementation of the queue logic.
 
-pub mod buffer;
-#[cfg(feature = "shared-ram-ring")]
-pub use buffer::SharedRamRing;
-pub use buffer::{BufferedQueue, OverflowPolicy, RamRing};
+pub mod buffered;
 
 use crate::item::{Item, ItemHeader, ItemHeaderIter};
 
