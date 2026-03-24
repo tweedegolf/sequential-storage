@@ -1,5 +1,10 @@
 //! Implementation of the queue logic.
 
+pub mod buffer;
+#[cfg(feature = "shared-ram-ring")]
+pub use buffer::SharedRamRing;
+pub use buffer::{BufferedQueue, OverflowPolicy, RamRing};
+
 use crate::item::{Item, ItemHeader, ItemHeaderIter};
 
 use self::{cache::CacheImpl, item::ItemUnborrowed};
@@ -66,7 +71,7 @@ impl<S: NorFlash> QueueConfig<S> {
 /// # use futures::executor::block_on;
 /// # type Flash = MockFlashBase<10, 1, 4096>;
 /// # mod mock_flash {
-/// #   include!("mock_flash.rs");
+/// #   include!("../mock_flash.rs");
 /// # }
 /// #
 /// # fn init_flash() -> Flash {
