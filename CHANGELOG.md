@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- *Breaking:* Added `Send + Sync` supertraits to `Value` so that futures returned by `MapStorage` methods are `Send`
+
 ## 7.2.0 - 24-03-26
 
 - Added a RAM-buffered queue

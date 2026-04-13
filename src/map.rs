@@ -1143,7 +1143,7 @@ impl Key for () {
 ///
 /// It also carries a lifetime so that zero-copy deserialization is supported.
 /// Zero-copy serialization is not supported due to technical restrictions.
-pub trait Value<'a> {
+pub trait Value<'a>: Send + Sync {
     /// Serialize the value into the given buffer. If everything went ok, this function returns the length
     /// of the used part of the buffer.
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError>;
@@ -1887,4 +1887,20 @@ mod tests {
             Ok((Foo(123), 1))
         );
     }
+
+    /// Compile-time check: the future returned by `store_item` must be `Send`
+    /// when all components are `Send`. See https://github.com/tweedegolf/sequential-storage/issues/125
+    fn _assert_store_item_future_is_send() {
+        fn assert_send<T: Send>(_t: T) {}
+
+        let mut storage = MapStorage::<u8, _, _>::new(
+            MockFlashBig::default(),
+            MapConfig::new(0x000..0x1000),
+            NoCache::new(),
+        );
+        let mut data_buffer = AlignedBuf([0; 128]);
+
+        assert_send(storage.store_item(&mut data_buffer, &0u8, &42u32));
+    }
+
 }
