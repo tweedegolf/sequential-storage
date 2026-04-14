@@ -1238,7 +1238,7 @@ pub trait PostcardValue<'a>: Serialize + Deserialize<'a> {}
 #[cfg(feature = "postcard")]
 impl<'a, T> Value<'a> for T
 where
-    T: PostcardValue<'a>,
+    T: PostcardValue<'a> + Send + Sync,
 {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         Ok(postcard::to_slice(self, buffer).map(|s| s.len())?)
@@ -1888,9 +1888,9 @@ mod tests {
         );
     }
 
-    /// Compile-time check: the future returned by `store_item` must be `Send`
-    /// when all components are `Send`. See https://github.com/tweedegolf/sequential-storage/issues/125
-    fn _assert_store_item_future_is_send() {
+    /// Compile-time check: the futures returned by `store_item` and `fetch_item`
+    /// must be `Send`. See https://github.com/tweedegolf/sequential-storage/issues/125
+    fn _assert_public_futures_are_send() {
         fn assert_send<T: Send>(_t: T) {}
 
         let mut storage = MapStorage::<u8, _, _>::new(
@@ -1901,6 +1901,6 @@ mod tests {
         let mut data_buffer = AlignedBuf([0; 128]);
 
         assert_send(storage.store_item(&mut data_buffer, &0u8, &42u32));
+        assert_send(storage.fetch_item::<u32>(&mut data_buffer, &0u8));
     }
-
 }
