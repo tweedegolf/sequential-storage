@@ -139,6 +139,157 @@ pub struct MapStorage<K: Key, S: NorFlash, C: KeyCacheImpl<K>> {
     _phantom: PhantomData<K>,
 }
 
+/// Shared body for [`MapStorage::store_item_inner`] and [`MapStorage::store_item_inner_local`].
+/// The two differ only in the trait-object bound on `item` (Send+Sync vs bare); the logic
+/// is identical, so it lives here as a macro to keep a single source of truth.
+macro_rules! store_item_body {
+    ($this:ident, $data_buffer:ident, $key:ident, $item:ident) => {{
+        if $this.inner.cache.is_dirty() {
+            $this.inner.cache.invalidate_cache_state();
+        }
+
+        let mut recursion_level = 0;
+        loop {
+            // Check if we're in an infinite recursion which happens when we don't have enough space to store the new data
+            if recursion_level == $this.inner.get_pages(0).count() {
+                $this.inner.cache.unmark_dirty();
+                return Err(Error::FullStorage);
+            }
+
+            // If there is a partial open page, we try to write in that first if there is enough space
+            let next_page_to_use = if let Some(partial_open_page) = $this
+                .inner
+                .find_first_page(0, PageState::PartialOpen)
+                .await?
+            {
+                // We found a partial open page, but at this point it's relatively cheap to do a consistency check
+                if !$this
+                    .inner
+                    .get_page_state($this.inner.next_page(partial_open_page))
+                    .await?
+                    .is_open()
+                {
+                    // Oh oh, the next page which serves as the buffer page is not open. We're corrupt.
+                    // This likely happened because of an unexpected shutdown during data migration from the
+                    // then new buffer page to the new partial open page.
+                    // The repair function should be able to repair this.
+                    return Err(Error::Corrupted {
+                        #[cfg(feature = "_test")]
+                        backtrace: std::backtrace::Backtrace::capture(),
+                    });
+                }
+
+                // We've got to search where the free space is since the page starts with items present already
+
+                let page_data_start_address =
+                    calculate_page_address::<S>($this.flash_range(), partial_open_page)
+                        + S::WORD_SIZE as u32;
+                let page_data_end_address =
+                    calculate_page_end_address::<S>($this.flash_range(), partial_open_page)
+                        - S::WORD_SIZE as u32;
+
+                let key_len = $key.serialize_into($data_buffer)?;
+                let item_data_length = key_len
+                    + $item
+                        .serialize_into(&mut $data_buffer[key_len..])
+                        .map_err(Error::SerializationError)?;
+
+                if item_data_length > u16::MAX as usize
+                    || item_data_length
+                        > calculate_page_size::<S>()
+                            .saturating_sub(ItemHeader::data_address::<S>(0) as usize)
+                {
+                    $this.inner.cache.unmark_dirty();
+                    return Err(Error::ItemTooBig);
+                }
+
+                let free_spot_address = $this
+                    .inner
+                    .find_next_free_item_spot(
+                        page_data_start_address,
+                        page_data_end_address,
+                        item_data_length as u32,
+                    )
+                    .await?;
+
+                if let Some(free_spot_address) = free_spot_address {
+                    $this
+                        .inner
+                        .cache
+                        .notice_key_location($key, free_spot_address, true);
+                    Item::write_new(
+                        &mut $this.inner.flash,
+                        $this.inner.flash_range.clone(),
+                        &mut $this.inner.cache,
+                        free_spot_address,
+                        &$data_buffer[..item_data_length],
+                    )
+                    .await?;
+
+                    $this.inner.cache.unmark_dirty();
+                    return Ok(());
+                }
+
+                // The item doesn't fit here, so we need to close this page and move to the next
+                $this.inner.close_page(partial_open_page).await?;
+                Some($this.inner.next_page(partial_open_page))
+            } else {
+                None
+            };
+
+            // If we get here, there was no partial page found or the partial page has now been closed because the item didn't fit.
+            // If there was a partial page, then we need to look at the next page. It's supposed to be open since it was the previous empty buffer page.
+            // The new buffer page has to be emptied if it was closed.
+            // If there was no partial page, we just use the first open page.
+
+            if let Some(next_page_to_use) = next_page_to_use {
+                let next_page_state = $this.inner.get_page_state(next_page_to_use).await?;
+
+                if !next_page_state.is_open() {
+                    // What was the previous buffer page was not open...
+                    return Err(Error::Corrupted {
+                        #[cfg(feature = "_test")]
+                        backtrace: std::backtrace::Backtrace::capture(),
+                    });
+                }
+
+                // Since we're gonna write data here, let's already partially close the page
+                // This could be done after moving the data, but this is more robust in the
+                // face of shutdowns and cancellations
+                $this.inner.partial_close_page(next_page_to_use).await?;
+
+                let next_buffer_page = $this.inner.next_page(next_page_to_use);
+                let next_buffer_page_state =
+                    $this.inner.get_page_state(next_buffer_page).await?;
+
+                if !next_buffer_page_state.is_open() {
+                    $this
+                        .migrate_items($data_buffer, next_buffer_page, next_page_to_use)
+                        .await?;
+                }
+            } else {
+                // There's no partial open page, so we just gotta turn the first open page into a partial open one
+                let Some(first_open_page) =
+                    $this.inner.find_first_page(0, PageState::Open).await?
+                else {
+                    // Uh oh, no open pages.
+                    // Something has gone wrong.
+                    // We should never get here.
+                    return Err(Error::Corrupted {
+                        #[cfg(feature = "_test")]
+                        backtrace: std::backtrace::Backtrace::capture(),
+                    });
+                };
+
+                $this.inner.partial_close_page(first_open_page).await?;
+            }
+
+            // If we get here, we just freshly partially closed a new page, so the next loop iteration should succeed.
+            recursion_level += 1;
+        }
+    }};
+}
+
 impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
     /// Create a new map instance
     ///
@@ -369,6 +520,10 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
     ///
     /// The data buffer must be long enough to hold the longest serialized data of your [Key] + [Value] types combined,
     /// rounded up to flash word alignment.
+    ///
+    /// The returned future is `Send`, so this method is usable from multi-threaded executors.
+    /// If your `Value` type isn't `Send + Sync` (e.g. it contains a [`core::cell::RefCell`]),
+    /// use [`Self::store_item_local`] instead.
     pub async fn store_item<'d, V: Value<'d> + Send + Sync>(
         &mut self,
         data_buffer: &mut [u8],
@@ -381,151 +536,39 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
         )
     }
 
+    /// Like [`Self::store_item`], but works with `Value` types that aren't `Send + Sync`.
+    ///
+    /// The returned future is **not** `Send`, so this method is only suitable for
+    /// single-threaded executors. In exchange, `V` may contain non-`Sync` interior
+    /// mutability (e.g. [`core::cell::RefCell`]).
+    pub async fn store_item_local<'d, V: Value<'d>>(
+        &mut self,
+        data_buffer: &mut [u8],
+        key: &K,
+        item: &V,
+    ) -> Result<(), Error<S::Error>> {
+        run_with_auto_repair!(
+            function = self.store_item_inner_local(data_buffer, key, item).await,
+            repair = self.try_repair(data_buffer).await?
+        )
+    }
+
     async fn store_item_inner(
         &mut self,
         data_buffer: &mut [u8],
         key: &K,
         item: &(dyn Value<'_> + Send + Sync),
     ) -> Result<(), Error<S::Error>> {
-        if self.inner.cache.is_dirty() {
-            self.inner.cache.invalidate_cache_state();
-        }
+        store_item_body!(self, data_buffer, key, item)
+    }
 
-        let mut recursion_level = 0;
-        loop {
-            // Check if we're in an infinite recursion which happens when we don't have enough space to store the new data
-            if recursion_level == self.inner.get_pages(0).count() {
-                self.inner.cache.unmark_dirty();
-                return Err(Error::FullStorage);
-            }
-
-            // If there is a partial open page, we try to write in that first if there is enough space
-            let next_page_to_use = if let Some(partial_open_page) = self
-                .inner
-                .find_first_page(0, PageState::PartialOpen)
-                .await?
-            {
-                // We found a partial open page, but at this point it's relatively cheap to do a consistency check
-                if !self
-                    .inner
-                    .get_page_state(self.inner.next_page(partial_open_page))
-                    .await?
-                    .is_open()
-                {
-                    // Oh oh, the next page which serves as the buffer page is not open. We're corrupt.
-                    // This likely happened because of an unexpected shutdown during data migration from the
-                    // then new buffer page to the new partial open page.
-                    // The repair function should be able to repair this.
-                    return Err(Error::Corrupted {
-                        #[cfg(feature = "_test")]
-                        backtrace: std::backtrace::Backtrace::capture(),
-                    });
-                }
-
-                // We've got to search where the free space is since the page starts with items present already
-
-                let page_data_start_address =
-                    calculate_page_address::<S>(self.flash_range(), partial_open_page)
-                        + S::WORD_SIZE as u32;
-                let page_data_end_address =
-                    calculate_page_end_address::<S>(self.flash_range(), partial_open_page)
-                        - S::WORD_SIZE as u32;
-
-                let key_len = key.serialize_into(data_buffer)?;
-                let item_data_length = key_len
-                    + item
-                        .serialize_into(&mut data_buffer[key_len..])
-                        .map_err(Error::SerializationError)?;
-
-                if item_data_length > u16::MAX as usize
-                    || item_data_length
-                        > calculate_page_size::<S>()
-                            .saturating_sub(ItemHeader::data_address::<S>(0) as usize)
-                {
-                    self.inner.cache.unmark_dirty();
-                    return Err(Error::ItemTooBig);
-                }
-
-                let free_spot_address = self
-                    .inner
-                    .find_next_free_item_spot(
-                        page_data_start_address,
-                        page_data_end_address,
-                        item_data_length as u32,
-                    )
-                    .await?;
-
-                if let Some(free_spot_address) = free_spot_address {
-                    self.inner
-                        .cache
-                        .notice_key_location(key, free_spot_address, true);
-                    Item::write_new(
-                        &mut self.inner.flash,
-                        self.inner.flash_range.clone(),
-                        &mut self.inner.cache,
-                        free_spot_address,
-                        &data_buffer[..item_data_length],
-                    )
-                    .await?;
-
-                    self.inner.cache.unmark_dirty();
-                    return Ok(());
-                }
-
-                // The item doesn't fit here, so we need to close this page and move to the next
-                self.inner.close_page(partial_open_page).await?;
-                Some(self.inner.next_page(partial_open_page))
-            } else {
-                None
-            };
-
-            // If we get here, there was no partial page found or the partial page has now been closed because the item didn't fit.
-            // If there was a partial page, then we need to look at the next page. It's supposed to be open since it was the previous empty buffer page.
-            // The new buffer page has to be emptied if it was closed.
-            // If there was no partial page, we just use the first open page.
-
-            if let Some(next_page_to_use) = next_page_to_use {
-                let next_page_state = self.inner.get_page_state(next_page_to_use).await?;
-
-                if !next_page_state.is_open() {
-                    // What was the previous buffer page was not open...
-                    return Err(Error::Corrupted {
-                        #[cfg(feature = "_test")]
-                        backtrace: std::backtrace::Backtrace::capture(),
-                    });
-                }
-
-                // Since we're gonna write data here, let's already partially close the page
-                // This could be done after moving the data, but this is more robust in the
-                // face of shutdowns and cancellations
-                self.inner.partial_close_page(next_page_to_use).await?;
-
-                let next_buffer_page = self.inner.next_page(next_page_to_use);
-                let next_buffer_page_state = self.inner.get_page_state(next_buffer_page).await?;
-
-                if !next_buffer_page_state.is_open() {
-                    self.migrate_items(data_buffer, next_buffer_page, next_page_to_use)
-                        .await?;
-                }
-            } else {
-                // There's no partial open page, so we just gotta turn the first open page into a partial open one
-                let Some(first_open_page) = self.inner.find_first_page(0, PageState::Open).await?
-                else {
-                    // Uh oh, no open pages.
-                    // Something has gone wrong.
-                    // We should never get here.
-                    return Err(Error::Corrupted {
-                        #[cfg(feature = "_test")]
-                        backtrace: std::backtrace::Backtrace::capture(),
-                    });
-                };
-
-                self.inner.partial_close_page(first_open_page).await?;
-            }
-
-            // If we get here, we just freshly partially closed a new page, so the next loop iteration should succeed.
-            recursion_level += 1;
-        }
+    async fn store_item_inner_local(
+        &mut self,
+        data_buffer: &mut [u8],
+        key: &K,
+        item: &dyn Value<'_>,
+    ) -> Result<(), Error<S::Error>> {
+        store_item_body!(self, data_buffer, key, item)
     }
 
     /// Fully remove an item. Additional calls to fetch with the same key will return None until
@@ -1902,5 +1945,33 @@ mod tests {
 
         assert_send(storage.store_item(&mut data_buffer, &0u8, &42u32));
         assert_send(storage.fetch_item::<u32>(&mut data_buffer, &0u8));
+    }
+
+    /// Compile-time check: `store_item_local` accepts non-`Sync` value types
+    /// (like those containing a `RefCell`). The returned future is intentionally
+    /// not required to be `Send`.
+    fn _assert_store_item_local_accepts_non_sync() {
+        use core::cell::RefCell;
+
+        struct NotSync(RefCell<u32>);
+        impl<'a> Value<'a> for NotSync {
+            fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
+                <u32 as Value>::serialize_into(&self.0.borrow(), buffer)
+            }
+            fn deserialize_from(buffer: &'a [u8]) -> Result<(Self, usize), SerializationError> {
+                let (v, n) = <u32 as Value>::deserialize_from(buffer)?;
+                Ok((NotSync(RefCell::new(v)), n))
+            }
+        }
+
+        let mut storage = MapStorage::<u8, _, _>::new(
+            MockFlashBig::default(),
+            MapConfig::new(0x000..0x1000),
+            NoCache::new(),
+        );
+        let mut data_buffer = AlignedBuf([0; 128]);
+        let item = NotSync(RefCell::new(42));
+
+        let _fut = storage.store_item_local(&mut data_buffer, &0u8, &item);
     }
 }
