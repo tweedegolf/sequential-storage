@@ -369,7 +369,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
     ///
     /// The data buffer must be long enough to hold the longest serialized data of your [Key] + [Value] types combined,
     /// rounded up to flash word alignment.
-    pub async fn store_item<'d, V: Value<'d>>(
+    pub async fn store_item<'d, V: Value<'d> + Send + Sync>(
         &mut self,
         data_buffer: &mut [u8],
         key: &K,
@@ -385,7 +385,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
         &mut self,
         data_buffer: &mut [u8],
         key: &K,
-        item: &dyn Value<'_>,
+        item: &(dyn Value<'_> + Send + Sync),
     ) -> Result<(), Error<S::Error>> {
         if self.inner.cache.is_dirty() {
             self.inner.cache.invalidate_cache_state();
@@ -1143,7 +1143,7 @@ impl Key for () {
 ///
 /// It also carries a lifetime so that zero-copy deserialization is supported.
 /// Zero-copy serialization is not supported due to technical restrictions.
-pub trait Value<'a>: Send + Sync {
+pub trait Value<'a> {
     /// Serialize the value into the given buffer. If everything went ok, this function returns the length
     /// of the used part of the buffer.
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError>;
@@ -1238,7 +1238,7 @@ pub trait PostcardValue<'a>: Serialize + Deserialize<'a> {}
 #[cfg(feature = "postcard")]
 impl<'a, T> Value<'a> for T
 where
-    T: PostcardValue<'a> + Send + Sync,
+    T: PostcardValue<'a>,
 {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         Ok(postcard::to_slice(self, buffer).map(|s| s.len())?)
