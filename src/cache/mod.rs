@@ -39,16 +39,14 @@ pub(crate) trait Invalidate {
     fn invalidate_cache_state(&mut self);
 }
 
-pub(crate) trait PrivateCacheImpl: Invalidate {
-    type PSC<'a>: PageStatesCache
-    where
-        Self: 'a;
+pub(crate) trait PrivateCacheImpl: Invalidate + Debug {
+    type PSC: PageStatesCache;
     type PPC<'a>: PagePointersCache
     where
         Self: 'a;
 
     fn dirt_tracker<R>(&mut self, f: impl FnOnce(&mut DirtTracker) -> R) -> Option<R>;
-    fn page_states(&mut self) -> Self::PSC<'_>;
+    fn page_states(&mut self) -> &mut Self::PSC;
     fn page_pointers(&mut self) -> Self::PPC<'_>;
 
     /// True if the cache might be inconsistent
@@ -182,13 +180,17 @@ impl DirtTracker {
 /// You could simply pass `&mut NoCache::new()` every time.
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct NoCache;
+pub struct NoCache {
+    page_states: UncachedPageStates,
+}
 
 impl NoCache {
     /// Construct a new instance
     #[must_use]
     pub const fn new() -> Self {
-        Self
+        Self {
+            page_states: UncachedPageStates,
+        }
     }
 }
 
@@ -199,10 +201,7 @@ impl Default for NoCache {
 }
 
 impl PrivateCacheImpl for NoCache {
-    type PSC<'a>
-        = UncachedPageStates
-    where
-        Self: 'a;
+    type PSC = UncachedPageStates;
     type PPC<'a>
         = UncachedPagePointers
     where
@@ -213,8 +212,8 @@ impl PrivateCacheImpl for NoCache {
         None
     }
 
-    fn page_states(&mut self) -> Self::PSC<'_> {
-        UncachedPageStates
+    fn page_states(&mut self) -> &mut Self::PSC {
+        &mut self.page_states
     }
 
     fn page_pointers(&mut self) -> Self::PPC<'_> {

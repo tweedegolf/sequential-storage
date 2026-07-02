@@ -52,7 +52,7 @@ shared-ram-ring = ["dep:embassy-sync"]
 _test = ["dep:futures", "dep:approx", "std", "arrayvec", "alloc", "heapless"]
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing_repro)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
 
 [package.metadata.docs.rs]
 features = ["arrayvec", "std", "heapless", "heapless-09", "postcard"]

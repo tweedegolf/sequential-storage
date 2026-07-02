@@ -98,15 +98,15 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
 
     let mut rng = rand_pcg::Pcg32::seed_from_u64(ops.seed);
 
-    #[cfg(fuzzing_repro)]
+    #[cfg(fuzzing)]
     eprintln!("\n=== START ===\n");
 
     for op in ops.ops.into_iter() {
-        #[cfg(fuzzing_repro)]
+        #[cfg(fuzzing)]
         eprintln!("{}", block_on(flash.print_items()));
-        #[cfg(fuzzing_repro)]
+        #[cfg(fuzzing)]
         eprintln!("{:?}", cache);
-        #[cfg(fuzzing_repro)]
+        #[cfg(fuzzing)]
         eprintln!("=== OP: {op:?} ===");
 
         match op.clone() {
@@ -123,14 +123,14 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                     }) => {
                         match block_on(storage.fetch_item::<&[u8]>(&mut buf.0, &key)) {
                             Ok(Some(check_item)) if check_item == value => {
-                                #[cfg(fuzzing_repro)]
+                                #[cfg(fuzzing)]
                                 eprintln!("Early shutoff when storing key: {key}, value: {value:?}! (but it still stored fully). Originated from:\n{_backtrace:#}");
                                 // Even though we got a shutoff, it still managed to store well
                                 map.insert(key, value);
                             }
                             _ => {
                                 // Could not fetch the item we stored...
-                                #[cfg(fuzzing_repro)]
+                                #[cfg(fuzzing)]
                                 eprintln!("Early shutoff when storing key: {key}, value: {value:?}! Originated from:\n{_backtrace:#}");
                             }
                         }
@@ -138,7 +138,7 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                     Err(Error::Corrupted {
                         backtrace: _backtrace,
                     }) => {
-                        #[cfg(fuzzing_repro)]
+                        #[cfg(fuzzing)]
                         eprintln!("Corrupted when storing! Originated from:\n{_backtrace:#}");
                         panic!("Corrupted!");
                     }
@@ -159,13 +159,13 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                     value: MockFlashError::EarlyShutoff(_, _),
                     backtrace: _backtrace,
                 }) => {
-                    #[cfg(fuzzing_repro)]
+                    #[cfg(fuzzing)]
                     eprintln!("Early shutoff when fetching! Originated from:\n{_backtrace:#}");
                 }
                 Err(Error::Corrupted {
                     backtrace: _backtrace,
                 }) => {
-                    #[cfg(fuzzing_repro)]
+                    #[cfg(fuzzing)]
                     eprintln!("Corrupted when fetching! Originated from:\n{_backtrace:#}");
                     panic!("Corrupted!");
                 }
@@ -183,12 +183,12 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                         // Check if the item is still there. It might or it might not and either is fine
                         match block_on(storage.fetch_item::<&[u8]>(&mut buf.0, &key)) {
                             Ok(Some(_)) => {
-                                #[cfg(fuzzing_repro)]
+                                #[cfg(fuzzing)]
                                 eprintln!("Early shutoff when removing item {key}! Originated from:\n{_backtrace:#}");
                             }
                             _ => {
                                 // Could not fetch the item we stored...
-                                #[cfg(fuzzing_repro)]
+                                #[cfg(fuzzing)]
                                 eprintln!("Early shutoff when removing item {key}! (but it still removed fully). Originated from:\n{_backtrace:#}");
                                 // Even though we got a shutoff, it still managed to store well
                                 map.remove(&key);
@@ -198,7 +198,7 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                     Err(Error::Corrupted {
                         backtrace: _backtrace,
                     }) => {
-                        #[cfg(fuzzing_repro)]
+                        #[cfg(fuzzing)]
                         eprintln!("Corrupted when removing! Originated from:\n{_backtrace:#}");
                         panic!("Corrupted!");
                     }
@@ -218,12 +218,12 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                             // Check if the item is still there. It might or it might not and either is fine
                             match block_on(storage.fetch_item::<&[u8]>(&mut buf.0, &key)) {
                                 Ok(Some(_)) => {
-                                    #[cfg(fuzzing_repro)]
+                                    #[cfg(fuzzing)]
                                     eprintln!("Early shutoff when removing item {key}! Originated from:\n{_backtrace:#}");
                                 }
                                 _ => {
                                     // Could not fetch the item we stored...
-                                    #[cfg(fuzzing_repro)]
+                                    #[cfg(fuzzing)]
                                     eprintln!("Early shutoff when removing item {key}! (but it still removed fully). Originated from:\n{_backtrace:#}");
                                     // Even though we got a shutoff, it still managed to store well
                                     map.remove(&key);
@@ -234,7 +234,7 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                     Err(Error::Corrupted {
                         backtrace: _backtrace,
                     }) => {
-                        #[cfg(fuzzing_repro)]
+                        #[cfg(fuzzing)]
                         eprintln!("Corrupted when removing! Originated from:\n{_backtrace:#}");
                         panic!("Corrupted!");
                     }
@@ -255,7 +255,7 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                         Err(Error::Corrupted {
                             backtrace: _backtrace,
                         }) => {
-                            #[cfg(fuzzing_repro)]
+                            #[cfg(fuzzing)]
                             eprintln!("Corrupted when removing! Originated from:\n{_backtrace:#}");
                             panic!("Corrupted!");
                         }

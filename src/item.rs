@@ -229,11 +229,22 @@ impl ItemHeader {
     }
 }
 
-#[derive(Debug)]
 pub struct Item<'d> {
     pub header: ItemHeader,
     /// The part of the data buffer that contains the item only
     item_data_buffer: &'d mut [u8],
+}
+
+impl<'d> core::fmt::Debug for Item<'d> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Item")
+            .field("header", &self.header)
+            .field(
+                "item_data_buffer",
+                &&self.item_data_buffer[..self.header.length as usize],
+            )
+            .finish()
+    }
 }
 
 impl<'d> Item<'d> {
@@ -529,7 +540,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     ) -> Result<bool, Error<S::Error>> {
         let page_state = match page_state {
             Some(page_state) => page_state,
-            None => self.get_page_state(page_index).await?,
+            None => self.get_page_state_cached(page_index).await?,
         };
 
         match page_state {

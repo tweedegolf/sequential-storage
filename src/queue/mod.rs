@@ -193,7 +193,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
         if next_address.is_none() {
             // No cap left on this page, move to the next page
             let next_page = self.inner.next_page(current_page);
-            let next_page_state = self.inner.get_page_state(next_page).await?;
+            let next_page_state = self.inner.get_page_state_cached(next_page).await?;
             let single_page = next_page == current_page;
 
             match (next_page_state, single_page) {
@@ -335,7 +335,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
 
         // Check if we have space on the next page
         let next_page = self.inner.next_page(current_page);
-        match self.inner.get_page_state(next_page).await? {
+        match self.inner.get_page_state_cached(next_page).await? {
             state @ PageState::Closed => {
                 if self.inner.is_page_empty(next_page, Some(state)).await? {
                     self.inner.cache.unmark_dirty();
@@ -407,7 +407,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
         let mut total_free_space = 0;
 
         for page in self.inner.get_pages(0) {
-            let state = self.inner.get_page_state(page).await?;
+            let state = self.inner.get_page_state_cached(page).await?;
             let page_empty = self.inner.is_page_empty(page, Some(state)).await?;
 
             if state.is_closed() && !page_empty {
@@ -583,7 +583,13 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
         self.inner.flash_range()
     }
 
-    #[cfg(any(test, feature = "std"))]
+    /// Get a reference to the cache
+    #[cfg(any(test, fuzzing))]
+    pub const fn cache(&mut self) -> &mut C {
+        &mut self.inner.cache
+    }
+
+    #[cfg(any(test, feature = "std", fuzzing))]
     /// Print all items in flash to the returned string
     ///
     /// This is meant as a debugging utility. The string format is not stable.
@@ -693,7 +699,7 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
                     if self
                         .storage
                         .inner
-                        .get_page_state(next_page)
+                        .get_page_state_cached(next_page)
                         .await?
                         .is_open()
                         || next_page == self.oldest_page

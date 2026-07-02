@@ -101,7 +101,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
                 *bytes_until_shutoff = next;
                 Ok(())
             } else {
-                #[cfg(fuzzing_repro)]
+                #[cfg(fuzzing)]
                 eprintln!("!!! Shutoff at {address} while doing '{operation:?}' !!!");
                 self.bytes_until_shutoff = None;
                 Err(MockFlashError::EarlyShutoff(address, operation))

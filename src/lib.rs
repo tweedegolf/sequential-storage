@@ -1,4 +1,4 @@
-#![cfg_attr(not(any(test, doctest, feature = "std")), no_std)]
+#![cfg_attr(not(any(test, doctest, feature = "std", fuzzing)), no_std)]
 #![warn(missing_docs)]
 #![doc = include_str!("../README.md")]
 #![allow(clippy::cast_possible_truncation)]
@@ -78,14 +78,14 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         // the page is likely half-erased. Fix for that is to re-erase again to hopefully finish the job.
         for page_index in self.get_pages(0) {
             if matches!(
-                self.get_page_state(page_index).await,
+                self.get_page_state_cached(page_index).await,
                 Err(Error::Corrupted { .. })
             ) {
                 self.open_page(page_index).await?;
             }
         }
 
-        #[cfg(fuzzing_repro)]
+        #[cfg(fuzzing)]
         eprintln!("General repair has been called");
 
         Ok(())
@@ -100,7 +100,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         page_state: PageState,
     ) -> Result<Option<usize>, Error<S::Error>> {
         for page_index in self.get_pages(starting_page_index) {
-            if page_state == self.get_page_state(page_index).await? {
+            if page_state == self.get_page_state_cached(page_index).await? {
                 return Ok(Some(page_index));
             }
         }
@@ -140,11 +140,34 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     }
 
     /// Get the state of the page located at the given index
-    async fn get_page_state(&mut self, page_index: usize) -> Result<PageState, Error<S::Error>> {
+    async fn get_page_state_cached(
+        &mut self,
+        page_index: usize,
+    ) -> Result<PageState, Error<S::Error>> {
         if let Some(cached_page_state) = self.cache.get_page_state(page_index) {
+            if cfg!(any(fuzzing, test)) {
+                let discovered_state = self.get_page_state(page_index).await?;
+                assert_eq!(
+                    cached_page_state, discovered_state,
+                    "At page index: {page_index}, cache: {:?}",
+                    self.cache
+                );
+            }
+
             return Ok(cached_page_state);
         }
 
+        let discovered_state = self.get_page_state(page_index).await?;
+
+        // Not dirty because nothing changed and nothing can be inconsistent
+        self.cache
+            .notice_page_state(page_index, discovered_state, false);
+
+        Ok(discovered_state)
+    }
+
+    /// Get the state of the page located at the given index
+    async fn get_page_state(&mut self, page_index: usize) -> Result<PageState, Error<S::Error>> {
         let page_address = calculate_page_address::<S>(self.flash_range.clone(), page_index);
         /// We only care about the data in the first byte to aid shutdown/cancellation.
         /// But we also don't want it to be too too definitive because we want to survive the occasional bitflip.
@@ -195,10 +218,6 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
             }
             (false, false) => PageState::Open,
         };
-
-        // Not dirty because nothing changed and nothing can be inconsistent
-        self.cache
-            .notice_page_state(page_index, discovered_state, false);
 
         Ok(discovered_state)
     }
@@ -257,7 +276,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         &mut self,
         page_index: usize,
     ) -> Result<PageState, Error<S::Error>> {
-        let current_state = self.get_page_state(page_index).await?;
+        let current_state = self.get_page_state_cached(page_index).await?;
 
         if current_state != PageState::Open {
             return Ok(current_state);
@@ -285,7 +304,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         Ok(new_state)
     }
 
-    #[cfg(any(test, feature = "std"))]
+    #[cfg(any(test, feature = "std", fuzzing))]
     /// Print all items in flash to the returned string
     pub async fn print_items(&mut self) -> String {
         use crate::NorFlashExt;
@@ -304,7 +323,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
                 match self.get_page_state(page_index).await {
                     Ok(value) => format!("{value:?}"),
                     Err(e) => format!("Error ({e:?})"),
-                }
+                },
             )
             .unwrap();
             let page_data_start =
@@ -594,7 +613,7 @@ macro_rules! run_with_auto_repair {
                     backtrace: _backtrace,
                 ..
             }) => {
-                #[cfg(all(feature = "_test", fuzzing_repro))]
+                #[cfg(all(feature = "_test", fuzzing))]
                 eprintln!(
                     "### Encountered curruption! Repairing now. Originated from:\n{_backtrace:#}"
                 );
