@@ -9,7 +9,7 @@ use crate::{
         PrivateCacheImpl, PrivateKeyCacheImpl,
         key_pointers::{CachedKeyPointers, KeyPointersCache, UncachedKeyPointers},
         page_pointers::{CachedPagePointers, UncachedPagePointers},
-        page_states::CachedPageStates,
+        page_states::CalculatedCachedPageStates,
     },
     map::Key,
 };
@@ -29,7 +29,7 @@ use crate::{
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct HeapPageStateCache {
     dirt_tracker: DirtTracker,
-    page_states: CachedPageStates,
+    page_states: CalculatedCachedPageStates,
 }
 
 impl HeapPageStateCache {
@@ -37,13 +37,13 @@ impl HeapPageStateCache {
     pub fn new(page_count: usize) -> Self {
         Self {
             dirt_tracker: DirtTracker::new(),
-            page_states: CachedPageStates::new(page_count),
+            page_states: CalculatedCachedPageStates::new(page_count),
         }
     }
 }
 
 impl PrivateCacheImpl for HeapPageStateCache {
-    type PSC = CachedPageStates;
+    type PSC = CalculatedCachedPageStates;
     type PPC<'a>
         = UncachedPagePointers
     where
@@ -99,7 +99,7 @@ impl<KEY: Key> PrivateKeyCacheImpl<KEY> for HeapPageStateCache {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct HeapPagePointerCache {
     dirt_tracker: DirtTracker,
-    page_states: CachedPageStates,
+    page_states: CalculatedCachedPageStates,
     after_erased_pointers: Vec<Option<NonZeroU32>>,
     after_written_pointers: Vec<Option<NonZeroU32>>,
 }
@@ -109,7 +109,7 @@ impl HeapPagePointerCache {
     pub fn new(page_count: usize) -> Self {
         Self {
             dirt_tracker: DirtTracker::new(),
-            page_states: CachedPageStates::new(page_count),
+            page_states: CalculatedCachedPageStates::new(page_count),
             after_erased_pointers: vec![None; page_count],
             after_written_pointers: vec![None; page_count],
         }
@@ -117,7 +117,7 @@ impl HeapPagePointerCache {
 }
 
 impl PrivateCacheImpl for HeapPagePointerCache {
-    type PSC = CachedPageStates;
+    type PSC = CalculatedCachedPageStates;
     type PPC<'a>
         = CachedPagePointers<'a>
     where
@@ -181,7 +181,7 @@ impl<KEY: Key> PrivateKeyCacheImpl<KEY> for HeapPagePointerCache {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct HeapKeyPointerCache<KEY: Key> {
     dirt_tracker: DirtTracker,
-    page_states: CachedPageStates,
+    page_states: CalculatedCachedPageStates,
     after_erased_pointers: Vec<Option<NonZeroU32>>,
     after_written_pointers: Vec<Option<NonZeroU32>>,
     key_pointers: Vec<Option<(KEY, NonZeroU32)>>,
@@ -192,7 +192,7 @@ impl<KEY: Key> HeapKeyPointerCache<KEY> {
     pub fn new(page_count: usize, keys: usize) -> Self {
         Self {
             dirt_tracker: DirtTracker::new(),
-            page_states: CachedPageStates::new(page_count),
+            page_states: CalculatedCachedPageStates::new(page_count),
             after_erased_pointers: vec![None; page_count],
             after_written_pointers: vec![None; page_count],
             key_pointers: vec![const { None }; keys],
@@ -201,7 +201,7 @@ impl<KEY: Key> HeapKeyPointerCache<KEY> {
 }
 
 impl<KEY: Key> PrivateCacheImpl for HeapKeyPointerCache<KEY> {
-    type PSC = CachedPageStates;
+    type PSC = CalculatedCachedPageStates;
     type PPC<'a>
         = CachedPagePointers<'a>
     where

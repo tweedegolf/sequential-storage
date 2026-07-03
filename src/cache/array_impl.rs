@@ -6,7 +6,7 @@ use crate::{
         PrivateCacheImpl, PrivateKeyCacheImpl,
         key_pointers::{CachedKeyPointers, KeyPointersCache, UncachedKeyPointers},
         page_pointers::{CachedPagePointers, UncachedPagePointers},
-        page_states::CachedPageStates,
+        page_states::CalculatedCachedPageStates,
     },
     map::Key,
 };
@@ -26,7 +26,7 @@ use crate::{
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct PageStateCache<const PAGE_COUNT: usize> {
     dirt_tracker: DirtTracker,
-    page_states: CachedPageStates,
+    page_states: CalculatedCachedPageStates,
 }
 
 impl<const PAGE_COUNT: usize> PageStateCache<PAGE_COUNT> {
@@ -35,7 +35,7 @@ impl<const PAGE_COUNT: usize> PageStateCache<PAGE_COUNT> {
     pub const fn new() -> Self {
         Self {
             dirt_tracker: DirtTracker::new(),
-            page_states: CachedPageStates::new(PAGE_COUNT),
+            page_states: CalculatedCachedPageStates::new(PAGE_COUNT),
         }
     }
 }
@@ -47,7 +47,7 @@ impl<const PAGE_COUNT: usize> Default for PageStateCache<PAGE_COUNT> {
 }
 
 impl<const PAGE_COUNT: usize> PrivateCacheImpl for PageStateCache<PAGE_COUNT> {
-    type PSC = CachedPageStates;
+    type PSC = CalculatedCachedPageStates;
     type PPC<'a>
         = UncachedPagePointers
     where
@@ -103,7 +103,7 @@ impl<KEY: Key, const PAGE_COUNT: usize> PrivateKeyCacheImpl<KEY> for PageStateCa
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct PagePointerCache<const PAGE_COUNT: usize> {
     dirt_tracker: DirtTracker,
-    page_states: CachedPageStates,
+    page_states: CalculatedCachedPageStates,
     after_erased_pointers: [Option<NonZeroU32>; PAGE_COUNT],
     after_written_pointers: [Option<NonZeroU32>; PAGE_COUNT],
 }
@@ -114,7 +114,7 @@ impl<const PAGE_COUNT: usize> PagePointerCache<PAGE_COUNT> {
     pub const fn new() -> Self {
         Self {
             dirt_tracker: DirtTracker::new(),
-            page_states: CachedPageStates::new(PAGE_COUNT),
+            page_states: CalculatedCachedPageStates::new(PAGE_COUNT),
             after_erased_pointers: [None; PAGE_COUNT],
             after_written_pointers: [None; PAGE_COUNT],
         }
@@ -128,7 +128,7 @@ impl<const PAGE_COUNT: usize> Default for PagePointerCache<PAGE_COUNT> {
 }
 
 impl<const PAGE_COUNT: usize> PrivateCacheImpl for PagePointerCache<PAGE_COUNT> {
-    type PSC = CachedPageStates;
+    type PSC = CalculatedCachedPageStates;
     type PPC<'a>
         = CachedPagePointers<'a>
     where
@@ -192,7 +192,7 @@ impl<KEY: Key, const PAGE_COUNT: usize> PrivateKeyCacheImpl<KEY> for PagePointer
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct KeyPointerCache<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> {
     dirt_tracker: DirtTracker,
-    page_states: CachedPageStates,
+    page_states: CalculatedCachedPageStates,
     after_erased_pointers: [Option<NonZeroU32>; PAGE_COUNT],
     after_written_pointers: [Option<NonZeroU32>; PAGE_COUNT],
     key_pointers: [Option<(KEY, NonZeroU32)>; KEYS],
@@ -204,7 +204,7 @@ impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> KeyPointerCache<PAGE_
     pub const fn new() -> Self {
         Self {
             dirt_tracker: DirtTracker::new(),
-            page_states: CachedPageStates::new(PAGE_COUNT),
+            page_states: CalculatedCachedPageStates::new(PAGE_COUNT),
             after_erased_pointers: [None; PAGE_COUNT],
             after_written_pointers: [None; PAGE_COUNT],
             key_pointers: [const { None }; KEYS],
@@ -223,7 +223,7 @@ impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> Default
 impl<const PAGE_COUNT: usize, KEY: Key, const KEYS: usize> PrivateCacheImpl
     for KeyPointerCache<PAGE_COUNT, KEY, KEYS>
 {
-    type PSC = CachedPageStates;
+    type PSC = CalculatedCachedPageStates;
     type PPC<'a>
         = CachedPagePointers<'a>
     where

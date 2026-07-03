@@ -9,27 +9,27 @@ pub(crate) trait PageStatesCache: Debug {
 }
 
 /// A cache that uses knowledge about the typical layout of pages.
-/// 
+///
 /// The layout is always as follows:
 /// - X amount of closed pages
 /// - Y amount of open pages
 ///   - Y is at least 1
 ///   - One of the open pages may be partial
 /// - If a partial page is present, it's in the order ascending page indices: `Closed` -> `Partial` -> `Open`
-/// 
+///
 /// The idea is to have an anchor which is the first open page (which may be the partial open page)
 /// and then keep track of the amount of open pages in front and the amount of closed pages behind it.
-/// 
+///
 /// We know the anchor for sure when we find a partial open page.
 /// Since sequential-storage always iterates going forward and never back, we can have a 'guessed' anchor
 /// if we find the first open page. But when the anchor is guessed, we need to be a little pessimistic.
-/// 
+///
 /// Thus, this cache isn't able to remember every page state in every situation, but this is only the case when
 /// the anchor hasn't been found yet. When the cache is fully warm, it does have perfect knowledge.
-/// 
+///
 /// We don't have to care about corruption, because when corruption is repaired the cache is invalidated.
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub(crate) struct CachedPageStates {
+pub(crate) struct CalculatedCachedPageStates {
     page_count: usize,
     anchor: Option<usize>,
     anchor_is_partial: bool,
@@ -38,7 +38,7 @@ pub(crate) struct CachedPageStates {
     open_pages: usize,
 }
 
-impl Debug for CachedPageStates {
+impl Debug for CalculatedCachedPageStates {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "[")?;
         for i in 0..self.page_count {
@@ -55,7 +55,7 @@ impl Debug for CachedPageStates {
     }
 }
 
-impl CachedPageStates {
+impl CalculatedCachedPageStates {
     pub const fn new(page_count: usize) -> Self {
         Self {
             page_count,
@@ -88,7 +88,7 @@ impl CachedPageStates {
     }
 }
 
-impl PageStatesCache for CachedPageStates {
+impl PageStatesCache for CalculatedCachedPageStates {
     fn get_page_state(&self, page_index: usize) -> Option<PageState> {
         if self.anchor == Some(page_index) {
             if self.anchor_is_partial {
@@ -230,6 +230,45 @@ impl PageStatesCache for CachedPageStates {
     }
 }
 
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub(crate) struct TrackedCachedPageStates<'a> {
+    pages: &'a mut [Option<PageState>],
+}
+
+impl Debug for TrackedCachedPageStates<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "[")?;
+        for (i, state) in self.pages.iter().enumerate() {
+            write!(f, "{}{i}: {:?}", if i == 0 { "" } else { ", " }, state)?;
+        }
+        write!(f, "]")?;
+
+        Ok(())
+    }
+}
+
+impl<'a> TrackedCachedPageStates<'a> {
+    pub const fn new(pages: &'a mut [Option<PageState>]) -> Self {
+        Self { pages }
+    }
+}
+
+impl PageStatesCache for TrackedCachedPageStates<'_> {
+    fn get_page_state(&self, page_index: usize) -> Option<PageState> {
+        self.pages[page_index]
+    }
+
+    fn notice_page_state(&mut self, page_index: usize, new_state: PageState) {
+        self.pages[page_index] = Some(new_state);
+    }
+
+    fn invalidate_cache_state(&mut self) {
+        for page in self.pages.iter_mut() {
+            *page = None;
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub(crate) struct UncachedPageStates;
@@ -250,7 +289,7 @@ mod tests {
 
     #[test]
     fn page_states_correct_from_erased() {
-        let mut page_states = CachedPageStates::new(4);
+        let mut page_states = CalculatedCachedPageStates::new(4);
 
         assert_eq!(page_states.get_page_state(0), None);
         assert_eq!(page_states.get_page_state(1), None);
@@ -298,7 +337,7 @@ mod tests {
 
     #[test]
     fn page_states_correct_from_recover() {
-        let mut page_states = CachedPageStates::new(4);
+        let mut page_states = CalculatedCachedPageStates::new(4);
 
         println!("{page_states:?}");
         page_states.notice_page_state(3, PageState::PartialOpen);
