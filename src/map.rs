@@ -268,7 +268,12 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
             // If the page one before that is closed, then that's the last used page.
             if let Some(first_open_page) = self.inner.find_first_page(0, PageState::Open).await? {
                 let previous_page = self.inner.previous_page(first_open_page);
-                if self.inner.get_page_state_cached(previous_page).await?.is_closed() {
+                if self
+                    .inner
+                    .get_page_state_cached(previous_page)
+                    .await?
+                    .is_closed()
+                {
                     last_used_page = Some(previous_page);
                 } else {
                     // The page before the open page is not closed, so it must be open.
@@ -501,7 +506,8 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
                 self.inner.partial_close_page(next_page_to_use).await?;
 
                 let next_buffer_page = self.inner.next_page(next_page_to_use);
-                let next_buffer_page_state = self.inner.get_page_state_cached(next_buffer_page).await?;
+                let next_buffer_page_state =
+                    self.inner.get_page_state_cached(next_buffer_page).await?;
 
                 if !next_buffer_page_state.is_open() {
                     self.migrate_items(data_buffer, next_buffer_page, next_page_to_use)
@@ -600,7 +606,12 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
 
         // Go through all the pages
         for page_index in self.inner.get_pages(self.inner.next_page(last_used_page)) {
-            if self.inner.get_page_state_cached(page_index).await?.is_open() {
+            if self
+                .inner
+                .get_page_state_cached(page_index)
+                .await?
+                .is_open()
+            {
                 // This page is open, we don't have to check it
                 continue;
             }
@@ -741,7 +752,12 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
                             self.inner.find_first_page(0, PageState::Open).await?
                         {
                             let previous_page = self.inner.previous_page(first_open_page);
-                            if self.inner.get_page_state_cached(previous_page).await?.is_closed() {
+                            if self
+                                .inner
+                                .get_page_state_cached(previous_page)
+                                .await?
+                                .is_closed()
+                            {
                                 // The previous page is closed, so the first_open_page is what we want
                                 Ok(first_open_page)
                             } else {
@@ -864,7 +880,12 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
             .await?
         {
             let buffer_page = self.inner.next_page(partial_open_page);
-            if !self.inner.get_page_state_cached(buffer_page).await?.is_open() {
+            if !self
+                .inner
+                .get_page_state_cached(buffer_page)
+                .await?
+                .is_open()
+            {
                 // Yes, the migration got interrupted. Let's redo it.
                 // To do that, we erase the partial open page first because it contains incomplete data.
                 self.inner.open_page(partial_open_page).await?;
@@ -911,6 +932,12 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
     /// Get the flash range being used
     pub const fn flash_range(&self) -> Range<u32> {
         self.inner.flash_range()
+    }
+
+    /// Get a reference to the cache
+    #[cfg(any(test, fuzzing))]
+    pub const fn cache(&mut self) -> &mut C {
+        &mut self.inner.cache
     }
 
     #[cfg(any(test, feature = "std", fuzzing))]

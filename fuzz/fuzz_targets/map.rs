@@ -103,9 +103,9 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
 
     for op in ops.ops.into_iter() {
         #[cfg(fuzzing)]
-        eprintln!("{}", block_on(flash.print_items()));
+        eprintln!("{}", block_on(storage.print_items()));
         #[cfg(fuzzing)]
-        eprintln!("{:?}", cache);
+        eprintln!("{:?}", storage.cache());
         #[cfg(fuzzing)]
         eprintln!("=== OP: {op:?} ===");
 
