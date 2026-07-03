@@ -39,12 +39,28 @@ impl WrappingRange {
 }
 
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-#[derive(Debug)]
 pub(crate) struct CachedPageStates {
     page_count: usize,
     partial_open_page: Option<usize>,
     closed_pages: Option<WrappingRange>,
     open_pages: Option<WrappingRange>,
+}
+
+impl Debug for CachedPageStates {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "[")?;
+        for i in 0..self.page_count {
+            write!(
+                f,
+                "{}{i}: {:?}",
+                if i == 0 { "" } else { ", " },
+                self.get_page_state(i)
+            )?;
+        }
+        write!(f, "]")?;
+
+        Ok(())
+    }
 }
 
 impl CachedPageStates {
@@ -54,6 +70,17 @@ impl CachedPageStates {
             partial_open_page: None,
             closed_pages: None,
             open_pages: None,
+        }
+    }
+
+    fn fill_gaps(&mut self) {
+        if let Some(partial_open_page) = self.partial_open_page {
+            if let Some(closed_pages) = self.closed_pages.as_mut() {
+                closed_pages.end = partial_open_page;
+            }
+            if let Some(open_pages) = self.open_pages.as_mut() {
+                open_pages.set_start_wrapped(partial_open_page + 1, self.page_count);
+            }
         }
     }
 }
@@ -153,6 +180,8 @@ impl PageStatesCache for CachedPageStates {
                 }
             }
         }
+
+        self.fill_gaps();
 
         #[cfg(fuzzing)]
         eprintln!("Afterwards {self:?}");
