@@ -78,7 +78,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         // the page is likely half-erased. Fix for that is to re-erase again to hopefully finish the job.
         for page_index in self.get_pages(0) {
             if matches!(
-                self.get_page_state_cached(page_index).await,
+                self.get_page_state(page_index).await,
                 Err(Error::Corrupted { .. })
             ) {
                 self.open_page(page_index).await?;

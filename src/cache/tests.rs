@@ -32,9 +32,9 @@ mod queue_tests {
             run_test(PageStateCache::<NUM_PAGES>::new()).await,
             FlashStatsResult {
                 erases: 149,
-                reads: 68037,
+                reads: 68111,
                 writes: 6299,
-                bytes_read: 554240,
+                bytes_read: 554314,
                 bytes_written: 53299
             }
         );
@@ -46,9 +46,9 @@ mod queue_tests {
             run_test(PagePointerCache::<NUM_PAGES>::new()).await,
             FlashStatsResult {
                 erases: 149,
-                reads: 9959,
+                reads: 10033,
                 writes: 6299,
-                bytes_read: 89616,
+                bytes_read: 89690,
                 bytes_written: 53299
             }
         );
@@ -65,29 +65,29 @@ mod queue_tests {
         let start_snapshot = storage.flash().stats_snapshot();
 
         for i in 0..LOOP_COUNT {
-            println!("{i}");
+            // println!("{i}");
             let data = vec![i as u8; i % 20 + 1];
 
-            println!("PUSH");
+            // println!("PUSH");
             storage.push(&data, true).await.unwrap();
             assert_eq!(
                 storage.peek(&mut data_buffer).await.unwrap().unwrap(),
                 &data,
                 "At {i}"
             );
-            println!("POP");
+            // println!("POP");
             assert_eq!(
                 storage.pop(&mut data_buffer).await.unwrap().unwrap(),
                 &data,
                 "At {i}"
             );
-            println!("PEEK");
+            // println!("PEEK");
             assert_eq!(
                 storage.peek(&mut data_buffer).await.unwrap(),
                 None,
                 "At {i}"
             );
-            println!("DONE");
+            // println!("DONE");
         }
 
         start_snapshot.compare_to(storage.flash().stats_snapshot())
@@ -127,9 +127,9 @@ mod map_tests {
             run_test(PageStateCache::<NUM_PAGES>::new()).await,
             FlashStatsResult {
                 erases: 198,
-                reads: 181162,
+                reads: 181262,
                 writes: 5201,
-                bytes_read: 1784477,
+                bytes_read: 1784577,
                 bytes_written: 50401
             }
         );
@@ -141,9 +141,9 @@ mod map_tests {
             run_test(PagePointerCache::<NUM_PAGES>::new()).await,
             FlashStatsResult {
                 erases: 198,
-                reads: 163273,
+                reads: 163373,
                 writes: 5201,
-                bytes_read: 1641365,
+                bytes_read: 1641465,
                 bytes_written: 50401
             }
         );
@@ -155,9 +155,9 @@ mod map_tests {
             run_test(KeyPointerCache::<NUM_PAGES, u16, 12>::new()).await,
             FlashStatsResult {
                 erases: 198,
-                reads: 131503,
+                reads: 131603,
                 writes: 5201,
-                bytes_read: 1299275,
+                bytes_read: 1299375,
                 bytes_written: 50401
             }
         );
@@ -169,9 +169,9 @@ mod map_tests {
             run_test(KeyPointerCache::<NUM_PAGES, u16, 24>::new()).await,
             FlashStatsResult {
                 erases: 198,
-                reads: 14510,
+                reads: 14610,
                 writes: 5201,
-                bytes_read: 150592,
+                bytes_read: 150692,
                 bytes_written: 50401
             }
         );
