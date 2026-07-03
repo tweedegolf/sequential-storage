@@ -8,6 +8,26 @@ pub(crate) trait PageStatesCache: Debug {
     fn invalidate_cache_state(&mut self);
 }
 
+/// A cache that uses knowledge about the typical layout of pages.
+/// 
+/// The layout is always as follows:
+/// - X amount of closed pages
+/// - Y amount of open pages
+///   - Y is at least 1
+///   - One of the open pages may be partial
+/// - If a partial page is present, it's in the order ascending page indices: `Closed` -> `Partial` -> `Open`
+/// 
+/// The idea is to have an anchor which is the first open page (which may be the partial open page)
+/// and then keep track of the amount of open pages in front and the amount of closed pages behind it.
+/// 
+/// We know the anchor for sure when we find a partial open page.
+/// Since sequential-storage always iterates going forward and never back, we can have a 'guessed' anchor
+/// if we find the first open page. But when the anchor is guessed, we need to be a little pessimistic.
+/// 
+/// Thus, this cache isn't able to remember every page state in every situation, but this is only the case when
+/// the anchor hasn't been found yet. When the cache is fully warm, it does have perfect knowledge.
+/// 
+/// We don't have to care about corruption, because when corruption is repaired the cache is invalidated.
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub(crate) struct CachedPageStates {
     page_count: usize,
