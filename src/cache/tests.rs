@@ -181,7 +181,7 @@ mod map_tests {
             run_test(Cache::new(
                 CalculatedPageStates::new(NUM_PAGES),
                 ArrayPagePointers::<NUM_PAGES>::new(),
-                ArrayKeyPointers::<12, u16>::new(),
+                ArrayKeyPointers::<u16, 12>::new(),
             ))
             .await,
             FlashStatsResult {
@@ -200,7 +200,7 @@ mod map_tests {
             run_test(Cache::new(
                 CalculatedPageStates::new(NUM_PAGES),
                 ArrayPagePointers::<NUM_PAGES>::new(),
-                ArrayKeyPointers::<24, u16>::new(),
+                ArrayKeyPointers::<u16, 24>::new(),
             ))
             .await,
             FlashStatsResult {

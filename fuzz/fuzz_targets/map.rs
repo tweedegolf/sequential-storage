@@ -37,7 +37,7 @@ fuzz_target!(|data: Input| match data.cache_type {
     ),
     CacheType::ArrayKeyPointerCache => fuzz(
         data,
-        Cache::new(Uncached, Uncached, ArrayKeyPointers::<64, _>::new())
+        Cache::new(Uncached, Uncached, ArrayKeyPointers::<_, 64>::new())
     ),
     CacheType::HeapPageStateCache => fuzz(
         data,

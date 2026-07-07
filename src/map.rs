@@ -68,7 +68,7 @@ impl<S: NorFlash> MapConfig<S> {
 /// ## Basic API
 ///
 /// ```rust
-/// # use sequential_storage::cache::NoCache;
+/// # use sequential_storage::cache::Cache;
 /// # use sequential_storage::map::{MapConfig, MapStorage};
 /// # use mock_flash::MockFlashBase;
 /// # use futures::executor::block_on;
@@ -92,7 +92,7 @@ impl<S: NorFlash> MapConfig<S> {
 /// // We also put the config in a const block so if the config is bad we'll get a compile time error
 ///
 /// // With the generics we specify that this is a map with `u8` as the key
-/// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000) }, NoCache::new());
+/// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000) }, Cache::new_uncached());
 ///
 /// // We need to give the crate a buffer to work with.
 /// // It must be big enough to serialize the biggest value of your storage type in,
@@ -688,7 +688,7 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
     ///
     /// The following is a simple example of how to use the iterator:
     /// ```rust
-    /// # use sequential_storage::cache::NoCache;
+    /// # use sequential_storage::cache::Cache;
     /// # use sequential_storage::map::{MapConfig, MapStorage};
     /// # use mock_flash::MockFlashBase;
     /// # use futures::executor::block_on;
@@ -704,7 +704,7 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
     /// # block_on(async {
     /// let mut flash = init_flash();
     ///
-    /// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000) }, NoCache::new());
+    /// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000) }, Cache::new_uncached());
     /// let mut data_buffer = [0; 128];
     ///
     /// // Create the iterator of map items
@@ -957,7 +957,7 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
 ///
 /// The following is a simple example of how to use the iterator:
 /// ```rust
-/// # use sequential_storage::cache::NoCache;
+/// # use sequential_storage::cache::Cache;
 /// # use sequential_storage::map::{MapConfig, MapStorage};
 /// # use mock_flash::MockFlashBase;
 /// # use futures::executor::block_on;
@@ -973,7 +973,7 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
 /// # block_on(async {
 /// let mut flash = init_flash();
 ///
-/// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000) }, NoCache::new());
+/// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000) }, Cache::new_uncached());
 /// let mut data_buffer = [0; 128];
 ///
 /// // Create the iterator of map items

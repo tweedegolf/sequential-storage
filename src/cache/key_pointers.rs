@@ -24,11 +24,11 @@ pub trait KeyPointersCache<KEY>: SealedKeyPointersCache<KEY> {}
 /// The array may be smaller than the amount of keys, but that will reduce performance.
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct ArrayKeyPointers<const KEYS: usize, KEY: Key> {
+pub struct ArrayKeyPointers<KEY: Key, const KEYS: usize> {
     key_pointers: [Option<(KEY, NonZeroU32)>; KEYS],
 }
 
-impl<const KEYS: usize, KEY: Key> ArrayKeyPointers<KEYS, KEY> {
+impl<const KEYS: usize, KEY: Key> ArrayKeyPointers<KEY, KEYS> {
     /// Create a new empty cache
     pub const fn new() -> Self {
         Self {
@@ -43,13 +43,13 @@ impl<const KEYS: usize, KEY: Key> ArrayKeyPointers<KEYS, KEY> {
     }
 }
 
-impl<const KEYS: usize, KEY: Key> Default for ArrayKeyPointers<KEYS, KEY> {
+impl<const KEYS: usize, KEY: Key> Default for ArrayKeyPointers<KEY, KEYS> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<const KEYS: usize, KEY: Key> SealedKeyPointersCache<KEY> for ArrayKeyPointers<KEYS, KEY> {
+impl<const KEYS: usize, KEY: Key> SealedKeyPointersCache<KEY> for ArrayKeyPointers<KEY, KEYS> {
     fn key_location(&self, key: &KEY) -> Option<u32> {
         self.key_pointers
             .iter()
@@ -70,7 +70,7 @@ impl<const KEYS: usize, KEY: Key> SealedKeyPointersCache<KEY> for ArrayKeyPointe
         self.as_tracked().invalidate_cache_state();
     }
 }
-impl<const KEYS: usize, KEY: Key> KeyPointersCache<KEY> for ArrayKeyPointers<KEYS, KEY> {}
+impl<const KEYS: usize, KEY: Key> KeyPointersCache<KEY> for ArrayKeyPointers<KEY, KEYS> {}
 
 #[cfg(feature = "alloc")]
 /// A cache that stores keys in a vec.

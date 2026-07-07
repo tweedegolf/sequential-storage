@@ -62,7 +62,7 @@ impl<S: NorFlash> QueueConfig<S> {
 /// ## Basic API
 ///
 /// ```rust
-/// # use sequential_storage::cache::NoCache;
+/// # use sequential_storage::cache::Cache;
 /// # use sequential_storage::queue::{QueueConfig, QueueStorage};
 /// # use mock_flash::MockFlashBase;
 /// # use futures::executor::block_on;
@@ -80,7 +80,7 @@ impl<S: NorFlash> QueueConfig<S> {
 /// // Initialize the flash. This can be internal or external
 /// let mut flash = init_flash();
 ///
-/// let mut storage = QueueStorage::new(flash, const { QueueConfig::new(0x1000..0x3000) }, NoCache::new());
+/// let mut storage = QueueStorage::new(flash, const { QueueConfig::new(0x1000..0x3000) }, Cache::new_uncached());
 /// // We need to give the crate a buffer to work with.
 /// // It must be big enough to serialize the biggest value of your storage type in.
 /// let mut data_buffer = [0; 128];
