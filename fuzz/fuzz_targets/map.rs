@@ -6,8 +6,10 @@ use libfuzzer_sys::fuzz_target;
 use rand::SeedableRng;
 use sequential_storage::{
     cache::{
-        HeapKeyPointerCache, HeapPagePointerCache, HeapPageStateCache, KeyCacheImpl,
-        KeyPointerCache, NoCache, PagePointerCache, PageStateCache,
+        key_pointers::{ArrayKeyPointers, HeapKeyPointers},
+        page_pointers::{ArrayPagePointers, HeapPagePointers},
+        page_states::{ArrayPageStates, CalculatedPageStates, HeapPageStates},
+        Cache, CacheImpl, Uncached,
     },
     map::{MapConfig, MapStorage},
     mock_flash::{MockFlashBase, MockFlashError, WriteCountCheck},
@@ -20,13 +22,35 @@ const WORD_SIZE: usize = 4;
 const WORDS_PER_PAGE: usize = 256;
 
 fuzz_target!(|data: Input| match data.cache_type {
-    CacheType::NoCache => fuzz(data, NoCache::new()),
-    CacheType::PageStateCache => fuzz(data, PageStateCache::<PAGES>::new()),
-    CacheType::PagePointerCache => fuzz(data, PagePointerCache::<PAGES>::new()),
-    CacheType::KeyPointerCache => fuzz(data, KeyPointerCache::<PAGES, u8, 64>::new()),
-    CacheType::HeapPageStateCache => fuzz(data, HeapPageStateCache::new(PAGES)),
-    CacheType::HeapPagePointerCache => fuzz(data, HeapPagePointerCache::new(PAGES)),
-    CacheType::HeapKeyPointerCache => fuzz(data, HeapKeyPointerCache::<u8>::new(PAGES, 64)),
+    CacheType::NoCache => fuzz(data, Cache::new(Uncached, Uncached, Uncached)),
+    CacheType::CalculatedPageStateCache => fuzz(
+        data,
+        Cache::new(CalculatedPageStates::new(PAGES), Uncached, Uncached)
+    ),
+    CacheType::ArrayPageStateCache => fuzz(
+        data,
+        Cache::new(ArrayPageStates::<PAGES>::new(), Uncached, Uncached)
+    ),
+    CacheType::ArrayPagePointerCache => fuzz(
+        data,
+        Cache::new(Uncached, ArrayPagePointers::<PAGES>::new(), Uncached)
+    ),
+    CacheType::ArrayKeyPointerCache => fuzz(
+        data,
+        Cache::new(Uncached, Uncached, ArrayKeyPointers::<64, _>::new())
+    ),
+    CacheType::HeapPageStateCache => fuzz(
+        data,
+        Cache::new(HeapPageStates::new(PAGES), Uncached, Uncached)
+    ),
+    CacheType::HeapPagePointerCache => fuzz(
+        data,
+        Cache::new(Uncached, HeapPagePointers::new(PAGES), Uncached)
+    ),
+    CacheType::HeapKeyPointerCache => fuzz(
+        data,
+        Cache::new(Uncached, Uncached, HeapKeyPointers::<_>::new(64))
+    ),
 });
 
 #[derive(Arbitrary, Debug, Clone)]
@@ -66,15 +90,16 @@ impl StoreOp {
 #[derive(Arbitrary, Debug, Clone)]
 enum CacheType {
     NoCache,
-    PageStateCache,
-    PagePointerCache,
-    KeyPointerCache,
+    CalculatedPageStateCache,
+    ArrayPageStateCache,
+    ArrayPagePointerCache,
+    ArrayKeyPointerCache,
     HeapPageStateCache,
     HeapPagePointerCache,
     HeapKeyPointerCache,
 }
 
-fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
+fn fuzz(ops: Input, cache: impl CacheImpl<u8> + Debug) {
     let flash = MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::new(
         if ops
             .ops

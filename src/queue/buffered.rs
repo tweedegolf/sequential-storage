@@ -213,12 +213,12 @@ pub enum OverflowPolicy {
 /// ```
 ///
 /// For ISR-safe use, enable the `shared-ram-ring` feature and use [`SharedRamRing`] instead.
-pub struct BufferedQueue<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> {
+pub struct BufferedQueue<S: NorFlash, C: CacheImpl<()>, const RAM_BYTES: usize> {
     storage: QueueStorage<S, C>,
     ram: RamRing<RAM_BYTES>,
 }
 
-impl<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_BYTES> {
+impl<S: NorFlash, C: CacheImpl<()>, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_BYTES> {
     /// Wrap an existing [`QueueStorage`] with a RAM ring buffer.
     pub fn new(storage: QueueStorage<S, C>) -> Self {
         Self {
@@ -608,7 +608,7 @@ mod tests {
     #[cfg(feature = "_test")]
     mod integration {
         use super::*;
-        use crate::cache::NoCache;
+        use crate::cache::Uncached;
         use crate::mock_flash::MockFlashBase;
         use crate::queue::{QueueConfig, QueueStorage};
         use futures::executor::block_on;

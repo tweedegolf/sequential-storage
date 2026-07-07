@@ -1,8 +1,13 @@
+//! Implementation of key caching
+
+#[cfg(feature = "alloc")]
+extern crate alloc;
+
 use core::{fmt::Debug, num::NonZeroU32};
 
 use crate::map::Key;
 
-pub(crate) trait KeyPointersCache<KEY: Key> {
+pub(crate) trait SealedKeyPointersCache<KEY> {
     fn key_location(&self, key: &KEY) -> Option<u32>;
 
     fn notice_key_location(&mut self, key: &KEY, item_address: u32);
@@ -11,17 +16,119 @@ pub(crate) trait KeyPointersCache<KEY: Key> {
     fn invalidate_cache_state(&mut self);
 }
 
+/// A cache that caches pointers to keys
+#[allow(private_bounds)]
+pub trait KeyPointersCache<KEY>: SealedKeyPointersCache<KEY> {}
+
+/// A cache that stores keys in an array.
+/// The array may be smaller than the amount of keys, but that will reduce performance.
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub(crate) struct CachedKeyPointers<'a, KEY: Eq> {
+pub struct ArrayKeyPointers<const KEYS: usize, KEY: Key> {
+    key_pointers: [Option<(KEY, NonZeroU32)>; KEYS],
+}
+
+impl<const KEYS: usize, KEY: Key> ArrayKeyPointers<KEYS, KEY> {
+    /// Create a new empty cache
+    pub const fn new() -> Self {
+        Self {
+            key_pointers: [const { None }; _],
+        }
+    }
+
+    fn as_tracked(&mut self) -> TrackedKeyPointers<'_, KEY> {
+        TrackedKeyPointers {
+            key_pointers: &mut self.key_pointers,
+        }
+    }
+}
+
+impl<const KEYS: usize, KEY: Key> Default for ArrayKeyPointers<KEYS, KEY> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const KEYS: usize, KEY: Key> SealedKeyPointersCache<KEY> for ArrayKeyPointers<KEYS, KEY> {
+    fn key_location(&self, key: &KEY) -> Option<u32> {
+        self.key_pointers
+            .iter()
+            .flatten()
+            .find(|(iter_key, _)| key == iter_key)
+            .map(|(_, pointer)| pointer.get())
+    }
+
+    fn notice_key_location(&mut self, key: &KEY, item_address: u32) {
+        self.as_tracked().notice_key_location(key, item_address);
+    }
+
+    fn notice_key_erased(&mut self, key: &KEY) {
+        self.as_tracked().notice_key_erased(key);
+    }
+
+    fn invalidate_cache_state(&mut self) {
+        self.as_tracked().invalidate_cache_state();
+    }
+}
+impl<const KEYS: usize, KEY: Key> KeyPointersCache<KEY> for ArrayKeyPointers<KEYS, KEY> {}
+
+#[cfg(feature = "alloc")]
+/// A cache that stores keys in a vec.
+/// The vec may be smaller than the amount of keys, but that will reduce performance.
+#[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct HeapKeyPointers<KEY: Key> {
+    key_pointers: alloc::vec::Vec<Option<(KEY, NonZeroU32)>>,
+}
+
+#[cfg(feature = "alloc")]
+impl<KEY: Key> HeapKeyPointers<KEY> {
+    /// Create a new empty cache for the given amount of keys
+    pub fn new(keys: usize) -> Self {
+        Self {
+            key_pointers: alloc::vec![None; keys],
+        }
+    }
+
+    fn as_tracked(&mut self) -> TrackedKeyPointers<'_, KEY> {
+        TrackedKeyPointers {
+            key_pointers: &mut self.key_pointers,
+        }
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<KEY: Key> SealedKeyPointersCache<KEY> for HeapKeyPointers<KEY> {
+    fn key_location(&self, key: &KEY) -> Option<u32> {
+        self.key_pointers
+            .iter()
+            .flatten()
+            .find(|(iter_key, _)| key == iter_key)
+            .map(|(_, pointer)| pointer.get())
+    }
+
+    fn notice_key_location(&mut self, key: &KEY, item_address: u32) {
+        self.as_tracked().notice_key_location(key, item_address);
+    }
+
+    fn notice_key_erased(&mut self, key: &KEY) {
+        self.as_tracked().notice_key_erased(key);
+    }
+
+    fn invalidate_cache_state(&mut self) {
+        self.as_tracked().invalidate_cache_state();
+    }
+}
+#[cfg(feature = "alloc")]
+impl<KEY: Key> KeyPointersCache<KEY> for HeapKeyPointers<KEY> {}
+
+#[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub(crate) struct TrackedKeyPointers<'a, KEY: Eq> {
     key_pointers: &'a mut [Option<(KEY, NonZeroU32)>],
 }
 
-impl<'a, KEY: Eq> CachedKeyPointers<'a, KEY> {
-    pub const fn new(key_pointers: &'a mut [Option<(KEY, NonZeroU32)>]) -> Self {
-        Self { key_pointers }
-    }
-
+impl<'a, KEY: Eq> TrackedKeyPointers<'a, KEY> {
     fn insert_front(&mut self, value: (KEY, NonZeroU32)) {
         let len = self.key_pointers.len();
         self.key_pointers[len - 1] = Some(value);
@@ -29,7 +136,7 @@ impl<'a, KEY: Eq> CachedKeyPointers<'a, KEY> {
     }
 }
 
-impl<KEY: Key> KeyPointersCache<KEY> for CachedKeyPointers<'_, KEY> {
+impl<KEY: Key> SealedKeyPointersCache<KEY> for TrackedKeyPointers<'_, KEY> {
     fn key_location(&self, key: &KEY) -> Option<u32> {
         self.key_pointers
             .iter()
@@ -74,22 +181,6 @@ impl<KEY: Key> KeyPointersCache<KEY> for CachedKeyPointers<'_, KEY> {
             *pointers = None;
         }
     }
-}
-
-#[derive(Debug)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub(crate) struct UncachedKeyPointers;
-
-impl<KEY: Key> KeyPointersCache<KEY> for UncachedKeyPointers {
-    fn key_location(&self, _key: &KEY) -> Option<u32> {
-        None
-    }
-
-    fn notice_key_location(&mut self, _key: &KEY, _item_address: u32) {}
-
-    fn notice_key_erased(&mut self, _key: &KEY) {}
-
-    fn invalidate_cache_state(&mut self) {}
 }
 
 fn move_to_front<T>(data: &mut [Option<T>], index: usize) {

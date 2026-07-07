@@ -1,14 +1,25 @@
+//! Implementation of page state caching
+
+#[cfg(feature = "alloc")]
+extern crate alloc;
+
 use core::fmt::Debug;
 
 use crate::PageState;
 
-pub(crate) trait PageStatesCache: Debug {
+pub(crate) trait SealedPageStatesCache {
     fn get_page_state(&self, page_index: usize) -> Option<PageState>;
     fn notice_page_state(&mut self, page_index: usize, new_state: PageState);
     fn invalidate_cache_state(&mut self);
 }
 
+/// A cache that caches the states for all pages
+#[allow(private_bounds)]
+pub trait PageStatesCache: SealedPageStatesCache {}
+
 /// A cache that uses knowledge about the typical layout of pages.
+///
+/// Use the [ArrayPageStates] cache or [HeapPageStates] cache when you have fewer than ~32 pages.
 ///
 /// The layout is always as follows:
 /// - X amount of closed pages
@@ -29,7 +40,7 @@ pub(crate) trait PageStatesCache: Debug {
 ///
 /// We don't have to care about corruption, because when corruption is repaired the cache is invalidated.
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub(crate) struct CalculatedCachedPageStates {
+pub struct CalculatedPageStates {
     page_count: usize,
     anchor: Option<usize>,
     anchor_is_partial: bool,
@@ -38,7 +49,7 @@ pub(crate) struct CalculatedCachedPageStates {
     open_pages: usize,
 }
 
-impl Debug for CalculatedCachedPageStates {
+impl Debug for CalculatedPageStates {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "[")?;
         for i in 0..self.page_count {
@@ -55,7 +66,8 @@ impl Debug for CalculatedCachedPageStates {
     }
 }
 
-impl CalculatedCachedPageStates {
+impl CalculatedPageStates {
+    /// Create a new empty cache for the amount of pages
     pub const fn new(page_count: usize) -> Self {
         Self {
             page_count,
@@ -88,7 +100,7 @@ impl CalculatedCachedPageStates {
     }
 }
 
-impl PageStatesCache for CalculatedCachedPageStates {
+impl SealedPageStatesCache for CalculatedPageStates {
     fn get_page_state(&self, page_index: usize) -> Option<PageState> {
         if self.anchor == Some(page_index) {
             if self.anchor_is_partial {
@@ -229,31 +241,31 @@ impl PageStatesCache for CalculatedCachedPageStates {
         };
     }
 }
+impl PageStatesCache for CalculatedPageStates {}
 
+/// A cache that stores page states in an array.
+#[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub(crate) struct TrackedCachedPageStates<'a> {
-    pages: &'a mut [Option<PageState>],
+pub struct ArrayPageStates<const PAGE_COUNT: usize> {
+    pages: [Option<PageState>; PAGE_COUNT],
 }
 
-impl Debug for TrackedCachedPageStates<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "[")?;
-        for (i, state) in self.pages.iter().enumerate() {
-            write!(f, "{}{i}: {:?}", if i == 0 { "" } else { ", " }, state)?;
+impl<const PAGE_COUNT: usize> ArrayPageStates<PAGE_COUNT> {
+    /// Create a new empty cache
+    pub const fn new() -> Self {
+        Self {
+            pages: [None; PAGE_COUNT],
         }
-        write!(f, "]")?;
-
-        Ok(())
     }
 }
 
-impl<'a> TrackedCachedPageStates<'a> {
-    pub const fn new(pages: &'a mut [Option<PageState>]) -> Self {
-        Self { pages }
+impl<const PAGE_COUNT: usize> Default for ArrayPageStates<PAGE_COUNT> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-impl PageStatesCache for TrackedCachedPageStates<'_> {
+impl<const PAGE_COUNT: usize> SealedPageStatesCache for ArrayPageStates<PAGE_COUNT> {
     fn get_page_state(&self, page_index: usize) -> Option<PageState> {
         self.pages[page_index]
     }
@@ -268,20 +280,44 @@ impl PageStatesCache for TrackedCachedPageStates<'_> {
         }
     }
 }
+impl<const PAGE_COUNT: usize> PageStatesCache for ArrayPageStates<PAGE_COUNT> {}
 
-#[derive(Debug, Default)]
+#[cfg(feature = "alloc")]
+/// A cache that stores page states in a vec.
+#[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub(crate) struct UncachedPageStates;
+pub struct HeapPageStates {
+    pages: alloc::vec::Vec<Option<PageState>>,
+}
 
-impl PageStatesCache for UncachedPageStates {
-    fn get_page_state(&self, _page_index: usize) -> Option<PageState> {
-        None
+#[cfg(feature = "alloc")]
+impl HeapPageStates {
+    /// Create a new empty cache
+    pub fn new(page_count: usize) -> Self {
+        Self {
+            pages: alloc::vec![None; page_count],
+        }
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl SealedPageStatesCache for HeapPageStates {
+    fn get_page_state(&self, page_index: usize) -> Option<PageState> {
+        self.pages[page_index]
     }
 
-    fn notice_page_state(&mut self, _page_index: usize, _new_state: PageState) {}
+    fn notice_page_state(&mut self, page_index: usize, new_state: PageState) {
+        self.pages[page_index] = Some(new_state);
+    }
 
-    fn invalidate_cache_state(&mut self) {}
+    fn invalidate_cache_state(&mut self) {
+        for page in self.pages.iter_mut() {
+            *page = None;
+        }
+    }
 }
+#[cfg(feature = "alloc")]
+impl PageStatesCache for HeapPageStates {}
 
 #[cfg(test)]
 mod tests {
@@ -289,7 +325,7 @@ mod tests {
 
     #[test]
     fn page_states_correct_from_erased() {
-        let mut page_states = CalculatedCachedPageStates::new(4);
+        let mut page_states = CalculatedPageStates::new(4);
 
         assert_eq!(page_states.get_page_state(0), None);
         assert_eq!(page_states.get_page_state(1), None);
@@ -337,7 +373,7 @@ mod tests {
 
     #[test]
     fn page_states_correct_from_recover() {
-        let mut page_states = CalculatedCachedPageStates::new(4);
+        let mut page_states = CalculatedPageStates::new(4);
 
         println!("{page_states:?}");
         page_states.notice_page_state(3, PageState::PartialOpen);

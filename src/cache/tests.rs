@@ -2,7 +2,10 @@
 mod queue_tests {
     use crate::{
         AlignedBuf,
-        cache::{CacheImpl, NoCache, PagePointerCache, PageStateCache},
+        cache::{
+            Cache, CacheImpl, Uncached, page_pointers::ArrayPagePointers,
+            page_states::CalculatedPageStates,
+        },
         mock_flash::{self, FlashStatsResult, WriteCountCheck},
         queue::{QueueConfig, QueueStorage},
     };
@@ -15,7 +18,7 @@ mod queue_tests {
     #[test]
     async fn no_cache() {
         assert_eq!(
-            run_test(NoCache::new()).await,
+            run_test(Cache::new_uncached()).await,
             FlashStatsResult {
                 erases: 149,
                 reads: 165009,
@@ -29,7 +32,12 @@ mod queue_tests {
     #[test]
     async fn page_state_cache() {
         assert_eq!(
-            run_test(PageStateCache::<NUM_PAGES>::new()).await,
+            run_test(Cache::new(
+                CalculatedPageStates::new(NUM_PAGES),
+                Uncached,
+                Uncached
+            ))
+            .await,
             FlashStatsResult {
                 erases: 149,
                 reads: 68111,
@@ -43,7 +51,12 @@ mod queue_tests {
     #[test]
     async fn page_pointer_cache() {
         assert_eq!(
-            run_test(PagePointerCache::<NUM_PAGES>::new()).await,
+            run_test(Cache::new(
+                CalculatedPageStates::new(NUM_PAGES),
+                ArrayPagePointers::<NUM_PAGES>::new(),
+                Uncached
+            ))
+            .await,
             FlashStatsResult {
                 erases: 149,
                 reads: 10033,
@@ -54,7 +67,7 @@ mod queue_tests {
         );
     }
 
-    async fn run_test(cache: impl CacheImpl) -> FlashStatsResult {
+    async fn run_test(cache: impl CacheImpl<()>) -> FlashStatsResult {
         let mut storage = QueueStorage::new(
             mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x00..0x400) },
@@ -98,7 +111,10 @@ mod queue_tests {
 mod map_tests {
     use crate::{
         AlignedBuf,
-        cache::{KeyCacheImpl, KeyPointerCache, NoCache, PagePointerCache, PageStateCache},
+        cache::{
+            Cache, CacheImpl, Uncached, key_pointers::ArrayKeyPointers,
+            page_pointers::ArrayPagePointers, page_states::CalculatedPageStates,
+        },
         map::{MapConfig, MapStorage},
         mock_flash::{self, FlashStatsResult, WriteCountCheck},
     };
@@ -110,7 +126,7 @@ mod map_tests {
     #[test]
     async fn no_cache() {
         assert_eq!(
-            run_test(NoCache::new()).await,
+            run_test(Cache::new_uncached()).await,
             FlashStatsResult {
                 erases: 198,
                 reads: 233786,
@@ -124,7 +140,12 @@ mod map_tests {
     #[test]
     async fn page_state_cache() {
         assert_eq!(
-            run_test(PageStateCache::<NUM_PAGES>::new()).await,
+            run_test(Cache::new(
+                CalculatedPageStates::new(NUM_PAGES),
+                Uncached,
+                Uncached
+            ))
+            .await,
             FlashStatsResult {
                 erases: 198,
                 reads: 181262,
@@ -138,7 +159,12 @@ mod map_tests {
     #[test]
     async fn page_pointer_cache() {
         assert_eq!(
-            run_test(PagePointerCache::<NUM_PAGES>::new()).await,
+            run_test(Cache::new(
+                CalculatedPageStates::new(NUM_PAGES),
+                ArrayPagePointers::<NUM_PAGES>::new(),
+                Uncached
+            ))
+            .await,
             FlashStatsResult {
                 erases: 198,
                 reads: 163373,
@@ -152,7 +178,12 @@ mod map_tests {
     #[test]
     async fn key_pointer_cache_half() {
         assert_eq!(
-            run_test(KeyPointerCache::<NUM_PAGES, u16, 12>::new()).await,
+            run_test(Cache::new(
+                CalculatedPageStates::new(NUM_PAGES),
+                ArrayPagePointers::<NUM_PAGES>::new(),
+                ArrayKeyPointers::<12, u16>::new(),
+            ))
+            .await,
             FlashStatsResult {
                 erases: 198,
                 reads: 131603,
@@ -166,7 +197,12 @@ mod map_tests {
     #[test]
     async fn key_pointer_cache_full() {
         assert_eq!(
-            run_test(KeyPointerCache::<NUM_PAGES, u16, 24>::new()).await,
+            run_test(Cache::new(
+                CalculatedPageStates::new(NUM_PAGES),
+                ArrayPagePointers::<NUM_PAGES>::new(),
+                ArrayKeyPointers::<24, u16>::new(),
+            ))
+            .await,
             FlashStatsResult {
                 erases: 198,
                 reads: 14610,
@@ -177,7 +213,7 @@ mod map_tests {
         );
     }
 
-    async fn run_test(cache: impl KeyCacheImpl<u16>) -> FlashStatsResult {
+    async fn run_test(cache: impl CacheImpl<u16>) -> FlashStatsResult {
         let mut storage = MapStorage::new(
             mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true),
             const { MapConfig::new(0x00..0x400) },

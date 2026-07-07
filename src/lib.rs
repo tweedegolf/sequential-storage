@@ -43,13 +43,14 @@ const MAX_WORD_SIZE: usize = 32;
 /// - queue: [`queue::QueueStorage::new`]
 ///
 /// You can [`Self::destroy`] this type to get back the flash and the cache.
-struct GenericStorage<S: NorFlash, C: CacheImpl> {
+struct GenericStorage<S: NorFlash, C: CacheImpl<KEY>, KEY> {
     flash: S,
     flash_range: Range<u32>,
     cache: C,
+    _phantom: PhantomData<KEY>,
 }
 
-impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
+impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
     /// Resets the flash in the entire given flash range.
     ///
     /// This is just a thin helper function as it just calls the flash's erase function.
@@ -118,7 +119,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     fn get_pages(
         &self,
         starting_page_index: usize,
-    ) -> impl DoubleEndedIterator<Item = usize> + use<S, C> {
+    ) -> impl DoubleEndedIterator<Item = usize> + use<S, C, KEY> {
         let page_count = self.page_count();
         (0..page_count.get()).map(move |index| (index + starting_page_index) % page_count)
     }
@@ -149,8 +150,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
                 let discovered_state = self.get_page_state(page_index).await?;
                 assert_eq!(
                     cached_page_state, discovered_state,
-                    "At page index: {page_index}, cache: {:?}",
-                    self.cache
+                    "At page index: {page_index}",
                 );
             }
 
@@ -438,7 +438,7 @@ const MARKER: u8 = 0;
 /// The state of a page
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-enum PageState {
+pub enum PageState {
     /// This page was fully written and has now been sealed
     Closed,
     /// This page has been written to, but may have some space left over
@@ -631,7 +631,7 @@ use crate::cache::CacheImpl;
 
 #[cfg(test)]
 mod tests {
-    use crate::cache::NoCache;
+    use crate::cache::Cache;
 
     use super::*;
     use futures_test::test;
@@ -680,7 +680,8 @@ mod tests {
         let mut storage = GenericStorage {
             flash: flash,
             flash_range: 0x000..0x400,
-            cache: NoCache::new(),
+            cache: Cache::new_uncached(),
+            _phantom: PhantomData::<()>,
         };
 
         assert_eq!(

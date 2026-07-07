@@ -6,14 +6,16 @@ use libfuzzer_sys::fuzz_target;
 use rand::{Rng, SeedableRng};
 use sequential_storage::{
     cache::{
-        CacheImpl, HeapPagePointerCache, HeapPageStateCache, NoCache, PagePointerCache,
-        PageStateCache,
+        page_pointers::{ArrayPagePointers, HeapPagePointers},
+        page_states::{ArrayPageStates, CalculatedPageStates, HeapPageStates},
+        Cache, CacheImpl, Uncached,
     },
     mock_flash::{MockFlashBase, MockFlashError, Operation, WriteCountCheck},
     queue::{QueueConfig, QueueStorage},
     Error,
 };
 use std::{collections::VecDeque, fmt::Debug};
+
 const MAX_VALUE_SIZE: usize = u8::MAX as usize;
 
 const PAGES: usize = 4;
@@ -21,11 +23,27 @@ const WORD_SIZE: usize = 4;
 const WORDS_PER_PAGE: usize = 256;
 
 fuzz_target!(|data: Input| match data.cache_type {
-    CacheType::NoCache => fuzz(data, NoCache::new()),
-    CacheType::PageStateCache => fuzz(data, PageStateCache::<PAGES>::new()),
-    CacheType::PagePointerCache => fuzz(data, PagePointerCache::<PAGES>::new()),
-    CacheType::HeapPageStateCache => fuzz(data, HeapPageStateCache::new(PAGES)),
-    CacheType::HeapPagePointerCache => fuzz(data, HeapPagePointerCache::new(PAGES)),
+    CacheType::NoCache => fuzz(data, Cache::new(Uncached, Uncached, Uncached)),
+    CacheType::CalculatedPageStateCache => fuzz(
+        data,
+        Cache::new(CalculatedPageStates::new(PAGES), Uncached, Uncached)
+    ),
+    CacheType::ArrayPageStateCache => fuzz(
+        data,
+        Cache::new(ArrayPageStates::<PAGES>::new(), Uncached, Uncached)
+    ),
+    CacheType::ArrayPagePointerCache => fuzz(
+        data,
+        Cache::new(Uncached, ArrayPagePointers::<PAGES>::new(), Uncached)
+    ),
+    CacheType::HeapPageStateCache => fuzz(
+        data,
+        Cache::new(HeapPageStates::new(PAGES), Uncached, Uncached)
+    ),
+    CacheType::HeapPagePointerCache => fuzz(
+        data,
+        Cache::new(Uncached, HeapPagePointers::new(PAGES), Uncached)
+    ),
 });
 
 #[derive(Arbitrary, Debug, Clone)]
@@ -52,8 +70,9 @@ struct PushOp {
 #[derive(Arbitrary, Debug, Clone)]
 enum CacheType {
     NoCache,
-    PageStateCache,
-    PagePointerCache,
+    CalculatedPageStateCache,
+    ArrayPageStateCache,
+    ArrayPagePointerCache,
     HeapPageStateCache,
     HeapPagePointerCache,
 }
@@ -61,7 +80,7 @@ enum CacheType {
 #[repr(align(4))]
 struct AlignedBuf([u8; MAX_VALUE_SIZE + 1]);
 
-fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
+fn fuzz(ops: Input, cache: impl CacheImpl<()> + Debug) {
     let flash = MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::new(
         WriteCountCheck::Twice,
         Some(ops.fuel as u32),

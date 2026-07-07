@@ -112,11 +112,11 @@ impl<S: NorFlash> QueueConfig<S> {
 /// );
 /// # });
 /// ```
-pub struct QueueStorage<S: NorFlash, C: CacheImpl> {
-    inner: GenericStorage<S, C>,
+pub struct QueueStorage<S: NorFlash, C: CacheImpl<()>> {
+    inner: GenericStorage<S, C, ()>,
 }
 
-impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
+impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
     /// Create a new (fifo) queue instance
     ///
     /// The provided cache instance must be new or must be in the exact correct state for the current flash contents.
@@ -128,6 +128,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
                 flash: storage,
                 flash_range: config.flash_range,
                 cache,
+                _phantom: PhantomData,
             },
         }
     }
@@ -563,7 +564,7 @@ impl<S: NorFlash, C: CacheImpl> QueueStorage<S, C> {
     /// This means the full item length is `returned number + (data length).next_multiple_of(S::WORD_SIZE)`.
     #[must_use]
     pub const fn item_overhead_size() -> u32 {
-        GenericStorage::<S, C>::item_overhead_size()
+        GenericStorage::<S, C, ()>::item_overhead_size()
     }
 
     /// Destroy the instance to get back the flash and the cache.
@@ -606,14 +607,14 @@ enum PreviousItemStates {
 }
 
 /// An iterator-like interface for peeking into data stored in flash with the option to pop it.
-pub struct QueueIterator<'s, S: NorFlash, C: CacheImpl> {
+pub struct QueueIterator<'s, S: NorFlash, C: CacheImpl<()>> {
     storage: &'s mut QueueStorage<S, C>,
     next_address: NextAddress,
     previous_item_states: PreviousItemStates,
     oldest_page: usize,
 }
 
-impl<S: NorFlash, C: CacheImpl> Debug for QueueIterator<'_, S, C> {
+impl<S: NorFlash, C: CacheImpl<()>> Debug for QueueIterator<'_, S, C> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("QueueIterator")
             .field("current_address", &self.next_address)
@@ -627,7 +628,7 @@ enum NextAddress {
     PageAfter(usize),
 }
 
-impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
+impl<'s, S: NorFlash, C: CacheImpl<()>> QueueIterator<'s, S, C> {
     async fn new(storage: &'s mut QueueStorage<S, C>) -> Result<Self, Error<S::Error>> {
         let start_address = run_with_auto_repair!(
             function = storage.find_start_address().await,
@@ -795,13 +796,13 @@ impl<'s, S: NorFlash, C: CacheImpl> QueueIterator<'s, S, C> {
 }
 
 /// An entry in the iteration over the queue flash
-pub struct QueueIteratorEntry<'s, 'd, 'q, S: NorFlash, CI: CacheImpl> {
+pub struct QueueIteratorEntry<'s, 'd, 'q, S: NorFlash, CI: CacheImpl<()>> {
     iter: &'q mut QueueIterator<'s, S, CI>,
     address: u32,
     item: Item<'d>,
 }
 
-impl<S: NorFlash, CI: CacheImpl> Deref for QueueIteratorEntry<'_, '_, '_, S, CI> {
+impl<S: NorFlash, CI: CacheImpl<()>> Deref for QueueIteratorEntry<'_, '_, '_, S, CI> {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
@@ -809,13 +810,13 @@ impl<S: NorFlash, CI: CacheImpl> Deref for QueueIteratorEntry<'_, '_, '_, S, CI>
     }
 }
 
-impl<S: NorFlash, CI: CacheImpl> DerefMut for QueueIteratorEntry<'_, '_, '_, S, CI> {
+impl<S: NorFlash, CI: CacheImpl<()>> DerefMut for QueueIteratorEntry<'_, '_, '_, S, CI> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.item.data_mut()
     }
 }
 
-impl<'d, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'_, 'd, '_, S, CI> {
+impl<'d, S: NorFlash, CI: CacheImpl<()>> QueueIteratorEntry<'_, 'd, '_, S, CI> {
     /// Get a mutable reference to the data of this entry, but consume the entry too.
     /// This function has some relaxed lifetime constraints compared to the deref impls.
     #[must_use]
@@ -860,7 +861,7 @@ impl<'d, S: NorFlash, CI: CacheImpl> QueueIteratorEntry<'_, 'd, '_, S, CI> {
 mod tests {
     use crate::{
         AlignedBuf,
-        cache::NoCache,
+        cache::Cache,
         mock_flash::{self, FlashAverageStatsResult, FlashStatsResult, WriteCountCheck},
     };
 
@@ -875,7 +876,7 @@ mod tests {
         let mut storage = QueueStorage::new(
             MockFlashTiny::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x00..0x40) },
-            NoCache::new(),
+            Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
         const DATA_SIZE: usize = 22;
@@ -950,7 +951,7 @@ mod tests {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x1000) },
-            NoCache::new(),
+            Cache::new_uncached(),
         );
 
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -983,7 +984,7 @@ mod tests {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x1000) },
-            NoCache::new(),
+            Cache::new_uncached(),
         );
 
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -1020,7 +1021,7 @@ mod tests {
         let mut storage = QueueStorage::new(
             MockFlashTiny::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x00..0x40) },
-            NoCache::new(),
+            Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
 
@@ -1057,7 +1058,7 @@ mod tests {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x1000) },
-            NoCache::new(),
+            Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
 
@@ -1210,7 +1211,7 @@ mod tests {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x1000) },
-            NoCache::new(),
+            Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
 
@@ -1291,7 +1292,7 @@ mod tests {
         let mut storage = QueueStorage::new(
             MockFlashTiny::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x00..0x40) },
-            NoCache::new(),
+            Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
 
@@ -1318,7 +1319,7 @@ mod tests {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x1000) },
-            NoCache::new(),
+            Cache::new_uncached(),
         );
 
         storage.inner.close_page(0).await.unwrap();
@@ -1334,7 +1335,7 @@ mod tests {
         let mut storage = QueueStorage::new(
             MockFlashBig::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x1000) },
-            NoCache::new(),
+            Cache::new_uncached(),
         );
 
         storage
@@ -1355,7 +1356,7 @@ mod tests {
         let mut storage = QueueStorage::new(
             mock_flash::MockFlashBase::<1, 4, 256>::new(WriteCountCheck::Twice, None, true),
             const { QueueConfig::new(0x000..0x400) },
-            NoCache::new(),
+            Cache::new_uncached(),
         );
 
         for _ in 0..100 {

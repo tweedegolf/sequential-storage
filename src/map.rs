@@ -6,15 +6,15 @@ use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 #[cfg(feature = "postcard")]
 use serde::{Deserialize, Serialize};
 
-use crate::item::{Item, ItemHeader, ItemIter};
-
-use self::{
-    cache::KeyCacheImpl,
-    item::{ItemHeaderIter, ItemUnborrowed},
+use crate::{
+    cache::CacheImpl,
+    item::{Item, ItemHeader, ItemIter},
 };
 
+use self::item::{ItemHeaderIter, ItemUnborrowed};
+
 use super::{
-    Debug, Error, GenericStorage, MAX_WORD_SIZE, NorFlash, NorFlashExt, PageState, Range, cache,
+    Debug, Error, GenericStorage, MAX_WORD_SIZE, NorFlash, NorFlashExt, PageState, Range,
     calculate_page_address, calculate_page_end_address, calculate_page_index, calculate_page_size,
     item, run_with_auto_repair,
 };
@@ -134,12 +134,12 @@ impl<S: NorFlash> MapConfig<S> {
 /// ```
 ///
 /// For your convenience there are premade implementations for the [Key] and [Value] traits.
-pub struct MapStorage<K: Key, S: NorFlash, C: KeyCacheImpl<K>> {
-    inner: GenericStorage<S, C>,
+pub struct MapStorage<K: Key, S: NorFlash, C: CacheImpl<K>> {
+    inner: GenericStorage<S, C, K>,
     _phantom: PhantomData<K>,
 }
 
-impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
+impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
     /// Create a new map instance
     ///
     /// The provided cache instance must be new or must be in the exact correct state for the current flash contents.
@@ -151,6 +151,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
                 flash: storage,
                 flash_range: config.flash_range,
                 cache,
+                _phantom: PhantomData,
             },
             _phantom: PhantomData,
         }
@@ -914,7 +915,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
     /// This means the full item length is `returned number + (data length).next_multiple_of(S::WORD_SIZE)`.
     #[must_use]
     pub const fn item_overhead_size() -> u32 {
-        GenericStorage::<S, C>::item_overhead_size()
+        GenericStorage::<S, C, K>::item_overhead_size()
     }
 
     /// Destroy the instance to get back the flash and the cache.
@@ -997,7 +998,7 @@ impl<S: NorFlash, C: KeyCacheImpl<K>, K: Key> MapStorage<K, S, C> {
 /// }
 /// # })
 /// ```
-pub struct MapItemIter<'s, K: Key, S: NorFlash, C: KeyCacheImpl<K>> {
+pub struct MapItemIter<'s, K: Key, S: NorFlash, C: CacheImpl<K>> {
     storage: &'s mut MapStorage<K, S, C>,
     first_page: usize,
     current_page_index: usize,
@@ -1005,7 +1006,7 @@ pub struct MapItemIter<'s, K: Key, S: NorFlash, C: KeyCacheImpl<K>> {
     _key: PhantomData<K>,
 }
 
-impl<K: Key, S: NorFlash, C: KeyCacheImpl<K>> MapItemIter<'_, K, S, C> {
+impl<K: Key, S: NorFlash, C: CacheImpl<K>> MapItemIter<'_, K, S, C> {
     /// Get the next item in the iterator. Be careful that the given `data_buffer` should large enough to contain the serialized key and value.
     pub async fn next<'a, V: Value<'a>>(
         &mut self,
@@ -1402,7 +1403,7 @@ impl core::fmt::Display for SerializationError {
 
 #[cfg(test)]
 mod tests {
-    use crate::{AlignedBuf, cache::NoCache, mock_flash};
+    use crate::{AlignedBuf, cache::Cache, mock_flash};
 
     use super::*;
     use futures_test::test;
@@ -1415,7 +1416,7 @@ mod tests {
         let mut storage = MapStorage::<u8, _, _>::new(
             MockFlashBig::default(),
             MapConfig::new(0x000..0x1000),
-            cache::NoCache::new(),
+            Cache::new_uncached(),
         );
 
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1524,7 +1525,7 @@ mod tests {
         let mut storage = MapStorage::new(
             MockFlashTiny::default(),
             const { MapConfig::new(0x00..0x40) },
-            NoCache::new(),
+            Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
 
@@ -1568,7 +1569,7 @@ mod tests {
         let mut storage = MapStorage::new(
             MockFlashBig::default(),
             const { MapConfig::new(0x0000..0x1000) },
-            NoCache::new(),
+            Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
 
@@ -1610,7 +1611,7 @@ mod tests {
         let mut storage = MapStorage::new(
             mock_flash::MockFlashBase::<4, 1, 4096>::default(),
             const { MapConfig::new(0x0000..0x4000) },
-            NoCache::new(),
+            Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
 
@@ -1655,7 +1656,7 @@ mod tests {
                 true,
             ),
             const { MapConfig::new(0x0000..0x4000) },
-            NoCache::new(),
+            Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
 
@@ -1718,7 +1719,7 @@ mod tests {
                 true,
             ),
             const { MapConfig::new(0x0000..0x4000) },
-            NoCache::new(),
+            Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
 
@@ -1763,7 +1764,7 @@ mod tests {
         let mut storage = MapStorage::new(
             MockFlashBig::new(mock_flash::WriteCountCheck::Twice, None, true),
             const { MapConfig::new(0x000..0x1000) },
-            NoCache::new(),
+            Cache::new_uncached(),
         );
 
         storage
@@ -1785,7 +1786,7 @@ mod tests {
         let mut storage = MapStorage::new(
             MockFlashBig::default(),
             const { MapConfig::new(0x000..0x1000) },
-            NoCache::new(),
+            Cache::new_uncached(),
         );
 
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1836,7 +1837,7 @@ mod tests {
         let mut storage = MapStorage::new(
             MockFlashBig::default(),
             const { MapConfig::new(0x000..0x1000) },
-            NoCache::new(),
+            Cache::new_uncached(),
         );
 
         let mut data_buffer = AlignedBuf([0; 128]);
