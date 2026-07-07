@@ -86,7 +86,10 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
 
     fn validate_operation(offset: u32, length: usize) -> Result<Range<usize>, MockFlashError> {
         let offset = offset as usize;
-        if (offset % Self::READ_SIZE) != 0 || length == 0 || length % BYTES_PER_WORD != 0 {
+        if !offset.is_multiple_of(Self::READ_SIZE)
+            || length == 0
+            || !length.is_multiple_of(BYTES_PER_WORD)
+        {
             Err(MockFlashError::NotAligned)
         } else if offset > Self::CAPACITY_BYTES || offset + length > Self::CAPACITY_BYTES {
             Err(MockFlashError::OutOfBounds)
@@ -185,7 +188,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> R
         self.current_stats.reads += 1;
         self.current_stats.bytes_read += bytes.len() as u64;
 
-        if bytes.len() % Self::READ_SIZE != 0 {
+        if !bytes.len().is_multiple_of(Self::READ_SIZE) {
             panic!("any read must be a multiple of Self::READ_SIZE bytes");
         }
 
@@ -225,7 +228,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
             return Err(MockFlashError::OutOfBounds);
         }
 
-        if from % Self::PAGE_BYTES != 0 || to % Self::PAGE_BYTES != 0 {
+        if !from.is_multiple_of(Self::PAGE_BYTES) || !to.is_multiple_of(Self::PAGE_BYTES) {
             return Err(MockFlashError::NotAligned);
         }
 
@@ -248,11 +251,11 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
 
         // Check alignment. Some flash types are strict about the alignment of the input buffer. This ensures
         // that the mock flash is also strict to catch bugs and avoid regressions.
-        if self.alignment_check && bytes.as_ptr() as usize % 4 != 0 {
+        if self.alignment_check && !(bytes.as_ptr() as usize).is_multiple_of(4) {
             panic!("write buffer must be aligned to 4 bytes");
         }
 
-        if bytes.len() % Self::WRITE_SIZE != 0 {
+        if !bytes.len().is_multiple_of(Self::WRITE_SIZE) {
             panic!("any write must be a multiple of Self::WRITE_SIZE bytes");
         }
 
