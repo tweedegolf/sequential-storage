@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- *Breaking:* Restructured the cache API's to allow for much more customization. Everything now goes through a central `Cache` type. So now you can pick and choose which caches you want for your usecase.
+  - `NoCache` is now `Cache::new_uncached()`
+  - `PageStateCache` is now `Cache::new(ArrayPageStates::new(), Uncached, Uncached)`
+  - `PagePointerCache` is now `Cache::new(ArrayPageStates::new(), ArrayPagePointers::new(), Uncached)`
+  - `KeyPointerCache` is now `Cache::new(ArrayPageStates::new(), ArrayPagePointers::new(), ArrayKeyPointers::new())`
+- Added a new page state cache `CalculatedPageStates` trades more calculations for a fixed memory use (not scaling with amount of pages). When using more than 32 pages or so, this is interesting to consider. 
+
 ## 7.2.0 - 24-03-26
 
 - Added a RAM-buffered queue
