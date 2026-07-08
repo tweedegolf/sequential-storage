@@ -3,8 +3,9 @@ mod queue_tests {
     use crate::{
         AlignedBuf,
         cache::{
-            Cache, CacheImpl, Uncached, page_pointers::ArrayPagePointers,
-            page_states::CalculatedPageStates,
+            Cache, CacheImpl, Uncached,
+            page_pointers::ArrayPagePointers,
+            page_states::{ArrayPageStates, CalculatedPageStates},
         },
         mock_flash::{self, FlashStatsResult, WriteCountCheck},
         queue::{QueueConfig, QueueStorage},
@@ -30,7 +31,7 @@ mod queue_tests {
     }
 
     #[test]
-    async fn page_state_cache() {
+    async fn calculated_page_state_cache() {
         assert_eq!(
             run_test(Cache::new(
                 CalculatedPageStates::new(NUM_PAGES),
@@ -49,19 +50,57 @@ mod queue_tests {
     }
 
     #[test]
-    async fn page_pointer_cache() {
+    async fn array_page_state_cache() {
         assert_eq!(
             run_test(Cache::new(
-                CalculatedPageStates::new(NUM_PAGES),
+                ArrayPageStates::<NUM_PAGES>::new(),
+                Uncached,
+                Uncached
+            ))
+            .await,
+            FlashStatsResult {
+                erases: 149,
+                reads: 68037,
+                writes: 6299,
+                bytes_read: 554240,
+                bytes_written: 53299
+            }
+        );
+    }
+
+    #[test]
+    async fn array_page_pointer_cache() {
+        assert_eq!(
+            run_test(Cache::new(
+                Uncached,
                 ArrayPagePointers::<NUM_PAGES>::new(),
                 Uncached
             ))
             .await,
             FlashStatsResult {
                 erases: 149,
-                reads: 10033,
+                reads: 106931,
                 writes: 6299,
-                bytes_read: 89690,
+                bytes_read: 186588,
+                bytes_written: 53299
+            }
+        );
+    }
+
+    #[test]
+    async fn all_cache() {
+        assert_eq!(
+            run_test(Cache::new(
+                ArrayPageStates::<NUM_PAGES>::new(),
+                ArrayPagePointers::<NUM_PAGES>::new(),
+                Uncached
+            ))
+            .await,
+            FlashStatsResult {
+                erases: 149,
+                reads: 9959,
+                writes: 6299,
+                bytes_read: 89616,
                 bytes_written: 53299
             }
         );
@@ -112,8 +151,10 @@ mod map_tests {
     use crate::{
         AlignedBuf,
         cache::{
-            Cache, CacheImpl, Uncached, key_pointers::ArrayKeyPointers,
-            page_pointers::ArrayPagePointers, page_states::CalculatedPageStates,
+            Cache, CacheImpl, Uncached,
+            key_pointers::ArrayKeyPointers,
+            page_pointers::ArrayPagePointers,
+            page_states::{ArrayPageStates, CalculatedPageStates},
         },
         map::{MapConfig, MapStorage},
         mock_flash::{self, FlashStatsResult, WriteCountCheck},
@@ -138,7 +179,7 @@ mod map_tests {
     }
 
     #[test]
-    async fn page_state_cache() {
+    async fn calculated_page_state_cache() {
         assert_eq!(
             run_test(Cache::new(
                 CalculatedPageStates::new(NUM_PAGES),
@@ -157,19 +198,38 @@ mod map_tests {
     }
 
     #[test]
-    async fn page_pointer_cache() {
+    async fn array_page_state_cache() {
         assert_eq!(
             run_test(Cache::new(
-                CalculatedPageStates::new(NUM_PAGES),
+                ArrayPageStates::<NUM_PAGES>::new(),
+                Uncached,
+                Uncached
+            ))
+            .await,
+            FlashStatsResult {
+                erases: 198,
+                reads: 181162,
+                writes: 5201,
+                bytes_read: 1784477,
+                bytes_written: 50401
+            }
+        );
+    }
+
+    #[test]
+    async fn array_page_pointer_cache() {
+        assert_eq!(
+            run_test(Cache::new(
+                Uncached,
                 ArrayPagePointers::<NUM_PAGES>::new(),
                 Uncached
             ))
             .await,
             FlashStatsResult {
                 erases: 198,
-                reads: 163373,
+                reads: 215897,
                 writes: 5201,
-                bytes_read: 1641465,
+                bytes_read: 1693989,
                 bytes_written: 50401
             }
         );
@@ -179,16 +239,16 @@ mod map_tests {
     async fn key_pointer_cache_half() {
         assert_eq!(
             run_test(Cache::new(
-                CalculatedPageStates::new(NUM_PAGES),
-                ArrayPagePointers::<NUM_PAGES>::new(),
+                Uncached,
+                Uncached,
                 ArrayKeyPointers::<u16, 12>::new(),
             ))
             .await,
             FlashStatsResult {
                 erases: 198,
-                reads: 131603,
+                reads: 191876,
                 writes: 5201,
-                bytes_read: 1299375,
+                bytes_read: 1484871,
                 bytes_written: 50401
             }
         );
@@ -198,16 +258,35 @@ mod map_tests {
     async fn key_pointer_cache_full() {
         assert_eq!(
             run_test(Cache::new(
-                CalculatedPageStates::new(NUM_PAGES),
+                Uncached,
+                Uncached,
+                ArrayKeyPointers::<u16, 24>::new(),
+            ))
+            .await,
+            FlashStatsResult {
+                erases: 198,
+                reads: 52403,
+                writes: 5201,
+                bytes_read: 313708,
+                bytes_written: 50401
+            }
+        );
+    }
+
+    #[test]
+    async fn all_cache() {
+        assert_eq!(
+            run_test(Cache::new(
+                ArrayPageStates::<NUM_PAGES>::new(),
                 ArrayPagePointers::<NUM_PAGES>::new(),
                 ArrayKeyPointers::<u16, 24>::new(),
             ))
             .await,
             FlashStatsResult {
                 erases: 198,
-                reads: 14610,
+                reads: 14510,
                 writes: 5201,
-                bytes_read: 150692,
+                bytes_read: 150592,
                 bytes_written: 50401
             }
         );

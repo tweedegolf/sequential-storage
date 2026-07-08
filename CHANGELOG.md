@@ -11,6 +11,8 @@
   - `KeyPointerCache` is now `Cache::new(ArrayPageStates::new(), ArrayPagePointers::new(), ArrayKeyPointers::new())`
 - Added a new page state cache `CalculatedPageStates` trades more calculations for a fixed memory use (not scaling with amount of pages). When using more than 32 pages or so, this is interesting to consider. 
 
+This release is 'disk'-compatible with 7.0
+
 ## 7.2.0 - 24-03-26
 
 - Added a RAM-buffered queue

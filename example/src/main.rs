@@ -8,11 +8,8 @@ use embassy_executor::Spawner;
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 use sequential_storage::{
     cache::{
-        Cache, CacheImpl, Uncached, key_pointers::ArrayKeyPointers,
-        page_pointers::ArrayPagePointers, page_states::ArrayPageStates,
-    },
-    map::{MapConfig, MapStorage},
-    queue::{QueueConfig, QueueStorage},
+        Cache, CacheImpl, Uncached, key_pointers::ArrayKeyPointers, page_pointers::ArrayPagePointers, page_states::{ArrayPageStates, CalculatedPageStates},
+    }, map::{MapConfig, MapStorage}, queue::{QueueConfig, QueueStorage},
 };
 use {defmt_rtt as _, panic_probe as _};
 

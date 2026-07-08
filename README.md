@@ -87,25 +87,22 @@ Instead, we can optionally store some state in ram.
 
 These numbers are taken from the test cases in the cache module:
 
-|             Name |                                    RAM bytes | Map # flash reads | Map flash bytes read | Queue # flash reads | Queue flash bytes read |
-| ---------------: | -------------------------------------------: | ----------------: | -------------------: | ------------------: | ---------------------: |
-|          `NoCache` |                                            0 |              100% |                 100% |                100% |                   100% |
-|   `PageStateCache` |                                1 * num pages |               77% |                  97% |                 41% |                    85% |
-| `PagePointerCache` |                                9 * num pages |               70% |                  89% |                  6% |                    14% |
-|  `KeyPointerCache` | 9 * num pages + (sizeof(KEY) + 4) * num keys |              6.2% |                 8.2% |                   - |                      - |
+|                        Name |                    RAM bytes |    Map # flash reads | Map flash bytes read | Queue # flash reads | Queue flash bytes read |
+| --------------------------: | ---------------------------: | -------------------: | -------------------: | ------------------: | ---------------------: |
+|              All `Uncached` |                            0 |                 100% |                 100% |                100% |                   100% |
+| Only `CalculatedPageStates` |                           24 |                  78% |                  97% |                 44% |                    85% |
+|      Only `ArrayPageStates` |                1 * num pages |                  77% |                  97% |                 41% |                    85% |
+|    Only `ArrayPagePointers` |                8 * num pages |                  92% |                  92% |                 65% |                    28% |
+|     Only `ArrayKeyPointers` | (sizeof(KEY) + 4) * num keys | half: 82%, full: 22% | half: 80%, full: 17% |                   - |                      - |
+|   All array caches together |                              |                   6% |                   8% |                  6% |                    14% |
 
 #### Takeaways
 
-- `PageStateCache`
-  - Mostly tackles number of reads
-  - Very cheap in RAM, so easy win
-- `PagePointerCache`
-  - Very efficient for the queue
-  - Minimum cache level that makes a dent in the map
-- `KeyPointerCache`
-  - Awesome savings!
-  - Numbers are less good if there are more keys than the cache can store
-  - Same as `PagePointerCache` when used for queue
+- The array page states cache is slightly better than the calculated version
+  - That's because the array has perfect caching, while the calculated doesn't always know everything and has to be a little bit conservative
+- Page pointers are really helpful for queues
+- Key pointers are great, though you probably want to have enough space for all keys to get all benefits
+  - This test is with a random(-ish) access pattern. If you mostly access only a subset of keys, then a smaller key cache should yield better savings
 
 ## Inner workings
 
