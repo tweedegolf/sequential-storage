@@ -11,6 +11,7 @@
   - `KeyPointerCache` is now `Cache::new(ArrayPageStates::new(), ArrayPagePointers::new(), ArrayKeyPointers::new())`
 - Added a new page state cache `CalculatedPageStates` trades more calculations for a fixed memory use (not scaling with amount of pages). When using more than 32 pages or so, this is interesting to consider. 
 - *Breaking:* Changed the fallible config constructors to return `Result`s with proper error types instead of options.
+- Added `store_item_generic` to map for fringe usecases where certain required auto traits aren't implemented on the futures
 
 This release is 'disk'-compatible with 7.0
 
