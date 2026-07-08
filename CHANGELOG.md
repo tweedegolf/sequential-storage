@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## 8.0.0 - 08-07-26
+
 - *Breaking:* Restructured the cache API's to allow for much more customization. Everything now goes through a central `Cache` type. So now you can pick and choose which caches you want for your usecase.
   - `NoCache` is now `Cache::new_uncached()`
   - `PageStateCache` is now `Cache::new(ArrayPageStates::new(), Uncached, Uncached)`
