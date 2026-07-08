@@ -24,35 +24,55 @@ impl<S: NorFlash> QueueConfig<S> {
     /// If you want a fallible version, use [`Self::try_new`].
     #[must_use]
     pub const fn new(flash_range: Range<u32>) -> Self {
-        Self::try_new(flash_range).expect("Queue config must be correct")
+        match Self::try_new(flash_range) {
+            Ok(config) => config,
+            Err(_) => panic!("Queue config must be correct"),
+        }
     }
 
     /// Create a new queue configuration. Will return None if the data is invalid
     #[must_use]
-    pub const fn try_new(flash_range: Range<u32>) -> Option<Self> {
+    pub const fn try_new(flash_range: Range<u32>) -> Result<Self, QueueConfigError> {
         if !flash_range.start.is_multiple_of(S::ERASE_SIZE as u32) {
-            return None;
+            return Err(QueueConfigError::StartRangeNotAtPageBoundary);
         }
         if !flash_range.end.is_multiple_of(S::ERASE_SIZE as u32) {
-            return None;
+            return Err(QueueConfigError::EndRangeNotAtPageBoundary);
         }
         // At least 1 page is used
         if flash_range.end - flash_range.start < (S::ERASE_SIZE as u32) {
-            return None;
+            return Err(QueueConfigError::RangeTooSmall);
         }
 
-        if S::ERASE_SIZE < S::WORD_SIZE * 4 {
-            return None;
+        // A page must be able to store the 2 page states and at least one item header and a word for item data
+        if S::ERASE_SIZE < S::WORD_SIZE * 3 + ItemHeader::data_address::<S>(0) as usize {
+            return Err(QueueConfigError::PagesTooSmall);
         }
         if S::WORD_SIZE > MAX_WORD_SIZE {
-            return None;
+            return Err(QueueConfigError::WordSizeTooLarge);
         }
 
-        Some(Self {
+        Ok(Self {
             flash_range,
             _phantom: PhantomData,
         })
     }
+}
+
+/// Error for [`QueueConfig`] constructor
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum QueueConfigError {
+    /// The start range address is not a multiple of the erase size
+    StartRangeNotAtPageBoundary,
+    /// The end range address is not a multiple of the erase size
+    EndRangeNotAtPageBoundary,
+    /// The queue needs at least 1 page to operate, but got less
+    RangeTooSmall,
+    /// The pages of the flash are too small to work with
+    PagesTooSmall,
+    /// The word size of the flash is bigger than [`MAX_WORD_SIZE`]
+    WordSizeTooLarge,
 }
 
 /// A fifo queue storage

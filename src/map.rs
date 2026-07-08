@@ -30,35 +30,55 @@ impl<S: NorFlash> MapConfig<S> {
     /// If you want a fallible version, use [`Self::try_new`].
     #[must_use]
     pub const fn new(flash_range: Range<u32>) -> Self {
-        Self::try_new(flash_range).expect("Map config must be correct")
+        match Self::try_new(flash_range) {
+            Ok(config) => config,
+            Err(_) => panic!("Map config must be correct"),
+        }
     }
 
     /// Create a new map configuration. Will return None if the data is invalid
     #[must_use]
-    pub const fn try_new(flash_range: Range<u32>) -> Option<Self> {
+    pub const fn try_new(flash_range: Range<u32>) -> Result<Self, MapConfigError> {
         if !flash_range.start.is_multiple_of(S::ERASE_SIZE as u32) {
-            return None;
+            return Err(MapConfigError::StartRangeNotAtPageBoundary);
         }
         if !flash_range.end.is_multiple_of(S::ERASE_SIZE as u32) {
-            return None;
+            return Err(MapConfigError::EndRangeNotAtPageBoundary);
         }
         // At least 2 pages are used
         if flash_range.end - flash_range.start < S::ERASE_SIZE as u32 * 2 {
-            return None;
+            return Err(MapConfigError::RangeTooSmall);
         }
 
-        if S::ERASE_SIZE < S::WORD_SIZE * 3 {
-            return None;
+        // A page must be able to store the 2 page states and at least one item header and a word for item data
+        if S::ERASE_SIZE < S::WORD_SIZE * 3 + ItemHeader::data_address::<S>(0) as usize {
+            return Err(MapConfigError::PagesTooSmall);
         }
         if S::WORD_SIZE > MAX_WORD_SIZE {
-            return None;
+            return Err(MapConfigError::WordSizeTooLarge);
         }
 
-        Some(Self {
+        Ok(Self {
             flash_range,
             _phantom: PhantomData,
         })
     }
+}
+
+/// Error for [`MapConfig`] constructor
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum MapConfigError {
+    /// The start range address is not a multiple of the erase size
+    StartRangeNotAtPageBoundary,
+    /// The end range address is not a multiple of the erase size
+    EndRangeNotAtPageBoundary,
+    /// The map needs at least 2 pages to operate, but got less
+    RangeTooSmall,
+    /// The pages of the flash are too small to work with
+    PagesTooSmall,
+    /// The word size of the flash is bigger than [`MAX_WORD_SIZE`]
+    WordSizeTooLarge,
 }
 
 /// A map-like storage
