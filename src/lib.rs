@@ -1,4 +1,4 @@
-#![cfg_attr(not(any(test, doctest, feature = "std")), no_std)]
+#![cfg_attr(not(any(test, doctest, feature = "std", fuzzing)), no_std)]
 #![warn(missing_docs)]
 #![doc = include_str!("../README.md")]
 #![allow(clippy::cast_possible_truncation)]
@@ -43,13 +43,14 @@ const MAX_WORD_SIZE: usize = 32;
 /// - queue: [`queue::QueueStorage::new`]
 ///
 /// You can [`Self::destroy`] this type to get back the flash and the cache.
-struct GenericStorage<S: NorFlash, C: CacheImpl> {
+struct GenericStorage<S: NorFlash, C: CacheImpl<KEY>, KEY> {
     flash: S,
     flash_range: Range<u32>,
     cache: C,
+    _phantom: PhantomData<KEY>,
 }
 
-impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
+impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
     /// Resets the flash in the entire given flash range.
     ///
     /// This is just a thin helper function as it just calls the flash's erase function.
@@ -85,7 +86,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
             }
         }
 
-        #[cfg(fuzzing_repro)]
+        #[cfg(fuzzing)]
         eprintln!("General repair has been called");
 
         Ok(())
@@ -100,7 +101,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         page_state: PageState,
     ) -> Result<Option<usize>, Error<S::Error>> {
         for page_index in self.get_pages(starting_page_index) {
-            if page_state == self.get_page_state(page_index).await? {
+            if page_state == self.get_page_state_cached(page_index).await? {
                 return Ok(Some(page_index));
             }
         }
@@ -118,7 +119,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     fn get_pages(
         &self,
         starting_page_index: usize,
-    ) -> impl DoubleEndedIterator<Item = usize> + use<S, C> {
+    ) -> impl DoubleEndedIterator<Item = usize> + use<S, C, KEY> {
         let page_count = self.page_count();
         (0..page_count.get()).map(move |index| (index + starting_page_index) % page_count)
     }
@@ -140,11 +141,33 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     }
 
     /// Get the state of the page located at the given index
-    async fn get_page_state(&mut self, page_index: usize) -> Result<PageState, Error<S::Error>> {
+    async fn get_page_state_cached(
+        &mut self,
+        page_index: usize,
+    ) -> Result<PageState, Error<S::Error>> {
         if let Some(cached_page_state) = self.cache.get_page_state(page_index) {
+            if cfg!(feature = "_check-cache") {
+                let discovered_state = self.get_page_state(page_index).await?;
+                assert_eq!(
+                    cached_page_state, discovered_state,
+                    "At page index: {page_index}",
+                );
+            }
+
             return Ok(cached_page_state);
         }
 
+        let discovered_state = self.get_page_state(page_index).await?;
+
+        // Not dirty because nothing changed and nothing can be inconsistent
+        self.cache
+            .notice_page_state(page_index, discovered_state, false);
+
+        Ok(discovered_state)
+    }
+
+    /// Get the state of the page located at the given index
+    async fn get_page_state(&mut self, page_index: usize) -> Result<PageState, Error<S::Error>> {
         let page_address = calculate_page_address::<S>(self.flash_range.clone(), page_index);
         /// We only care about the data in the first byte to aid shutdown/cancellation.
         /// But we also don't want it to be too too definitive because we want to survive the occasional bitflip.
@@ -195,10 +218,6 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
             }
             (false, false) => PageState::Open,
         };
-
-        // Not dirty because nothing changed and nothing can be inconsistent
-        self.cache
-            .notice_page_state(page_index, discovered_state, false);
 
         Ok(discovered_state)
     }
@@ -257,7 +276,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         &mut self,
         page_index: usize,
     ) -> Result<PageState, Error<S::Error>> {
-        let current_state = self.get_page_state(page_index).await?;
+        let current_state = self.get_page_state_cached(page_index).await?;
 
         if current_state != PageState::Open {
             return Ok(current_state);
@@ -285,7 +304,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
         Ok(new_state)
     }
 
-    #[cfg(any(test, feature = "std"))]
+    #[cfg(any(test, feature = "std", fuzzing))]
     /// Print all items in flash to the returned string
     pub async fn print_items(&mut self) -> String {
         use crate::NorFlashExt;
@@ -304,7 +323,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
                 match self.get_page_state(page_index).await {
                     Ok(value) => format!("{value:?}"),
                     Err(e) => format!("Error ({e:?})"),
-                }
+                },
             )
             .unwrap();
             let page_data_start =
@@ -419,7 +438,7 @@ const MARKER: u8 = 0;
 /// The state of a page
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-enum PageState {
+pub enum PageState {
     /// This page was fully written and has now been sealed
     Closed,
     /// This page has been written to, but may have some space left over
@@ -594,7 +613,7 @@ macro_rules! run_with_auto_repair {
                     backtrace: _backtrace,
                 ..
             }) => {
-                #[cfg(all(feature = "_test", fuzzing_repro))]
+                #[cfg(all(feature = "_test", fuzzing))]
                 eprintln!(
                     "### Encountered curruption! Repairing now. Originated from:\n{_backtrace:#}"
                 );
@@ -612,7 +631,7 @@ use crate::cache::CacheImpl;
 
 #[cfg(test)]
 mod tests {
-    use crate::cache::NoCache;
+    use crate::cache::Cache;
 
     use super::*;
     use futures_test::test;
@@ -661,7 +680,8 @@ mod tests {
         let mut storage = GenericStorage {
             flash: flash,
             flash_range: 0x000..0x400,
-            cache: NoCache::new(),
+            cache: Cache::new_uncached(),
+            _phantom: PhantomData::<()>,
         };
 
         assert_eq!(

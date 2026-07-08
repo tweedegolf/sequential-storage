@@ -6,8 +6,10 @@ use libfuzzer_sys::fuzz_target;
 use rand::SeedableRng;
 use sequential_storage::{
     cache::{
-        HeapKeyPointerCache, HeapPagePointerCache, HeapPageStateCache, KeyCacheImpl,
-        KeyPointerCache, NoCache, PagePointerCache, PageStateCache,
+        key_pointers::{ArrayKeyPointers, HeapKeyPointers},
+        page_pointers::{ArrayPagePointers, HeapPagePointers},
+        page_states::{ArrayPageStates, CalculatedPageStates, HeapPageStates},
+        Cache, CacheImpl, Uncached,
     },
     map::{MapConfig, MapStorage},
     mock_flash::{MockFlashBase, MockFlashError, WriteCountCheck},
@@ -20,13 +22,35 @@ const WORD_SIZE: usize = 4;
 const WORDS_PER_PAGE: usize = 256;
 
 fuzz_target!(|data: Input| match data.cache_type {
-    CacheType::NoCache => fuzz(data, NoCache::new()),
-    CacheType::PageStateCache => fuzz(data, PageStateCache::<PAGES>::new()),
-    CacheType::PagePointerCache => fuzz(data, PagePointerCache::<PAGES>::new()),
-    CacheType::KeyPointerCache => fuzz(data, KeyPointerCache::<PAGES, u8, 64>::new()),
-    CacheType::HeapPageStateCache => fuzz(data, HeapPageStateCache::new(PAGES)),
-    CacheType::HeapPagePointerCache => fuzz(data, HeapPagePointerCache::new(PAGES)),
-    CacheType::HeapKeyPointerCache => fuzz(data, HeapKeyPointerCache::<u8>::new(PAGES, 64)),
+    CacheType::NoCache => fuzz(data, Cache::new(Uncached, Uncached, Uncached)),
+    CacheType::CalculatedPageStateCache => fuzz(
+        data,
+        Cache::new(CalculatedPageStates::new(PAGES), Uncached, Uncached)
+    ),
+    CacheType::ArrayPageStateCache => fuzz(
+        data,
+        Cache::new(ArrayPageStates::<PAGES>::new(), Uncached, Uncached)
+    ),
+    CacheType::ArrayPagePointerCache => fuzz(
+        data,
+        Cache::new(Uncached, ArrayPagePointers::<PAGES>::new(), Uncached)
+    ),
+    CacheType::ArrayKeyPointerCache => fuzz(
+        data,
+        Cache::new(Uncached, Uncached, ArrayKeyPointers::<_, 64>::new())
+    ),
+    CacheType::HeapPageStateCache => fuzz(
+        data,
+        Cache::new(HeapPageStates::new(PAGES), Uncached, Uncached)
+    ),
+    CacheType::HeapPagePointerCache => fuzz(
+        data,
+        Cache::new(Uncached, HeapPagePointers::new(PAGES), Uncached)
+    ),
+    CacheType::HeapKeyPointerCache => fuzz(
+        data,
+        Cache::new(Uncached, Uncached, HeapKeyPointers::<_>::new(64))
+    ),
 });
 
 #[derive(Arbitrary, Debug, Clone)]
@@ -66,15 +90,16 @@ impl StoreOp {
 #[derive(Arbitrary, Debug, Clone)]
 enum CacheType {
     NoCache,
-    PageStateCache,
-    PagePointerCache,
-    KeyPointerCache,
+    CalculatedPageStateCache,
+    ArrayPageStateCache,
+    ArrayPagePointerCache,
+    ArrayKeyPointerCache,
     HeapPageStateCache,
     HeapPagePointerCache,
     HeapKeyPointerCache,
 }
 
-fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
+fn fuzz(ops: Input, cache: impl CacheImpl<u8> + Debug) {
     let flash = MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::new(
         if ops
             .ops
@@ -98,15 +123,15 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
 
     let mut rng = rand_pcg::Pcg32::seed_from_u64(ops.seed);
 
-    #[cfg(fuzzing_repro)]
+    #[cfg(fuzzing)]
     eprintln!("\n=== START ===\n");
 
     for op in ops.ops.into_iter() {
-        #[cfg(fuzzing_repro)]
-        eprintln!("{}", block_on(flash.print_items()));
-        #[cfg(fuzzing_repro)]
-        eprintln!("{:?}", cache);
-        #[cfg(fuzzing_repro)]
+        #[cfg(fuzzing)]
+        eprintln!("{}", block_on(storage.print_items()));
+        #[cfg(fuzzing)]
+        eprintln!("{:?}", storage.cache());
+        #[cfg(fuzzing)]
         eprintln!("=== OP: {op:?} ===");
 
         match op.clone() {
@@ -123,14 +148,14 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                     }) => {
                         match block_on(storage.fetch_item::<&[u8]>(&mut buf.0, &key)) {
                             Ok(Some(check_item)) if check_item == value => {
-                                #[cfg(fuzzing_repro)]
+                                #[cfg(fuzzing)]
                                 eprintln!("Early shutoff when storing key: {key}, value: {value:?}! (but it still stored fully). Originated from:\n{_backtrace:#}");
                                 // Even though we got a shutoff, it still managed to store well
                                 map.insert(key, value);
                             }
                             _ => {
                                 // Could not fetch the item we stored...
-                                #[cfg(fuzzing_repro)]
+                                #[cfg(fuzzing)]
                                 eprintln!("Early shutoff when storing key: {key}, value: {value:?}! Originated from:\n{_backtrace:#}");
                             }
                         }
@@ -138,7 +163,7 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                     Err(Error::Corrupted {
                         backtrace: _backtrace,
                     }) => {
-                        #[cfg(fuzzing_repro)]
+                        #[cfg(fuzzing)]
                         eprintln!("Corrupted when storing! Originated from:\n{_backtrace:#}");
                         panic!("Corrupted!");
                     }
@@ -159,13 +184,13 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                     value: MockFlashError::EarlyShutoff(_, _),
                     backtrace: _backtrace,
                 }) => {
-                    #[cfg(fuzzing_repro)]
+                    #[cfg(fuzzing)]
                     eprintln!("Early shutoff when fetching! Originated from:\n{_backtrace:#}");
                 }
                 Err(Error::Corrupted {
                     backtrace: _backtrace,
                 }) => {
-                    #[cfg(fuzzing_repro)]
+                    #[cfg(fuzzing)]
                     eprintln!("Corrupted when fetching! Originated from:\n{_backtrace:#}");
                     panic!("Corrupted!");
                 }
@@ -183,12 +208,12 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                         // Check if the item is still there. It might or it might not and either is fine
                         match block_on(storage.fetch_item::<&[u8]>(&mut buf.0, &key)) {
                             Ok(Some(_)) => {
-                                #[cfg(fuzzing_repro)]
+                                #[cfg(fuzzing)]
                                 eprintln!("Early shutoff when removing item {key}! Originated from:\n{_backtrace:#}");
                             }
                             _ => {
                                 // Could not fetch the item we stored...
-                                #[cfg(fuzzing_repro)]
+                                #[cfg(fuzzing)]
                                 eprintln!("Early shutoff when removing item {key}! (but it still removed fully). Originated from:\n{_backtrace:#}");
                                 // Even though we got a shutoff, it still managed to store well
                                 map.remove(&key);
@@ -198,7 +223,7 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                     Err(Error::Corrupted {
                         backtrace: _backtrace,
                     }) => {
-                        #[cfg(fuzzing_repro)]
+                        #[cfg(fuzzing)]
                         eprintln!("Corrupted when removing! Originated from:\n{_backtrace:#}");
                         panic!("Corrupted!");
                     }
@@ -218,12 +243,12 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                             // Check if the item is still there. It might or it might not and either is fine
                             match block_on(storage.fetch_item::<&[u8]>(&mut buf.0, &key)) {
                                 Ok(Some(_)) => {
-                                    #[cfg(fuzzing_repro)]
+                                    #[cfg(fuzzing)]
                                     eprintln!("Early shutoff when removing item {key}! Originated from:\n{_backtrace:#}");
                                 }
                                 _ => {
                                     // Could not fetch the item we stored...
-                                    #[cfg(fuzzing_repro)]
+                                    #[cfg(fuzzing)]
                                     eprintln!("Early shutoff when removing item {key}! (but it still removed fully). Originated from:\n{_backtrace:#}");
                                     // Even though we got a shutoff, it still managed to store well
                                     map.remove(&key);
@@ -234,7 +259,7 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                     Err(Error::Corrupted {
                         backtrace: _backtrace,
                     }) => {
-                        #[cfg(fuzzing_repro)]
+                        #[cfg(fuzzing)]
                         eprintln!("Corrupted when removing! Originated from:\n{_backtrace:#}");
                         panic!("Corrupted!");
                     }
@@ -255,7 +280,7 @@ fn fuzz(ops: Input, cache: impl KeyCacheImpl<u8> + Debug) {
                         Err(Error::Corrupted {
                             backtrace: _backtrace,
                         }) => {
-                            #[cfg(fuzzing_repro)]
+                            #[cfg(fuzzing)]
                             eprintln!("Corrupted when removing! Originated from:\n{_backtrace:#}");
                             panic!("Corrupted!");
                         }

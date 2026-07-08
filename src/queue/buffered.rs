@@ -213,12 +213,12 @@ pub enum OverflowPolicy {
 /// ```
 ///
 /// For ISR-safe use, enable the `shared-ram-ring` feature and use [`SharedRamRing`] instead.
-pub struct BufferedQueue<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> {
+pub struct BufferedQueue<S: NorFlash, C: CacheImpl<()>, const RAM_BYTES: usize> {
     storage: QueueStorage<S, C>,
     ram: RamRing<RAM_BYTES>,
 }
 
-impl<S: NorFlash, C: CacheImpl, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_BYTES> {
+impl<S: NorFlash, C: CacheImpl<()>, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_BYTES> {
     /// Wrap an existing [`QueueStorage`] with a RAM ring buffer.
     pub fn new(storage: QueueStorage<S, C>) -> Self {
         Self {
@@ -434,7 +434,7 @@ impl<const N: usize> SharedRamRing<N> {
     ///
     /// The critical section is held only for the brief ring peek/discard; the slow flash
     /// write runs outside it.
-    pub async fn drain_one<S: NorFlash, C: CacheImpl>(
+    pub async fn drain_one<S: NorFlash, C: CacheImpl<()>>(
         &self,
         storage: &mut QueueStorage<S, C>,
         scratch: &mut [u8],
@@ -454,7 +454,7 @@ impl<const N: usize> SharedRamRing<N> {
     /// Drain all ring items to flash.
     ///
     /// `scratch` must be large enough for the largest pending item.
-    pub async fn drain_all<S: NorFlash, C: CacheImpl>(
+    pub async fn drain_all<S: NorFlash, C: CacheImpl<()>>(
         &self,
         storage: &mut QueueStorage<S, C>,
         scratch: &mut [u8],
@@ -472,7 +472,7 @@ impl<const N: usize> SharedRamRing<N> {
     ///     ring.wait_and_drain_all(&mut storage, &mut scratch, false).await.unwrap();
     /// }
     /// ```
-    pub async fn wait_and_drain_all<S: NorFlash, C: CacheImpl>(
+    pub async fn wait_and_drain_all<S: NorFlash, C: CacheImpl<()>>(
         &self,
         storage: &mut QueueStorage<S, C>,
         scratch: &mut [u8],
@@ -483,7 +483,7 @@ impl<const N: usize> SharedRamRing<N> {
     }
 
     /// Pop the oldest item (drains ring to flash first to preserve ordering).
-    pub async fn pop<'d, S: MultiwriteNorFlash, C: CacheImpl>(
+    pub async fn pop<'d, S: MultiwriteNorFlash, C: CacheImpl<()>>(
         &self,
         storage: &mut QueueStorage<S, C>,
         data_buffer: &'d mut [u8],
@@ -497,7 +497,7 @@ impl<const N: usize> SharedRamRing<N> {
     }
 
     /// Peek at the oldest item without removing it (drains ring to flash first).
-    pub async fn peek<'d, S: MultiwriteNorFlash, C: CacheImpl>(
+    pub async fn peek<'d, S: MultiwriteNorFlash, C: CacheImpl<()>>(
         &self,
         storage: &mut QueueStorage<S, C>,
         data_buffer: &'d mut [u8],
@@ -608,7 +608,7 @@ mod tests {
     #[cfg(feature = "_test")]
     mod integration {
         use super::*;
-        use crate::cache::NoCache;
+        use crate::cache::Uncached;
         use crate::mock_flash::MockFlashBase;
         use crate::queue::{QueueConfig, QueueStorage};
         use futures::executor::block_on;

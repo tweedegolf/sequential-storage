@@ -28,17 +28,17 @@ use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
 
 use crate::{
     AlignedBuf, Error, GenericStorage, MAX_WORD_SIZE, NorFlashExt, PageState,
-    cache::{CacheImpl, PrivateCacheImpl},
+    cache::{CacheImpl, SealedCacheImpl},
     calculate_page_address, calculate_page_end_address, calculate_page_index,
     round_down_to_alignment, round_down_to_alignment_usize, round_up_to_alignment,
     round_up_to_alignment_usize,
 };
 
 #[derive(Debug, Clone)]
-pub struct ItemHeader {
+pub(crate) struct ItemHeader {
     /// Length of the item payload (so not including the header and not including word alignment)
-    pub length: u16,
-    pub crc: Option<NonZeroU32>,
+    pub(crate) length: u16,
+    pub(crate) crc: Option<NonZeroU32>,
 }
 
 impl ItemHeader {
@@ -51,7 +51,7 @@ impl ItemHeader {
     /// Read the header from the flash at the given address.
     ///
     /// If the item doesn't exist or doesn't fit between the address and the end address, none is returned.
-    pub async fn read_new<S: NorFlash>(
+    pub(crate) async fn read_new<S: NorFlash>(
         flash: &mut S,
         address: u32,
         end_address: u32,
@@ -120,7 +120,7 @@ impl ItemHeader {
         Ok(Some(header))
     }
 
-    pub async fn read_item<'d, S: NorFlash>(
+    pub(crate) async fn read_item<'d, S: NorFlash>(
         self,
         flash: &mut S,
         data_buffer: &'d mut [u8],
@@ -195,11 +195,11 @@ impl ItemHeader {
     }
 
     /// Erase this item by setting the crc to none and overwriting the header with it
-    pub async fn erase_data<S: MultiwriteNorFlash>(
+    pub(crate) async fn erase_data<S: MultiwriteNorFlash>(
         mut self,
         flash: &mut S,
         flash_range: Range<u32>,
-        cache: &mut impl PrivateCacheImpl,
+        cache: &mut impl SealedCacheImpl,
         address: u32,
     ) -> Result<Self, Error<S::Error>> {
         self.crc = None;
@@ -209,19 +209,19 @@ impl ItemHeader {
     }
 
     /// Get the address of the start of the data for this item
-    pub const fn data_address<S: NorFlash>(address: u32) -> u32 {
+    pub(crate) const fn data_address<S: NorFlash>(address: u32) -> u32 {
         address + round_up_to_alignment::<S>(Self::LENGTH as u32)
     }
 
     /// Get the location of the next item in flash
-    pub const fn next_item_address<S: NorFlash>(&self, address: u32) -> u32 {
+    pub(crate) const fn next_item_address<S: NorFlash>(&self, address: u32) -> u32 {
         let data_address = ItemHeader::data_address::<S>(address);
         data_address + round_up_to_alignment::<S>(self.length as u32)
     }
 
     /// Calculates the amount of bytes available for data.
     /// Essentially, it's the given amount minus the header and minus some alignment padding.
-    pub const fn available_data_bytes<S: NorFlash>(total_available: u32) -> Option<u32> {
+    pub(crate) const fn available_data_bytes<S: NorFlash>(total_available: u32) -> Option<u32> {
         let data_start = Self::data_address::<S>(0);
         let data_end = round_down_to_alignment::<S>(total_available);
 
@@ -229,34 +229,45 @@ impl ItemHeader {
     }
 }
 
-#[derive(Debug)]
-pub struct Item<'d> {
-    pub header: ItemHeader,
+pub(crate) struct Item<'d> {
+    pub(crate) header: ItemHeader,
     /// The part of the data buffer that contains the item only
     item_data_buffer: &'d mut [u8],
 }
 
+impl<'d> core::fmt::Debug for Item<'d> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Item")
+            .field("header", &self.header)
+            .field(
+                "item_data_buffer",
+                &&self.item_data_buffer[..self.header.length as usize],
+            )
+            .finish()
+    }
+}
+
 impl<'d> Item<'d> {
-    pub fn data(&self) -> &[u8] {
+    pub(crate) fn data(&self) -> &[u8] {
         self.item_data_buffer
     }
 
-    pub fn data_mut(&mut self) -> &mut [u8] {
+    pub(crate) fn data_mut(&mut self) -> &mut [u8] {
         self.item_data_buffer
     }
 
-    pub fn data_owned(self) -> &'d mut [u8] {
+    pub(crate) fn data_owned(self) -> &'d mut [u8] {
         self.item_data_buffer
     }
 
-    pub fn header_and_data_owned(self) -> (ItemHeader, &'d mut [u8]) {
+    pub(crate) fn header_and_data_owned(self) -> (ItemHeader, &'d mut [u8]) {
         (self.header, self.item_data_buffer)
     }
 
-    pub async fn write_new<S: NorFlash>(
+    pub(crate) async fn write_new<S: NorFlash>(
         flash: &mut S,
         flash_range: Range<u32>,
-        cache: &mut impl PrivateCacheImpl,
+        cache: &mut impl SealedCacheImpl,
         address: u32,
         data: &'d [u8],
     ) -> Result<ItemHeader, Error<S::Error>> {
@@ -273,7 +284,7 @@ impl<'d> Item<'d> {
     async fn write_raw<S: NorFlash>(
         flash: &mut S,
         flash_range: Range<u32>,
-        cache: &mut impl PrivateCacheImpl,
+        cache: &mut impl SealedCacheImpl,
         header: &ItemHeader,
         data: &[u8],
         address: u32,
@@ -333,11 +344,11 @@ impl<'d> Item<'d> {
         Ok(())
     }
 
-    pub async fn write<S: NorFlash>(
+    pub(crate) async fn write<S: NorFlash>(
         &self,
         flash: &mut S,
         flash_range: Range<u32>,
-        cache: &mut impl PrivateCacheImpl,
+        cache: &mut impl SealedCacheImpl,
         address: u32,
     ) -> Result<(), Error<S::Error>> {
         Self::write_raw(
@@ -351,7 +362,7 @@ impl<'d> Item<'d> {
         .await
     }
 
-    pub fn unborrow(self) -> ItemUnborrowed {
+    pub(crate) fn unborrow(self) -> ItemUnborrowed {
         ItemUnborrowed {
             header: self.header,
         }
@@ -359,15 +370,15 @@ impl<'d> Item<'d> {
 }
 
 /// A version of [Item] that does not borrow the data. This is to circumvent the borrowchecker in some places.
-pub struct ItemUnborrowed {
-    pub header: ItemHeader,
+pub(crate) struct ItemUnborrowed {
+    pub(crate) header: ItemHeader,
 }
 
 impl ItemUnborrowed {
     /// Reborrows the data. Watch out! Make sure the data buffer hasn't changed since unborrowing!
     ///
     /// Returns None if the data buffer is too small. This should never happen, but we don't want to panic
-    pub fn reborrow(self, data_buffer: &mut [u8]) -> Option<Item<'_>> {
+    pub(crate) fn reborrow(self, data_buffer: &mut [u8]) -> Option<Item<'_>> {
         let length = self.header.length as usize;
         Some(Item {
             header: self.header,
@@ -376,7 +387,7 @@ impl ItemUnborrowed {
     }
 }
 
-pub enum MaybeItem<'d> {
+pub(crate) enum MaybeItem<'d> {
     Corrupted(ItemHeader, &'d mut [u8]),
     Erased(ItemHeader, &'d mut [u8]),
     Present(Item<'d>),
@@ -397,7 +408,7 @@ impl core::fmt::Debug for MaybeItem<'_> {
 }
 
 impl<'d> MaybeItem<'d> {
-    pub fn unwrap<E>(self) -> Result<Item<'d>, Error<E>> {
+    pub(crate) fn unwrap<E>(self) -> Result<Item<'d>, Error<E>> {
         match self {
             MaybeItem::Corrupted(_, _) => Err(Error::Corrupted {
                 #[cfg(feature = "_test")]
@@ -476,7 +487,7 @@ fn crc32_with_initial(data: &[u8], initial: u32) -> u32 {
     !crc
 }
 
-impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
+impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
     /// Scans through the items to find the first spot that is free to store a new item.
     ///
     /// - `end_address` is exclusive.
@@ -529,7 +540,7 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     ) -> Result<bool, Error<S::Error>> {
         let page_state = match page_state {
             Some(page_state) => page_state,
-            None => self.get_page_state(page_index).await?,
+            None => self.get_page_state_cached(page_index).await?,
         };
 
         match page_state {
@@ -558,18 +569,18 @@ impl<S: NorFlash, C: CacheImpl> GenericStorage<S, C> {
     }
 }
 
-pub struct ItemIter {
+pub(crate) struct ItemIter {
     header: ItemHeaderIter,
 }
 
 impl ItemIter {
-    pub fn new(start_address: u32, end_address: u32) -> Self {
+    pub(crate) fn new(start_address: u32, end_address: u32) -> Self {
         Self {
             header: ItemHeaderIter::new(start_address, end_address),
         }
     }
 
-    pub async fn next<'d, S: NorFlash>(
+    pub(crate) async fn next<'d, S: NorFlash>(
         &mut self,
         flash: &mut S,
         data_buffer: &'d mut [u8],
@@ -593,13 +604,13 @@ impl ItemIter {
     }
 }
 
-pub struct ItemHeaderIter {
+pub(crate) struct ItemHeaderIter {
     current_address: u32,
     end_address: u32,
 }
 
 impl ItemHeaderIter {
-    pub fn new(start_address: u32, end_address: u32) -> Self {
+    pub(crate) fn new(start_address: u32, end_address: u32) -> Self {
         Self {
             current_address: start_address,
             end_address,
@@ -607,7 +618,7 @@ impl ItemHeaderIter {
     }
 
     /// Fetch next item
-    pub async fn next<S: NorFlash>(
+    pub(crate) async fn next<S: NorFlash>(
         &mut self,
         flash: &mut S,
     ) -> Result<(Option<ItemHeader>, u32), Error<S::Error>> {
@@ -618,7 +629,7 @@ impl ItemHeaderIter {
     /// the element is skipped and traversal continues.
     ///
     /// If the end of the headers is reached, a `None` item header is returned.
-    pub async fn traverse<S: NorFlash>(
+    pub(crate) async fn traverse<S: NorFlash>(
         &mut self,
         flash: &mut S,
         callback: impl Fn(&ItemHeader, u32) -> bool,

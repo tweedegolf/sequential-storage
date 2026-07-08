@@ -6,14 +6,16 @@ use libfuzzer_sys::fuzz_target;
 use rand::{Rng, SeedableRng};
 use sequential_storage::{
     cache::{
-        CacheImpl, HeapPagePointerCache, HeapPageStateCache, NoCache, PagePointerCache,
-        PageStateCache,
+        page_pointers::{ArrayPagePointers, HeapPagePointers},
+        page_states::{ArrayPageStates, CalculatedPageStates, HeapPageStates},
+        Cache, CacheImpl, Uncached,
     },
     mock_flash::{MockFlashBase, MockFlashError, Operation, WriteCountCheck},
     queue::{QueueConfig, QueueStorage},
     Error,
 };
 use std::{collections::VecDeque, fmt::Debug};
+
 const MAX_VALUE_SIZE: usize = u8::MAX as usize;
 
 const PAGES: usize = 4;
@@ -21,11 +23,27 @@ const WORD_SIZE: usize = 4;
 const WORDS_PER_PAGE: usize = 256;
 
 fuzz_target!(|data: Input| match data.cache_type {
-    CacheType::NoCache => fuzz(data, NoCache::new()),
-    CacheType::PageStateCache => fuzz(data, PageStateCache::<PAGES>::new()),
-    CacheType::PagePointerCache => fuzz(data, PagePointerCache::<PAGES>::new()),
-    CacheType::HeapPageStateCache => fuzz(data, HeapPageStateCache::new(PAGES)),
-    CacheType::HeapPagePointerCache => fuzz(data, HeapPagePointerCache::new(PAGES)),
+    CacheType::NoCache => fuzz(data, Cache::new(Uncached, Uncached, Uncached)),
+    CacheType::CalculatedPageStateCache => fuzz(
+        data,
+        Cache::new(CalculatedPageStates::new(PAGES), Uncached, Uncached)
+    ),
+    CacheType::ArrayPageStateCache => fuzz(
+        data,
+        Cache::new(ArrayPageStates::<PAGES>::new(), Uncached, Uncached)
+    ),
+    CacheType::ArrayPagePointerCache => fuzz(
+        data,
+        Cache::new(Uncached, ArrayPagePointers::<PAGES>::new(), Uncached)
+    ),
+    CacheType::HeapPageStateCache => fuzz(
+        data,
+        Cache::new(HeapPageStates::new(PAGES), Uncached, Uncached)
+    ),
+    CacheType::HeapPagePointerCache => fuzz(
+        data,
+        Cache::new(Uncached, HeapPagePointers::new(PAGES), Uncached)
+    ),
 });
 
 #[derive(Arbitrary, Debug, Clone)]
@@ -52,8 +70,9 @@ struct PushOp {
 #[derive(Arbitrary, Debug, Clone)]
 enum CacheType {
     NoCache,
-    PageStateCache,
-    PagePointerCache,
+    CalculatedPageStateCache,
+    ArrayPageStateCache,
+    ArrayPagePointerCache,
     HeapPageStateCache,
     HeapPagePointerCache,
 }
@@ -61,7 +80,7 @@ enum CacheType {
 #[repr(align(4))]
 struct AlignedBuf([u8; MAX_VALUE_SIZE + 1]);
 
-fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
+fn fuzz(ops: Input, cache: impl CacheImpl<()> + Debug) {
     let flash = MockFlashBase::<PAGES, WORD_SIZE, WORDS_PER_PAGE>::new(
         WriteCountCheck::Twice,
         Some(ops.fuel as u32),
@@ -74,15 +93,15 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
 
     let mut rng = rand_pcg::Pcg32::seed_from_u64(ops.seed);
 
-    #[cfg(fuzzing_repro)]
+    #[cfg(fuzzing)]
     eprintln!("\n=== START ===\n");
 
     for mut op in ops.ops.into_iter() {
-        #[cfg(fuzzing_repro)]
-        eprintln!("{}", block_on(flash.print_items()));
-        #[cfg(fuzzing_repro)]
-        eprintln!("{:?}", cache);
-        #[cfg(fuzzing_repro)]
+        #[cfg(fuzzing)]
+        eprintln!("{}", block_on(storage.print_items()));
+        #[cfg(fuzzing)]
+        eprintln!("{:?}", storage.cache());
+        #[cfg(fuzzing)]
         eprintln!("\n=== OP: {op:?} ===\n");
 
         match &mut op {
@@ -96,7 +115,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
                     Err(Error::Corrupted {
                         backtrace: _backtrace,
                     }) => {
-                        #[cfg(fuzzing_repro)]
+                        #[cfg(fuzzing)]
                         eprintln!("Corrupted when finding max! Originated from:\n{_backtrace:#}");
                         panic!("Corrupted!");
                     }
@@ -129,18 +148,18 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
                     }) => {
                         // We need to check if it managed to write
                         if let Some(true) = block_on(storage.flash().get_item_presence(address)) {
-                            #[cfg(fuzzing_repro)]
+                            #[cfg(fuzzing)]
                             eprintln!("Early shutoff when pushing {val:?}! (but it still stored fully). Originated from:\n{_backtrace:#}");
                             order.push_back(val);
                         } else {
-                            #[cfg(fuzzing_repro)]
+                            #[cfg(fuzzing)]
                             eprintln!("Early shutoff when pushing {val:?}! Originated from:\n{_backtrace:#}");
                         }
                     }
                     Err(Error::Corrupted {
                         backtrace: _backtrace,
                     }) => {
-                        #[cfg(fuzzing_repro)]
+                        #[cfg(fuzzing)]
                         eprintln!("Corrupted when pushing! Originated from:\n{_backtrace:#}");
                         panic!("Corrupted!");
                     }
@@ -156,7 +175,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
                         value: MockFlashError::EarlyShutoff(address, operation),
                         backtrace: _backtrace,
                     }) => {
-                        #[cfg(fuzzing_repro)]
+                        #[cfg(fuzzing)]
                         eprintln!(
                             "Early shutoff when popping (single)! Originated from:\n{_backtrace:#}"
                         );
@@ -174,7 +193,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
                     Err(Error::Corrupted {
                         backtrace: _backtrace,
                     }) => {
-                        #[cfg(fuzzing_repro)]
+                        #[cfg(fuzzing)]
                         eprintln!(
                             "Corrupted when popping single! Originated from:\n{_backtrace:#}"
                         );
@@ -194,7 +213,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
                     value: MockFlashError::EarlyShutoff(_, Operation::Erase),
                     backtrace: _backtrace,
                 }) => {
-                    #[cfg(fuzzing_repro)]
+                    #[cfg(fuzzing)]
                     eprintln!(
                                 "Early shutoff when getting next iterator entry! Originated from:\n{_backtrace:#}"
                             );
@@ -204,7 +223,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
                 Err(Error::Corrupted {
                     backtrace: _backtrace,
                 }) => {
-                    #[cfg(fuzzing_repro)]
+                    #[cfg(fuzzing)]
                     eprintln!("Corrupted when peeking single! Originated from:\n{_backtrace:#}");
                     panic!("Corrupted!");
                 }
@@ -216,7 +235,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
                     Err(Error::Corrupted {
                         backtrace: _backtrace,
                     }) => {
-                        #[cfg(fuzzing_repro)]
+                        #[cfg(fuzzing)]
                         eprintln!(
                             "Corrupted when creating iterator! Originated from:\n{_backtrace:#}"
                         );
@@ -232,7 +251,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
                             assert_eq!(&*value, order.get(i - popped_items).unwrap().as_slice());
 
                             if *do_pop {
-                                #[cfg(fuzzing_repro)]
+                                #[cfg(fuzzing)]
                                 eprintln!("Popping item at address: {}", value.address());
 
                                 let popped = block_on(value.pop());
@@ -250,7 +269,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
                                     Err(Error::Corrupted {
                                         backtrace: _backtrace,
                                     }) => {
-                                        #[cfg(fuzzing_repro)]
+                                        #[cfg(fuzzing)]
                                         eprintln!(
                                             "Corrupted when popping interator entry! Originated from:\n{_backtrace:#}"
                                         );
@@ -260,7 +279,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
                                         value: MockFlashError::EarlyShutoff(address, operation),
                                         backtrace: _backtrace,
                                     }) => {
-                                        #[cfg(fuzzing_repro)]
+                                        #[cfg(fuzzing)]
                                         eprintln!(
                                             "Early shutoff when popping iterator entry! Originated from:\n{_backtrace:#}"
                                         );
@@ -290,7 +309,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
                             value: MockFlashError::EarlyShutoff(address, operation),
                             backtrace: _backtrace,
                         }) => {
-                            #[cfg(fuzzing_repro)]
+                            #[cfg(fuzzing)]
                             eprintln!(
                                 "Early shutoff when getting next iterator entry! Originated from:\n{_backtrace:#}"
                             );
@@ -310,7 +329,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl + Debug) {
                         Err(Error::Corrupted {
                             backtrace: _backtrace,
                         }) => {
-                            #[cfg(fuzzing_repro)]
+                            #[cfg(fuzzing)]
                             eprintln!(
                                 "Corrupted when interating! Originated from:\n{_backtrace:#}"
                             );

@@ -7,9 +7,9 @@ use defmt::unwrap;
 use embassy_executor::Spawner;
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 use sequential_storage::{
-    cache::{CacheImpl, KeyCacheImpl, KeyPointerCache, PagePointerCache},
-    map::{MapConfig, MapStorage},
-    queue::{QueueConfig, QueueStorage},
+    cache::{
+        Cache, CacheImpl, Uncached, key_pointers::ArrayKeyPointers, page_pointers::ArrayPagePointers, page_states::{ArrayPageStates, CalculatedPageStates},
+    }, map::{MapConfig, MapStorage}, queue::{QueueConfig, QueueStorage},
 };
 use {defmt_rtt as _, panic_probe as _};
 
@@ -26,7 +26,11 @@ async fn main(_spawner: Spawner) {
     let mut queue_storage = QueueStorage::new(
         flash,
         const { QueueConfig::new(QUEUE_FLASH_RANGE) },
-        PagePointerCache::<4>::new(),
+        Cache::new(
+            ArrayPageStates::<4>::new(),
+            ArrayPagePointers::<4>::new(),
+            Uncached,
+        ),
     );
 
     run_queue(&mut queue_storage).await;
@@ -36,7 +40,11 @@ async fn main(_spawner: Spawner) {
     let mut map_storage = MapStorage::new(
         flash,
         const { MapConfig::new(MAP_FLASH_RANGE) },
-        KeyPointerCache::<4, u8, 8>::new(),
+        Cache::new(
+            ArrayPageStates::<4>::new(),
+            ArrayPagePointers::<4>::new(),
+            ArrayKeyPointers::<u8, 8>::new(),
+        ),
     );
 
     run_map(&mut map_storage).await;
@@ -46,7 +54,7 @@ async fn main(_spawner: Spawner) {
 }
 
 async fn run_queue<E: defmt::Format>(
-    storage: &mut QueueStorage<impl MultiwriteNorFlash<Error = E>, impl CacheImpl>,
+    storage: &mut QueueStorage<impl MultiwriteNorFlash<Error = E>, impl CacheImpl<()>>,
 ) {
     unwrap!(storage.erase_all().await);
 
@@ -68,7 +76,7 @@ async fn run_queue<E: defmt::Format>(
 }
 
 async fn run_map<E: defmt::Format>(
-    storage: &mut MapStorage<u8, impl MultiwriteNorFlash<Error = E>, impl KeyCacheImpl<u8>>,
+    storage: &mut MapStorage<u8, impl MultiwriteNorFlash<Error = E>, impl CacheImpl<u8>>,
 ) {
     unwrap!(storage.erase_all().await);
 
