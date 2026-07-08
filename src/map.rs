@@ -37,7 +37,6 @@ impl<S: NorFlash> MapConfig<S> {
     }
 
     /// Create a new map configuration. Will return None if the data is invalid
-    #[must_use]
     pub const fn try_new(flash_range: Range<u32>) -> Result<Self, MapConfigError> {
         if !flash_range.start.is_multiple_of(S::ERASE_SIZE as u32) {
             return Err(MapConfigError::StartRangeNotAtPageBoundary);
