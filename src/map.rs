@@ -1942,6 +1942,25 @@ mod tests {
         );
     }
 
+    #[test]
+    async fn send_sync() {
+        fn assert_sync<T: Sync + Send>(_: T) {}
+
+        let mut storage = MapStorage::new(
+            MockFlashBig::default(),
+            const { MapConfig::new(0x000..0x1000) },
+            Cache::new_uncached(),
+        );
+
+        let mut buffer = [0; 16];
+
+        // The normal store doesn't work because of the value trait object
+        assert_sync(storage.store_item_generic(&mut buffer, &0u8, &0u8));
+        // Trait objects can still be used, but it must be with extra bounds
+        assert_sync(storage.store_item_generic::<dyn Value + Sync>(&mut buffer, &0u8, &0u8));
+        assert_sync(storage.fetch_item::<u8>(&mut buffer, &0u8));
+    }
+
     #[cfg(feature = "postcard")]
     #[test]
     async fn postcard_value() {
