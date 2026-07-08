@@ -401,16 +401,37 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
         item: &V,
     ) -> Result<(), Error<S::Error>> {
         run_with_auto_repair!(
-            function = self.store_item_inner(data_buffer, key, item).await,
+            function = self
+                .store_item_inner::<dyn Value>(data_buffer, key, item)
+                .await,
             repair = self.try_repair(data_buffer).await?
         )
     }
 
-    async fn store_item_inner(
+    /// Same as [Self::store_item], except it doesn't turn the passed value generic into a trait object and passes it generically down the stack.
+    ///
+    /// Using a trait object is done by default to save on binary size while not impacting performance that much.
+    /// However, in some cases you might have weird [Sync], [Send] or other auto trait requirements where a trait object gets in the way.
+    /// So with this function you opt out of the trait object and you can pass your own values directly.
+    ///
+    /// You should keep using [Self::store_item] unless you really need this function.
+    pub async fn store_item_generic<'d, V: Value<'d> + ?Sized>(
         &mut self,
         data_buffer: &mut [u8],
         key: &K,
-        item: &dyn Value<'_>,
+        item: &V,
+    ) -> Result<(), Error<S::Error>> {
+        run_with_auto_repair!(
+            function = self.store_item_inner::<V>(data_buffer, key, item).await,
+            repair = self.try_repair(data_buffer).await?
+        )
+    }
+
+    async fn store_item_inner<'d, V: Value<'d> + ?Sized>(
+        &mut self,
+        data_buffer: &mut [u8],
+        key: &K,
+        item: &V,
     ) -> Result<(), Error<S::Error>> {
         if self.inner.cache.is_dirty() {
             self.inner.cache.invalidate_cache_state();
@@ -1919,6 +1940,25 @@ mod tests {
             <[u16; 2]>::deserialize_from(&buffer),
             Ok(([0x1234, 0x5678], 4))
         );
+    }
+
+    #[test]
+    async fn send_sync() {
+        fn assert_sync<T: Sync + Send>(_: T) {}
+
+        let mut storage = MapStorage::new(
+            MockFlashBig::default(),
+            const { MapConfig::new(0x000..0x1000) },
+            Cache::new_uncached(),
+        );
+
+        let mut buffer = [0; 16];
+
+        // The normal store doesn't work because of the value trait object
+        assert_sync(storage.store_item_generic(&mut buffer, &0u8, &0u8));
+        // Trait objects can still be used, but it must be with extra bounds
+        assert_sync(storage.store_item_generic::<dyn Value + Sync>(&mut buffer, &0u8, &0u8));
+        assert_sync(storage.fetch_item::<u8>(&mut buffer, &0u8));
     }
 
     #[cfg(feature = "postcard")]
