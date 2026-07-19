@@ -639,11 +639,23 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
         // Search for the last used page. We're gonna erase from the one after this first.
         // If we get an early shutoff or cancellation, this will make it so that we don't return
         // an old version of the key on the next fetch.
-        let last_used_page = self
+        let last_used_page = match self
             .inner
             .find_first_page(0, PageState::PartialOpen)
             .await?
-            .unwrap_or_default();
+        {
+            Some(last_used_page) => last_used_page,
+            None => {
+                // Oh dear, there's no active partial open page. Seems like some operation was cancelled or didn't make it through.
+                // Instead, we're gonna have to find what should be the partial open page, which is the first open page after the closed pages.
+                // If there's no closed pages, we only have open pages,
+                // so we can fall back to just the 0 index after which the rest of the logic should work fine.
+                self.inner
+                    .find_last_page(0, PageState::Closed)
+                    .await?
+                    .unwrap_or_default()
+            }
+        };
 
         // Go through all the pages
         for page_index in self.inner.get_pages(self.inner.next_page(last_used_page)) {
