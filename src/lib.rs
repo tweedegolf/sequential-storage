@@ -109,6 +109,32 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
         Ok(None)
     }
 
+    /// Find the last page that is in the given page state.
+    ///
+    /// The search starts at `starting_page_index` (and wraps around back to 0 if required).
+    /// The search stops when a we've hit a page that is not the page state we're looking for after one that is,
+    /// or the last page in the iteration has the desired state.
+    ///
+    /// If the page state is not found at all, None is returned.
+    async fn find_last_page(
+        &mut self,
+        starting_page_index: usize,
+        page_state: PageState,
+    ) -> Result<Option<usize>, Error<S::Error>> {
+        let mut last_page_index = None;
+        for page_index in self.get_pages(starting_page_index) {
+            if page_state == self.get_page_state_cached(page_index).await? {
+                last_page_index = Some(page_index);
+            } else {
+                if last_page_index.is_some() {
+                    return Ok(last_page_index);
+                }
+            }
+        }
+
+        Ok(last_page_index)
+    }
+
     fn page_count(&self) -> NonZeroUsize {
         let page_count = self.flash_range.len() / S::ERASE_SIZE;
         // Do a max 1 on the page count to prevent a panic. We know it's never 0 because it's checked in the constructor, but the compiler doesn't know

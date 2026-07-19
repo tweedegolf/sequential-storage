@@ -639,11 +639,23 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
         // Search for the last used page. We're gonna erase from the one after this first.
         // If we get an early shutoff or cancellation, this will make it so that we don't return
         // an old version of the key on the next fetch.
-        let last_used_page = self
+        let last_used_page = match self
             .inner
             .find_first_page(0, PageState::PartialOpen)
             .await?
-            .unwrap_or_default();
+        {
+            Some(last_used_page) => last_used_page,
+            None => {
+                // Oh dear, there's no active partial open page. Seems like some operation was cancelled or didn't make it through.
+                // Instead, we're gonna have to find what should be the partial open page, which is the first open page after the closed pages.
+                // If there's no closed pages, we only have open pages,
+                // so we can fall back to just the 0 index after which the rest of the logic should work fine.
+                self.inner
+                    .find_last_page(0, PageState::Closed)
+                    .await?
+                    .unwrap_or_default()
+            }
+        };
 
         // Go through all the pages
         for page_index in self.inner.get_pages(self.inner.next_page(last_used_page)) {
@@ -987,6 +999,11 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
     /// This is meant as a debugging utility. The string format is not stable.
     pub fn print_items(&mut self) -> impl Future<Output = String> {
         self.inner.print_items()
+    }
+
+    #[cfg(test)]
+    fn inner_mut(&mut self) -> &mut GenericStorage<S, C, K> {
+        &mut self.inner
     }
 }
 
@@ -1870,6 +1887,70 @@ mod tests {
 
         // Check total number of fetched items, +1 since we didn't count key 1
         assert_eq!(count + 1, UPPER_BOUND);
+    }
+
+    #[test]
+    async fn issue_132() {
+        // https://github.com/tweedegolf/sequential-storage/issues/132
+
+        // Get the storage in a state where we have a closed page and then an open page.
+        // This can only happen with a cancelled future/shutoff at the exact right moment.
+        let mut storage = MapStorage::new(
+            MockFlashBig::new(mock_flash::WriteCountCheck::Disabled, Some(9168), false),
+            const { MapConfig::new(0x000..0x1000) },
+            Cache::new_uncached(),
+        );
+        let mut buf = [0; 32];
+        for i in 0..=378u64 {
+            let _ = storage.store_item(&mut buf, &(), &i).await;
+        }
+
+        println!("{}", storage.print_items().await);
+
+        // Check we're in the state we want to reproduce the error
+        assert_eq!(
+            storage.inner_mut().get_page_state(0).await.unwrap(),
+            PageState::Closed
+        );
+        assert_eq!(
+            storage.inner_mut().get_page_state(1).await.unwrap(),
+            PageState::Closed
+        );
+        assert_eq!(
+            storage.inner_mut().get_page_state(2).await.unwrap(),
+            PageState::Open
+        );
+        assert_eq!(
+            storage.inner_mut().get_page_state(3).await.unwrap(),
+            PageState::Closed
+        );
+
+        // The last store would've failed, so we read the previous value
+        assert_eq!(
+            storage.fetch_item::<u64>(&mut buf, &()).await.unwrap(),
+            Some(377)
+        );
+
+        // Now we remove an item. It should start by removing the oldest items.
+        // The bug is that with no partial open page, it will start with page 0, which is the page containing the newest items.
+        // If the remove task is also interrupted, we will then read back an old value.
+
+        storage.flash().bytes_until_shutoff = Some(1000);
+
+        std::assert_matches!(
+            storage.remove_item(&mut buf, &()).await,
+            Err(Error::Storage {
+                value: mock_flash::MockFlashError::EarlyShutoff(_, mock_flash::Operation::Write)
+            })
+        );
+
+        println!("{}", storage.print_items().await);
+
+        // If the bug is fixed, the fetch should return either the most recent value or None
+        std::assert_matches!(
+            storage.fetch_item::<u64>(&mut buf, &()).await.unwrap(),
+            Some(377) | None
+        );
     }
 
     #[test]

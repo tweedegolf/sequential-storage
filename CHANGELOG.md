@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+## 8.0.1 - 19-07-26
+
+- Fixed a bug where a cancelled map remove item, after a cancelled map item store, would in fringe cases allow a map item fetch to return old data
+
 ## 8.0.0 - 08-07-26
 
 - *Breaking:* Restructured the cache API's to allow for much more customization. Everything now goes through a central `Cache` type. So now you can pick and choose which caches you want for your usecase.
