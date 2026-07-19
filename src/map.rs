@@ -911,7 +911,7 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
         Ok(())
     }
 
-    /// Try to repair the state of the flash to hopefull get back everything in working order.
+    /// Try to repair the state of the flash to hopefully get back everything in working order.
     /// Care is taken that no data is lost, but this depends on correctly repairing the state and
     /// so is only best effort.
     ///
@@ -1672,7 +1672,7 @@ mod tests {
         );
         let mut data_buffer = AlignedBuf([0; 128]);
 
-        const LENGHT_PER_KEY: [usize; 24] = [
+        const LENGTH_PER_KEY: [usize; 24] = [
             11, 13, 6, 13, 13, 10, 2, 3, 5, 36, 1, 65, 4, 6, 1, 15, 10, 7, 3, 15, 9, 3, 4, 5,
         ];
 
@@ -1683,7 +1683,7 @@ mod tests {
                     .store_item(
                         &mut data_buffer,
                         &(i as u16),
-                        &vec![i as u8; LENGHT_PER_KEY[i]].as_slice(),
+                        &vec![i as u8; LENGTH_PER_KEY[i]].as_slice(),
                     )
                     .await
                     .unwrap();
@@ -1700,7 +1700,7 @@ mod tests {
 
             println!("Fetched {item:?}");
 
-            assert_eq!(item, vec![i as u8; LENGHT_PER_KEY[i]]);
+            assert_eq!(item, vec![i as u8; LENGTH_PER_KEY[i]]);
         }
     }
 

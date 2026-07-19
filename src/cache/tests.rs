@@ -300,7 +300,7 @@ mod map_tests {
         );
         let mut data_buffer = AlignedBuf([0; 128]);
 
-        const LENGHT_PER_KEY: [usize; 24] = [
+        const LENGTH_PER_KEY: [usize; 24] = [
             11, 13, 6, 13, 13, 10, 2, 3, 5, 36, 1, 65, 4, 6, 1, 15, 10, 7, 3, 15, 9, 3, 4, 5,
         ];
 
@@ -317,7 +317,7 @@ mod map_tests {
                     .store_item(
                         &mut data_buffer,
                         &(i as u16),
-                        &vec![i as u8; LENGHT_PER_KEY[i]].as_slice(),
+                        &vec![i as u8; LENGTH_PER_KEY[i]].as_slice(),
                     )
                     .await
                     .unwrap();
@@ -337,7 +337,7 @@ mod map_tests {
 
                 // println!("Fetched {item:?}");
 
-                assert_eq!(item, vec![i as u8; LENGHT_PER_KEY[i]]);
+                assert_eq!(item, vec![i as u8; LENGTH_PER_KEY[i]]);
             }
         }
 

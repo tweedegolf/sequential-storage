@@ -26,7 +26,7 @@ The in-flash representation is not (yet?) stable. This too follows semver.
   - This may not be forward-compatible. So data created by e.g. `1.0.1` may not be usable by `1.0.0`.
 - After 1.0, patch releases only fix bugs and don't change the in-flash representation
 
-For any update, consult the changelog to see what changed. Any externally noticable changes are recorded there.
+For any update, consult the changelog to see what changed. Any externally noticeable changes are recorded there.
 
 The `_test` feature of the crate is considered private. It and anything it enables is not covered by semver.
 

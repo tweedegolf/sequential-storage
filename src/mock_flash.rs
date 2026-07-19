@@ -25,7 +25,7 @@ pub struct MockFlashBase<const PAGES: usize, const BYTES_PER_WORD: usize, const 
     writable: Vec<Writable>,
     data: Vec<u8>,
     current_stats: FlashStatsSnapshot,
-    /// Check that all write locations are writeable.
+    /// Check that all write locations are writable.
     pub write_count_check: WriteCountCheck,
     /// A countdown to shutoff. When some and 0, an early shutoff will happen.
     pub bytes_until_shutoff: Option<u32>,
@@ -304,7 +304,7 @@ pub enum MockFlashError {
     OutOfBounds,
     /// Offset or data not aligned.
     NotAligned,
-    /// Location not writeable.
+    /// Location not writable.
     NotWritable(u32),
     /// We got a shutoff
     EarlyShutoff(u32, Operation),

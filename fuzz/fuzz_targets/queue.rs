@@ -271,7 +271,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl<()> + Debug) {
                                     }) => {
                                         #[cfg(fuzzing)]
                                         eprintln!(
-                                            "Corrupted when popping interator entry! Originated from:\n{_backtrace:#}"
+                                            "Corrupted when popping iterator entry! Originated from:\n{_backtrace:#}"
                                         );
                                         panic!("Corrupted!");
                                     }
@@ -331,7 +331,7 @@ fn fuzz(ops: Input, cache: impl CacheImpl<()> + Debug) {
                         }) => {
                             #[cfg(fuzzing)]
                             eprintln!(
-                                "Corrupted when interating! Originated from:\n{_backtrace:#}"
+                                "Corrupted when iterating! Originated from:\n{_backtrace:#}"
                             );
                             panic!("Corrupted!");
                         }

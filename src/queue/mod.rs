@@ -534,7 +534,7 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
         Ok(oldest_closed_page.unwrap_or(youngest_page))
     }
 
-    /// Try to repair the state of the flash to hopefull get back everything in working order.
+    /// Try to repair the state of the flash to hopefully get back everything in working order.
     /// Care is taken that no data is lost, but this depends on correctly repairing the state and
     /// so is only best effort.
     ///

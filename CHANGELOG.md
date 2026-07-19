@@ -6,7 +6,7 @@
 
 ## 8.0.1 - 19-07-26
 
-- Fixed a bug where a cancelled map remove item, after a cancelled map item store, would in fringe cases allow a map item fetch to return old data
+- Fixed a bug where a canceled map remove item, after a canceled map item store, would in fringe cases allow a map item fetch to return old data
 
 ## 8.0.0 - 08-07-26
 
@@ -149,7 +149,7 @@ This release is 'disk'-compatible with 2.0
 
 - *Breaking:* Corruption repair is automatic now! The repair functions have been made private.
 - *Breaking:* There's now only one error type. `MapError` has been retired and the main error type now carries
-  the Item error as well. The queue uses `Infallable` as the item error type.
+  the Item error as well. The queue uses `Infallible` as the item error type.
 - *Breaking:* The feature `defmt` has been renamed `defmt-03` to avoid a future breaking change.
 - Added `std` feature that implements the error trait for the error enum
 - This release is flash compatible downto version 0.7

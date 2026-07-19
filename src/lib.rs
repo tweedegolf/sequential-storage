@@ -641,7 +641,7 @@ macro_rules! run_with_auto_repair {
             }) => {
                 #[cfg(all(feature = "_test", fuzzing))]
                 eprintln!(
-                    "### Encountered curruption! Repairing now. Originated from:\n{_backtrace:#}"
+                    "### Encountered corruption! Repairing now. Originated from:\n{_backtrace:#}"
                 );
                 $repair_function;
                 $function
