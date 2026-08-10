@@ -208,6 +208,38 @@ impl ItemHeader {
         Ok(self)
     }
 
+    /// Overwrite the data of this item with zeros, keeping the header so the item stays traversable.
+    ///
+    /// Only call this on an item that [`Self::erase_data`] has already erased. An item whose header
+    /// still holds a crc would read back as corrupted, and zeroing twice writes the same words twice.
+    pub(crate) async fn zero_data<S: MultiwriteNorFlash>(
+        &self,
+        flash: &mut S,
+        address: u32,
+    ) -> Result<(), Error<S::Error>> {
+        let zeros = AlignedBuf([0; MAX_WORD_SIZE]);
+        // At least one word, since the config constructors reject a word size above MAX_WORD_SIZE
+        let chunk_len = round_down_to_alignment::<S>(MAX_WORD_SIZE as u32);
+        let data_end_address =
+            Self::data_address::<S>(address) + round_up_to_alignment::<S>(self.length as u32);
+
+        let mut write_address = Self::data_address::<S>(address);
+        while write_address < data_end_address {
+            let write_len = chunk_len.min(data_end_address - write_address);
+            flash
+                .write(write_address, &zeros[..write_len as usize])
+                .await
+                .map_err(|e| Error::Storage {
+                    value: e,
+                    #[cfg(feature = "_test")]
+                    backtrace: std::backtrace::Backtrace::capture(),
+                })?;
+            write_address += write_len;
+        }
+
+        Ok(())
+    }
+
     /// Get the address of the start of the data for this item
     pub(crate) const fn data_address<S: NorFlash>(address: u32) -> u32 {
         address + round_up_to_alignment::<S>(Self::LENGTH as u32)

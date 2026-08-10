@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Added `remove_item_and_zero_data` and `remove_all_items_and_zero_data` to map. They remove items like their existing counterparts, but also overwrite the item data with zeros so it can't be read back from raw flash before garbage collection reclaims the page.
+
 ## 8.0.1 - 19-07-26
 
 - Fixed a bug where a canceled map remove item, after a canceled map item store, would in fringe cases allow a map item fetch to return old data

@@ -596,7 +596,33 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
         S: MultiwriteNorFlash,
     {
         run_with_auto_repair!(
-            function = self.remove_item_inner(data_buffer, Some(search_key)).await,
+            function = self
+                .remove_item_inner(data_buffer, Some(search_key), false)
+                .await,
+            repair = self.try_repair(data_buffer).await?
+        )
+    }
+
+    /// Like [`Self::remove_item`], but the data of every removed item is also overwritten with zeros.
+    ///
+    /// Plain removal only invalidates the crc in the item header, so the data stays readable in raw
+    /// flash until garbage collection reclaims the page. Zeroing costs one extra write per flash
+    /// word of every removed item, so it's worth it for secrets and not much else.
+    ///
+    /// Items that were removed earlier without zeroing keep their data: their crc is gone, so there
+    /// is no way to tell whether they belonged to `search_key`.
+    pub async fn remove_item_and_zero_data(
+        &mut self,
+        data_buffer: &mut [u8],
+        search_key: &K,
+    ) -> Result<(), Error<S::Error>>
+    where
+        S: MultiwriteNorFlash,
+    {
+        run_with_auto_repair!(
+            function = self
+                .remove_item_inner(data_buffer, Some(search_key), true)
+                .await,
             repair = self.try_repair(data_buffer).await?
         )
     }
@@ -616,7 +642,22 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
         S: MultiwriteNorFlash,
     {
         run_with_auto_repair!(
-            function = self.remove_item_inner(data_buffer, None).await,
+            function = self.remove_item_inner(data_buffer, None, false).await,
+            repair = self.try_repair(data_buffer).await?
+        )
+    }
+
+    /// Like [`Self::remove_all_items`], but the data of every removed item is also overwritten with
+    /// zeros. See [`Self::remove_item_and_zero_data`] for what that costs and what it doesn't cover.
+    pub async fn remove_all_items_and_zero_data(
+        &mut self,
+        data_buffer: &mut [u8],
+    ) -> Result<(), Error<S::Error>>
+    where
+        S: MultiwriteNorFlash,
+    {
+        run_with_auto_repair!(
+            function = self.remove_item_inner(data_buffer, None, true).await,
             repair = self.try_repair(data_buffer).await?
         )
     }
@@ -626,6 +667,7 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
         &mut self,
         data_buffer: &mut [u8],
         search_key: Option<&K>,
+        zero_data: bool,
     ) -> Result<(), Error<S::Error>>
     where
         S: MultiwriteNorFlash,
@@ -701,7 +743,8 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
                         // If this item has the same key as the key we're trying to erase, then erase the item.
                         // But keep going! We need to erase everything.
                         if item_match {
-                            item.header
+                            let header = item
+                                .header
                                 .erase_data(
                                     &mut self.inner.flash,
                                     self.inner.flash_range.clone(),
@@ -709,6 +752,14 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
                                     item_address,
                                 )
                                 .await?;
+
+                            // Only after the header says the item is erased, so an interrupted
+                            // zeroing leaves an erased item instead of a corrupted one.
+                            if zero_data {
+                                header
+                                    .zero_data(&mut self.inner.flash, item_address)
+                                    .await?;
+                            }
                         }
                     }
                 }
@@ -1814,6 +1865,280 @@ mod tests {
                     .is_none()
             );
         }
+    }
+
+    const SECRET: &[u8] = b"hunter2-wifi-passphrase";
+    const OLD_SECRET: &[u8] = b"hunter1-older-passphrase";
+    const NEIGHBOUR: &[u8] = b"a-non-secret-neighbour";
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+    }
+
+    fn zeroing_test_flash() -> MockFlashBig {
+        MockFlashBig::new(mock_flash::WriteCountCheck::Twice, None, true)
+    }
+
+    /// The raw flash addresses that hold the data (including its alignment padding) of the
+    /// newest item with the given key.
+    async fn item_data_region<S: NorFlash, C: CacheImpl<u8>>(
+        storage: &mut MapStorage<u8, S, C>,
+        data_buffer: &mut [u8],
+        key: u8,
+    ) -> Range<usize> {
+        let (item, address, _) = storage
+            .fetch_item_with_location(data_buffer, &key)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let start = ItemHeader::data_address::<S>(address);
+        let end = start + crate::round_up_to_alignment::<S>(item.header.length as u32);
+
+        start as usize..end as usize
+    }
+
+    #[test]
+    async fn remove_item_and_zero_data_leaves_no_payload_in_flash() {
+        let mut storage = MapStorage::new(
+            zeroing_test_flash(),
+            const { MapConfig::new(0x000..0x1000) },
+            Cache::new_uncached(),
+        );
+        let mut data_buffer = AlignedBuf([0; 128]);
+
+        storage
+            .store_item(&mut data_buffer, &0u8, &OLD_SECRET)
+            .await
+            .unwrap();
+        storage
+            .store_item(&mut data_buffer, &0u8, &SECRET)
+            .await
+            .unwrap();
+        storage
+            .store_item(&mut data_buffer, &1u8, &NEIGHBOUR)
+            .await
+            .unwrap();
+
+        assert!(contains(storage.flash().as_bytes(), SECRET));
+        assert!(contains(storage.flash().as_bytes(), OLD_SECRET));
+
+        let data_region = item_data_region(&mut storage, &mut data_buffer, 0).await;
+
+        storage
+            .remove_item_and_zero_data(&mut data_buffer, &0)
+            .await
+            .unwrap();
+
+        // The whole data area of the item, alignment padding included, is gone.
+        assert!(
+            storage.flash().as_bytes()[data_region.clone()]
+                .iter()
+                .all(|byte| *byte == 0),
+            "data area {data_region:?} is not zeroed: {:02X?}",
+            &storage.flash().as_bytes()[data_region.clone()]
+        );
+        // And so is the superseded version of the same key, which was still readable before.
+        assert!(!contains(storage.flash().as_bytes(), SECRET));
+        assert!(!contains(storage.flash().as_bytes(), OLD_SECRET));
+
+        // Nothing else was touched.
+        assert!(contains(storage.flash().as_bytes(), NEIGHBOUR));
+        assert_eq!(
+            storage
+                .fetch_item::<&[u8]>(&mut data_buffer, &1)
+                .await
+                .unwrap(),
+            Some(NEIGHBOUR)
+        );
+        assert_eq!(
+            storage
+                .fetch_item::<&[u8]>(&mut data_buffer, &0)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    /// Pins the opt-in nature of the zeroing: plain removal must keep behaving as it always has,
+    /// which includes leaving the data in flash until garbage collection.
+    #[test]
+    async fn remove_item_leaves_payload_in_flash() {
+        let mut storage = MapStorage::new(
+            zeroing_test_flash(),
+            const { MapConfig::new(0x000..0x1000) },
+            Cache::new_uncached(),
+        );
+        let mut data_buffer = AlignedBuf([0; 128]);
+
+        storage
+            .store_item(&mut data_buffer, &0u8, &SECRET)
+            .await
+            .unwrap();
+
+        storage.remove_item(&mut data_buffer, &0).await.unwrap();
+
+        assert_eq!(
+            storage
+                .fetch_item::<&[u8]>(&mut data_buffer, &0)
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(contains(storage.flash().as_bytes(), SECRET));
+    }
+
+    /// The item data is padded to a whole number of flash words, so the zeroing has to cover the
+    /// padding as well without spilling into the item that follows.
+    #[test]
+    async fn remove_item_and_zero_data_covers_unaligned_lengths() {
+        for value_len in 1..=9 {
+            let mut storage = MapStorage::new(
+                zeroing_test_flash(),
+                const { MapConfig::new(0x000..0x1000) },
+                Cache::new_uncached(),
+            );
+            let mut data_buffer = AlignedBuf([0; 128]);
+
+            let value = vec![0xA5; value_len];
+
+            storage
+                .store_item(&mut data_buffer, &0u8, &value.as_slice())
+                .await
+                .unwrap();
+            storage
+                .store_item(&mut data_buffer, &1u8, &NEIGHBOUR)
+                .await
+                .unwrap();
+
+            let data_region = item_data_region(&mut storage, &mut data_buffer, 0).await;
+            let neighbour_region = item_data_region(&mut storage, &mut data_buffer, 1).await;
+
+            // A `u8` key plus this value is not a whole number of words, so there is padding to cover.
+            assert_eq!(
+                data_region.len(),
+                (1 + value_len).next_multiple_of(MockFlashBig::WRITE_SIZE),
+            );
+            assert!(data_region.end <= neighbour_region.start);
+
+            storage
+                .remove_item_and_zero_data(&mut data_buffer, &0)
+                .await
+                .unwrap();
+
+            assert!(
+                storage.flash().as_bytes()[data_region.clone()]
+                    .iter()
+                    .all(|byte| *byte == 0),
+                "value_len {value_len}: data area {data_region:?} is not zeroed: {:02X?}",
+                &storage.flash().as_bytes()[data_region.clone()]
+            );
+            assert!(!contains(storage.flash().as_bytes(), &value));
+
+            // The item after it survived untouched, so the zeroing didn't run over the item end.
+            assert_eq!(
+                storage
+                    .fetch_item::<&[u8]>(&mut data_buffer, &1)
+                    .await
+                    .unwrap(),
+                Some(NEIGHBOUR),
+                "value_len {value_len}: the next item was damaged"
+            );
+        }
+    }
+
+    #[test]
+    async fn remove_all_items_and_zero_data_leaves_no_payload_in_flash() {
+        let mut storage = MapStorage::new(
+            zeroing_test_flash(),
+            const { MapConfig::new(0x000..0x1000) },
+            Cache::new_uncached(),
+        );
+        let mut data_buffer = AlignedBuf([0; 128]);
+
+        for (key, value) in [SECRET, OLD_SECRET, NEIGHBOUR].iter().enumerate() {
+            storage
+                .store_item(&mut data_buffer, &(key as u8), value)
+                .await
+                .unwrap();
+        }
+
+        storage
+            .remove_all_items_and_zero_data(&mut data_buffer)
+            .await
+            .unwrap();
+
+        for value in [SECRET, OLD_SECRET, NEIGHBOUR] {
+            assert!(!contains(storage.flash().as_bytes(), value));
+        }
+
+        // Removing again must not write the same words a third time, which flash that only
+        // allows two writes per word would reject.
+        storage
+            .remove_all_items_and_zero_data(&mut data_buffer)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    async fn storage_keeps_working_after_zeroing_removal() {
+        let mut storage = MapStorage::new(
+            zeroing_test_flash(),
+            const { MapConfig::new(0x000..0x1000) },
+            Cache::new_uncached(),
+        );
+        let mut data_buffer = AlignedBuf([0; 128]);
+
+        storage
+            .store_item(&mut data_buffer, &0u8, &SECRET)
+            .await
+            .unwrap();
+        storage
+            .remove_item_and_zero_data(&mut data_buffer, &0)
+            .await
+            .unwrap();
+
+        let snapshot = storage.flash().stats_snapshot();
+
+        // Enough writes to wrap around the flash range a few times, which forces garbage
+        // collection over the page that holds the zeroed item.
+        for round in 0..200u32 {
+            storage
+                .store_item(&mut data_buffer, &1u8, &vec![round as u8; 20].as_slice())
+                .await
+                .unwrap();
+        }
+
+        assert!(snapshot.compare_to(storage.flash().stats_snapshot()).erases > 0);
+
+        assert_eq!(
+            storage
+                .fetch_item::<&[u8]>(&mut data_buffer, &1)
+                .await
+                .unwrap(),
+            Some([199u8; 20].as_slice())
+        );
+        assert_eq!(
+            storage
+                .fetch_item::<&[u8]>(&mut data_buffer, &0)
+                .await
+                .unwrap(),
+            None
+        );
+
+        storage
+            .store_item(&mut data_buffer, &0u8, &NEIGHBOUR)
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .fetch_item::<&[u8]>(&mut data_buffer, &0)
+                .await
+                .unwrap(),
+            Some(NEIGHBOUR)
+        );
     }
 
     #[test]
