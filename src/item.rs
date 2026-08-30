@@ -502,16 +502,24 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
         let free_item_address = match self.cache.first_item_after_written(page_index) {
             Some(free_item_address) => free_item_address,
             None => {
-                ItemHeaderIter::new(
+                let mut headers = ItemHeaderIter::new(
                     self.cache
                         .first_item_after_erased(page_index)
                         .unwrap_or(0)
                         .max(start_address),
                     end_address,
-                )
-                .traverse(&mut self.flash, |_, _| true)
-                .await?
-                .1
+                );
+                let free_item_address = headers.traverse(&mut self.flash, |_, _| true).await?.1;
+
+                // A torn header can end immediately before this erased area.
+                // Writing a new header there could complete a valid-looking
+                // phantom header that overlaps the new item. Stop using the
+                // page instead; callers will rotate to a clean page.
+                if headers.encountered_corruption {
+                    return Ok(None);
+                }
+
+                free_item_address
             }
         };
 
@@ -607,6 +615,7 @@ impl ItemIter {
 pub(crate) struct ItemHeaderIter {
     current_address: u32,
     end_address: u32,
+    encountered_corruption: bool,
 }
 
 impl ItemHeaderIter {
@@ -614,6 +623,7 @@ impl ItemHeaderIter {
         Self {
             current_address: start_address,
             end_address,
+            encountered_corruption: false,
         }
     }
 
@@ -650,6 +660,7 @@ impl ItemHeaderIter {
                     return Ok((None, self.current_address));
                 }
                 Err(Error::Corrupted { .. }) => {
+                    self.encountered_corruption = true;
                     self.current_address += S::WORD_SIZE as u32;
                 }
                 Err(e) => return Err(e),

@@ -34,6 +34,12 @@ path = "fuzz_targets/map.rs"
 test = false
 doc = false
 
+[[bin]]
+name = "map-power-cuts"
+path = "fuzz_targets/map-power-cuts.rs"
+test = false
+doc = false
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
 

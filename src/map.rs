@@ -1954,6 +1954,56 @@ mod tests {
     }
 
     #[test]
+    async fn clean_store_is_visible_after_repeated_shutdowns_during_initialization() {
+        type Flash = mock_flash::MockFlashBase<2, 1, 128>;
+        fn config() -> MapConfig<Flash> {
+            const { MapConfig::new(0..256) }
+        }
+
+        let mut flash = Flash::new(mock_flash::WriteCountCheck::OnceOnly, Some(7), false);
+        let mut data_buffer = AlignedBuf([0; 256]);
+
+        for _ in 0..2 {
+            let mut storage = MapStorage::<u8, _, _>::new(flash, config(), Cache::new_uncached());
+            std::assert_matches!(
+                storage.store_item(&mut data_buffer.0, &0, &[7u8; 8]).await,
+                Err(Error::Storage {
+                    value: mock_flash::MockFlashError::EarlyShutoff(_, _)
+                })
+            );
+            (flash, _) = storage.destroy();
+
+            let mut storage = MapStorage::<u8, _, _>::new(flash, config(), Cache::new_uncached());
+            assert_eq!(
+                storage
+                    .fetch_item::<[u8; 8]>(&mut data_buffer.0, &0)
+                    .await
+                    .unwrap(),
+                None
+            );
+            (flash, _) = storage.destroy();
+            flash.bytes_until_shutoff = Some(7);
+        }
+
+        flash.bytes_until_shutoff = None;
+        let mut storage = MapStorage::<u8, _, _>::new(flash, config(), Cache::new_uncached());
+        storage
+            .store_item(&mut data_buffer.0, &0, &[226u8; 8])
+            .await
+            .unwrap();
+        (flash, _) = storage.destroy();
+
+        let mut storage = MapStorage::<u8, _, _>::new(flash, config(), Cache::new_uncached());
+        assert_eq!(
+            storage
+                .fetch_item::<[u8; 8]>(&mut data_buffer.0, &0)
+                .await
+                .unwrap(),
+            Some([226; 8])
+        );
+    }
+
+    #[test]
     async fn store_unit_key() {
         let mut storage = MapStorage::new(
             MockFlashBig::default(),
