@@ -233,6 +233,74 @@ impl<PAGE: PageStatesCache, POINTERS: PagePointersCache, KEYS: KeyPointersCache<
 {
 }
 
+impl<T: SealedCacheImpl> SealedCacheImpl for &mut T {
+    fn is_dirty(&mut self) -> bool {
+        T::is_dirty(self)
+    }
+
+    fn mark_dirty(&mut self) {
+        T::mark_dirty(self);
+    }
+
+    fn unmark_dirty(&mut self) {
+        T::unmark_dirty(self);
+    }
+
+    fn get_page_state(&mut self, page_index: usize) -> Option<PageState> {
+        T::get_page_state(self, page_index)
+    }
+
+    fn notice_page_state(&mut self, page_index: usize, new_state: PageState, dirty: bool) {
+        T::notice_page_state(self, page_index, new_state, dirty);
+    }
+
+    fn first_item_after_erased(&mut self, page_index: usize) -> Option<u32> {
+        T::first_item_after_erased(self, page_index)
+    }
+
+    fn first_item_after_written(&mut self, page_index: usize) -> Option<u32> {
+        T::first_item_after_written(self, page_index)
+    }
+
+    fn notice_item_written<S: NorFlash>(
+        &mut self,
+        flash_range: Range<u32>,
+        item_address: u32,
+        item_header: &ItemHeader,
+    ) {
+        T::notice_item_written::<S>(self, flash_range, item_address, item_header);
+    }
+
+    fn notice_item_erased<S: NorFlash>(
+        &mut self,
+        flash_range: Range<u32>,
+        item_address: u32,
+        item_header: &ItemHeader,
+    ) {
+        T::notice_item_erased::<S>(self, flash_range, item_address, item_header);
+    }
+
+    fn invalidate_cache_state(&mut self) {
+        T::invalidate_cache_state(self);
+    }
+}
+
+impl<KEY, T: SealedKeyCacheImpl<KEY>> SealedKeyCacheImpl<KEY> for &mut T {
+    fn key_location(&mut self, key: &KEY) -> Option<u32> {
+        T::key_location(self, key)
+    }
+
+    fn notice_key_location(&mut self, key: &KEY, item_address: u32, dirty: bool) {
+        T::notice_key_location(self, key, item_address, dirty);
+    }
+
+    fn notice_key_erased(&mut self, key: &KEY) {
+        T::notice_key_erased(self, key);
+    }
+}
+
+impl<KEY, T: CacheImpl<KEY>> CacheImpl<KEY> for &mut T {}
+
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub(crate) struct DirtTracker {

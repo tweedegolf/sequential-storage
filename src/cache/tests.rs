@@ -50,6 +50,22 @@ mod queue_tests {
     }
 
     #[test]
+    async fn borrowed_cache() {
+        // Borrowed cache must behave identical
+        let mut cache = Cache::new(CalculatedPageStates::new(NUM_PAGES), Uncached, Uncached);
+        assert_eq!(
+            run_test(&mut cache).await,
+            FlashStatsResult {
+                erases: 149,
+                reads: 68111,
+                writes: 6299,
+                bytes_read: 554314,
+                bytes_written: 53299
+            }
+        );
+    }
+
+    #[test]
     async fn array_page_state_cache() {
         assert_eq!(
             run_test(Cache::new(
