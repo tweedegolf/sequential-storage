@@ -231,10 +231,7 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
                             + S::WORD_SIZE as u32;
 
                     if !allow_overwrite_old_data
-                        && !self
-                            .inner
-                            .is_page_empty(next_page, Some(next_page_state))
-                            .await?
+                        && self.inner.page_contains_live_data(next_page).await?
                     {
                         self.inner.cache.unmark_dirty();
                         return Err(Error::FullStorage);
