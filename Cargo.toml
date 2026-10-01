@@ -1,10 +1,9 @@
 [package]
 name = "sequential-storage"
-version = "8.0.1"
+version = "8.0.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "A crate for storing data in flash with minimal erase cycles."
-homepage = "https://github.com/tweedegolf/sequential-storage"
 repository = "https://github.com/tweedegolf/sequential-storage"
 readme = "README.md"
 keywords = ["no_std", "embedded", "flash", "storage"]
