@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## 8.0.2 - 01-10-26
+
 - Fixed a bug for single page queues where they would return 'full storage' when it's really exhaused but empty and could be erased again
 
 ## 8.0.1 - 19-07-26
