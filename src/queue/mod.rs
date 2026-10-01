@@ -1388,4 +1388,29 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    async fn push_pop_on_single_page_without_overwrite() {
+        let mut storage = QueueStorage::new(
+            mock_flash::MockFlashBase::<1, 4, 1024>::new(WriteCountCheck::Twice, None, true),
+            QueueConfig::new(0x0000..0x1000),
+            Cache::new_uncached(),
+        );
+        let mut buf = [0; 80];
+
+        for i in 0..2000 {
+            match storage.push(&AlignedBuf([0xAA; 32]), false).await {
+                Ok(_) => {}
+                Err(e) => {
+                    println!("{}", storage.print_items().await);
+                    panic!("push #{i} failed on an empty queue: {e}");
+                }
+            }
+            assert_eq!(
+                storage.pop(&mut buf).await.unwrap(),
+                Some(&mut [0xAA; 32][..])
+            );
+            assert_eq!(storage.peek(&mut buf).await.unwrap(), None);
+        }
+    }
 }
