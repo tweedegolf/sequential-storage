@@ -544,28 +544,33 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
         };
 
         match page_state {
-            PageState::Closed => {
-                let page_data_start_address =
-                    calculate_page_address::<S>(self.flash_range.clone(), page_index)
-                        + S::WORD_SIZE as u32;
-                let page_data_end_address =
-                    calculate_page_end_address::<S>(self.flash_range.clone(), page_index)
-                        - S::WORD_SIZE as u32;
-
-                Ok(ItemHeaderIter::new(
-                    self.cache
-                        .first_item_after_erased(page_index)
-                        .unwrap_or(page_data_start_address),
-                    page_data_end_address,
-                )
-                .traverse(&mut self.flash, |header, _| header.crc.is_none())
-                .await?
-                .0
-                .is_none())
-            }
+            PageState::Closed => Ok(!self.page_contains_live_data(page_index).await?),
             PageState::PartialOpen => Ok(false),
             PageState::Open => Ok(true),
         }
+    }
+
+    /// Checks if the page has any non-erased item
+    pub(crate) async fn page_contains_live_data(
+        &mut self,
+        page_index: usize,
+    ) -> Result<bool, Error<S::Error>> {
+        let page_data_start_address =
+            calculate_page_address::<S>(self.flash_range.clone(), page_index) + S::WORD_SIZE as u32;
+        let page_data_end_address =
+            calculate_page_end_address::<S>(self.flash_range.clone(), page_index)
+                - S::WORD_SIZE as u32;
+
+        Ok(ItemHeaderIter::new(
+            self.cache
+                .first_item_after_erased(page_index)
+                .unwrap_or(page_data_start_address),
+            page_data_end_address,
+        )
+        .traverse(&mut self.flash, |header, _| header.crc.is_none())
+        .await?
+        .0
+        .is_some())
     }
 }
 
