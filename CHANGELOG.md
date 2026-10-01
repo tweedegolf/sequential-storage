@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Fixed a bug for single page queues where they would return 'full storage' when it's really exhaused but empty and could be erased again
+
 ## 8.0.1 - 19-07-26
 
 - Fixed a bug where a canceled map remove item, after a canceled map item store, would in fringe cases allow a map item fetch to return old data
