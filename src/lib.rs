@@ -172,7 +172,8 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
         page_index: usize,
     ) -> Result<PageState, Error<S::Error>> {
         if let Some(cached_page_state) = self.cache.get_page_state(page_index) {
-            if cfg!(feature = "_check-cache") {
+            #[cfg(feature = "_check-cache")]
+            {
                 let discovered_state = self.get_page_state(page_index).await?;
                 assert_eq!(
                     cached_page_state, discovered_state,
