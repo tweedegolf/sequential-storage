@@ -67,7 +67,7 @@ If you find yourself in trouble with this, feel free to open an issue.
 If you're looking for an alternative with different tradeoffs, take a look at [ekv](https://github.com/embassy-rs/ekv).
 
 ***Note:** The crate uses futures for its operations. These futures write to flash. If a future is cancelled, this can lead*
-*to a corrupted flash state, so cancelling is at your own risc. If this happens, the state will be repaired.*
+*to a corrupted flash state, so cancelling is at your own risk. If this happens, the state will be repaired.*
 *In any case, the thing you tried to store or erase might or might not have fully happened.*
 
 ### Corruption repair
