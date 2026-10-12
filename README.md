@@ -16,7 +16,7 @@ then performs a linear scan over the data, skipping data blocks where it can.
 
 ## Status
 
-This crate is used in production in multiple projects inside and outside of Tweede golf.
+This crate is used in production in multiple projects inside and outside of Tweede golf, powering millions of devices.
 
 The in-flash representation is not (yet?) stable. This too follows semver.
 
