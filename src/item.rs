@@ -610,15 +610,17 @@ impl ItemIter {
 }
 
 pub(crate) struct ItemHeaderIter {
-    current_address: u32,
+    next_address: u32,
     end_address: u32,
+    item_corrupted: bool,
 }
 
 impl ItemHeaderIter {
     pub(crate) fn new(start_address: u32, end_address: u32) -> Self {
         Self {
-            current_address: start_address,
+            next_address: start_address,
             end_address,
+            item_corrupted: false,
         }
     }
 
@@ -640,22 +642,38 @@ impl ItemHeaderIter {
         callback: impl Fn(&ItemHeader, u32) -> bool,
     ) -> Result<(Option<ItemHeader>, u32), Error<S::Error>> {
         loop {
-            match ItemHeader::read_new(flash, self.current_address, self.end_address).await {
+            let read_result =
+                ItemHeader::read_new(flash, self.next_address, self.end_address).await;
+
+            let last_item_corrupted = core::mem::replace(
+                &mut self.item_corrupted,
+                matches!(read_result, Err(Error::Corrupted { .. })),
+            );
+
+            match read_result {
                 Ok(Some(header)) => {
-                    let next_address = header.next_item_address::<S>(self.current_address);
-                    if callback(&header, self.current_address) {
-                        self.current_address = next_address;
+                    let next_address = header.next_item_address::<S>(self.next_address);
+                    if callback(&header, self.next_address) {
+                        self.next_address = next_address;
                     } else {
-                        let current_address = self.current_address;
-                        self.current_address = next_address;
+                        let current_address = self.next_address;
+                        self.next_address = next_address;
                         return Ok((Some(header), current_address));
                     }
                 }
                 Ok(None) => {
-                    return Ok((None, self.current_address));
+                    return Ok((None, self.next_address));
                 }
                 Err(Error::Corrupted { .. }) => {
-                    self.current_address += S::WORD_SIZE as u32;
+                    self.next_address += if last_item_corrupted {
+                        // We skip a full header so we can't start writing into what could be a possible header.
+                        // If we did write into a corrupted header, it might suddenly (wrongly) be deemed valid again.
+                        round_up_to_alignment::<S>(ItemHeader::LENGTH as u32)
+                    } else {
+                        // We've already skipped a full header, so now we have no information anymore except that
+                        // a header must be word aligned, so look at every word
+                        S::WORD_SIZE as u32
+                    };
                 }
                 Err(e) => return Err(e),
             }
