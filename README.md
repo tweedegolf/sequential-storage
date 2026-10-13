@@ -90,9 +90,9 @@ These numbers are taken from the test cases in the cache module:
 |                        Name |                    RAM bytes |    Map # flash reads | Map flash bytes read | Queue # flash reads | Queue flash bytes read |
 | --------------------------: | ---------------------------: | -------------------: | -------------------: | ------------------: | ---------------------: |
 |              All `Uncached` |                            0 |                 100% |                 100% |                100% |                   100% |
-| Only `CalculatedPageStates` |                           24 |                  87% |                  97% |                 58% |                    85% |
-|      Only `ArrayPageStates` |                1 * num pages |                  87% |                  97% |                 58% |                    85% |
-|    Only `ArrayPagePointers` |                8 * num pages |                  91% |                  92% |                 50% |                    28% |
+| Only `CalculatedPageStates` |                           24 |                  87% |                  97% |                 59% |                    86% |
+|      Only `ArrayPageStates` |                1 * num pages |                  87% |                  97% |                 59% |                    86% |
+|    Only `ArrayPagePointers` |                8 * num pages |                  91% |                  92% |                 49% |                    28% |
 |     Only `ArrayKeyPointers` | (sizeof(KEY) + 4) * num keys | half: 82%, full: 20% | half: 80%, full: 17% |                   - |                      - |
 |   All array caches together |                              |                   7% |                   8% |                  9% |                    14% |
 

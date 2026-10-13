@@ -22,9 +22,9 @@ mod queue_tests {
             run_test(Cache::new_uncached()).await,
             FlashStatsResult {
                 erases: 149,
-                reads: 116519,
+                reads: 114520,
                 writes: 6299,
-                bytes_read: 651212,
+                bytes_read: 647214,
                 bytes_written: 53299
             }
         );
@@ -79,9 +79,9 @@ mod queue_tests {
             .await,
             FlashStatsResult {
                 erases: 149,
-                reads: 58441,
+                reads: 56442,
                 writes: 6299,
-                bytes_read: 186588,
+                bytes_read: 182590,
                 bytes_written: 53299
             }
         );

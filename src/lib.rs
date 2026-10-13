@@ -253,10 +253,9 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
 
     /// Fully closes a page by writing both the start and end marker
     async fn close_page(&mut self, page_index: usize) -> Result<(), Error<S::Error>> {
-        let current_state = self.partial_close_page(page_index).await?;
-
-        if current_state != PageState::PartialOpen {
-            return Ok(());
+        #[cfg(debug_assertions)]
+        if self.get_page_state_cached(page_index).await? != PageState::PartialOpen {
+            panic!("Not open");
         }
 
         self.cache
@@ -279,22 +278,14 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
     }
 
     /// Partially close a page by writing the start marker
-    async fn partial_close_page(
-        &mut self,
-        page_index: usize,
-    ) -> Result<PageState, Error<S::Error>> {
-        let current_state = self.get_page_state_cached(page_index).await?;
-
-        if current_state != PageState::Open {
-            return Ok(current_state);
+    async fn partial_close_page(&mut self, page_index: usize) -> Result<(), Error<S::Error>> {
+        #[cfg(debug_assertions)]
+        if self.get_page_state_cached(page_index).await? != PageState::Open {
+            panic!("Not open");
         }
 
-        let new_state = match current_state {
-            PageState::Closed => PageState::Closed,
-            PageState::PartialOpen | PageState::Open => PageState::PartialOpen,
-        };
-
-        self.cache.notice_page_state(page_index, new_state, true);
+        self.cache
+            .notice_page_state(page_index, PageState::PartialOpen, true);
 
         let buffer = AlignedBuf([MARKER; MAX_WORD_SIZE]);
         let page_start_address = calculate_page_address::<S>(self.flash_range.clone(), page_index);
@@ -308,7 +299,7 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
                 backtrace: std::backtrace::Backtrace::capture(),
             })?;
 
-        Ok(new_state)
+        Ok(())
     }
 
     #[cfg(any(test, feature = "std", fuzzing))]

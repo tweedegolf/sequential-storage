@@ -190,14 +190,16 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
             return Err(Error::ItemTooBig);
         }
 
-        let current_page = self.find_youngest_page().await?;
+        let (current_page, current_page_state) = self.find_youngest_page().await?;
 
         let page_data_start_address =
             calculate_page_address::<S>(self.flash_range(), current_page) + S::WORD_SIZE as u32 * 2;
         let page_data_end_address =
             calculate_page_end_address::<S>(self.flash_range(), current_page);
 
-        self.inner.partial_close_page(current_page).await?;
+        if current_page_state != PageState::PartialOpen {
+            self.inner.partial_close_page(current_page).await?;
+        }
 
         // Find the last item on the page so we know where we need to write
 
@@ -348,7 +350,7 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
             self.inner.cache.invalidate_cache_state();
         }
 
-        let current_page = self.find_youngest_page().await?;
+        let (current_page, _) = self.find_youngest_page().await?;
 
         // Check if we have space on the next page
         let next_page = self.inner.next_page(current_page);
@@ -481,14 +483,14 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
         Ok(total_free_space)
     }
 
-    async fn find_youngest_page(&mut self) -> Result<usize, Error<S::Error>> {
+    async fn find_youngest_page(&mut self) -> Result<(usize, PageState), Error<S::Error>> {
         let last_used_page = self
             .inner
             .find_first_page(0, PageState::PartialOpen)
             .await?;
 
         if let Some(last_used_page) = last_used_page {
-            return Ok(last_used_page);
+            return Ok((last_used_page, PageState::PartialOpen));
         }
 
         // We have no partial open page. Search for a closed page to anker ourselves to
@@ -508,7 +510,7 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
         };
 
         if let Some(first_open_page) = first_open_page {
-            return Ok(first_open_page);
+            return Ok((first_open_page, PageState::Open));
         }
 
         // All pages are closed... This is not correct.
@@ -519,7 +521,7 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
     }
 
     async fn find_oldest_page(&mut self) -> Result<usize, Error<S::Error>> {
-        let youngest_page = self.find_youngest_page().await?;
+        let (youngest_page, _) = self.find_youngest_page().await?;
 
         // The oldest page is the first non-open page after the youngest page
         let oldest_closed_page = self
@@ -1193,9 +1195,9 @@ mod tests {
             push_stats.take_average(pushes),
             FlashAverageStatsResult {
                 avg_erases: 0.0,
-                avg_reads: 13.1764,
+                avg_reads: 12.1768,
                 avg_writes: 3.1252,
-                avg_bytes_read: 105.4112,
+                avg_bytes_read: 97.4144,
                 avg_bytes_written: 60.5008
             }
         );
@@ -1284,9 +1286,9 @@ mod tests {
             push_stats.take_average(pushes),
             FlashAverageStatsResult {
                 avg_erases: 0.0,
-                avg_reads: 13.1764,
+                avg_reads: 12.1768,
                 avg_writes: 3.1252,
-                avg_bytes_read: 105.4112,
+                avg_bytes_read: 97.4144,
                 avg_bytes_written: 60.5008
             }
         );
@@ -1337,11 +1339,24 @@ mod tests {
             Cache::new_uncached(),
         );
 
+        // Layout:
+        // 1. Closed
+        // 2. Closed
+        // 3. Partial open
+        // 4. Open
+
+        storage.inner.partial_close_page(0).await.unwrap();
         storage.inner.close_page(0).await.unwrap();
+
+        storage.inner.partial_close_page(1).await.unwrap();
         storage.inner.close_page(1).await.unwrap();
+
         storage.inner.partial_close_page(2).await.unwrap();
 
-        assert_eq!(storage.find_youngest_page().await.unwrap(), 2);
+        assert_eq!(
+            storage.find_youngest_page().await.unwrap(),
+            (2, PageState::PartialOpen)
+        );
         assert_eq!(storage.find_oldest_page().await.unwrap(), 0);
     }
 
