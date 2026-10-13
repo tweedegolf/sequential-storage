@@ -556,10 +556,10 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
         page_index: usize,
     ) -> Result<bool, Error<S::Error>> {
         let page_data_start_address =
-            calculate_page_address::<S>(self.flash_range.clone(), page_index) + S::WORD_SIZE as u32;
+            calculate_page_address::<S>(self.flash_range.clone(), page_index)
+                + S::WORD_SIZE as u32 * 2;
         let page_data_end_address =
-            calculate_page_end_address::<S>(self.flash_range.clone(), page_index)
-                - S::WORD_SIZE as u32;
+            calculate_page_end_address::<S>(self.flash_range.clone(), page_index);
 
         Ok(ItemHeaderIter::new(
             self.cache

@@ -193,9 +193,9 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
         let current_page = self.find_youngest_page().await?;
 
         let page_data_start_address =
-            calculate_page_address::<S>(self.flash_range(), current_page) + S::WORD_SIZE as u32;
+            calculate_page_address::<S>(self.flash_range(), current_page) + S::WORD_SIZE as u32 * 2;
         let page_data_end_address =
-            calculate_page_end_address::<S>(self.flash_range(), current_page) - S::WORD_SIZE as u32;
+            calculate_page_end_address::<S>(self.flash_range(), current_page);
 
         self.inner.partial_close_page(current_page).await?;
 
@@ -222,13 +222,13 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
                     self.inner.partial_close_page(next_page).await?;
                     next_address = Some(
                         calculate_page_address::<S>(self.flash_range(), next_page)
-                            + S::WORD_SIZE as u32,
+                            + S::WORD_SIZE as u32 * 2,
                     );
                 }
                 (PageState::Closed, _) | (PageState::PartialOpen, true) => {
                     let next_page_data_start_address =
                         calculate_page_address::<S>(self.flash_range(), next_page)
-                            + S::WORD_SIZE as u32;
+                            + S::WORD_SIZE as u32 * 2;
 
                     if !allow_overwrite_old_data
                         && self.inner.page_contains_live_data(next_page).await?
@@ -374,9 +374,9 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
 
         // See how much space we can find in the current page.
         let page_data_start_address =
-            calculate_page_address::<S>(self.flash_range(), current_page) + S::WORD_SIZE as u32;
+            calculate_page_address::<S>(self.flash_range(), current_page) + S::WORD_SIZE as u32 * 2;
         let page_data_end_address =
-            calculate_page_end_address::<S>(self.flash_range(), current_page) - S::WORD_SIZE as u32;
+            calculate_page_end_address::<S>(self.flash_range(), current_page);
 
         let next_item_address = match self.inner.cache.first_item_after_written(current_page) {
             Some(next_item_address) => next_item_address,
@@ -433,9 +433,8 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
 
             // See how much space we can find in the current page.
             let page_data_start_address =
-                calculate_page_address::<S>(self.flash_range(), page) + S::WORD_SIZE as u32;
-            let page_data_end_address =
-                calculate_page_end_address::<S>(self.flash_range(), page) - S::WORD_SIZE as u32;
+                calculate_page_address::<S>(self.flash_range(), page) + S::WORD_SIZE as u32 * 2;
+            let page_data_end_address = calculate_page_end_address::<S>(self.flash_range(), page);
 
             if page_empty {
                 total_free_space += page_data_end_address - page_data_start_address;
@@ -560,7 +559,7 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
             Some(address) => address,
             None => {
                 calculate_page_address::<S>(self.inner.flash_range.clone(), oldest_page)
-                    + S::WORD_SIZE as u32
+                    + S::WORD_SIZE as u32 * 2
             }
         };
 
@@ -735,7 +734,7 @@ impl<'s, S: NorFlash, C: CacheImpl<()>> QueueIterator<'s, S, C> {
                     let current_address = calculate_page_address::<S>(
                         self.storage.inner.flash_range.clone(),
                         next_page,
-                    ) + S::WORD_SIZE as u32;
+                    ) + S::WORD_SIZE as u32 * 2;
 
                     self.next_address = NextAddress::Address(current_address);
 
@@ -750,7 +749,7 @@ impl<'s, S: NorFlash, C: CacheImpl<()>> QueueIterator<'s, S, C> {
             let page_data_end_address = calculate_page_end_address::<S>(
                 self.storage.inner.flash_range.clone(),
                 current_page,
-            ) - S::WORD_SIZE as u32;
+            );
 
             // Search for the first item with data
             let mut it = ItemHeaderIter::new(current_address, page_data_end_address);
@@ -1194,7 +1193,7 @@ mod tests {
             push_stats.take_average(pushes),
             FlashAverageStatsResult {
                 avg_erases: 0.0,
-                avg_reads: 16.864,
+                avg_reads: 13.1764,
                 avg_writes: 3.1252,
                 avg_bytes_read: 105.4112,
                 avg_bytes_written: 60.5008
@@ -1204,7 +1203,7 @@ mod tests {
             peek_stats.take_average(peeks),
             FlashAverageStatsResult {
                 avg_erases: 0.0052,
-                avg_reads: 3.8656,
+                avg_reads: 3.3032,
                 avg_writes: 0.0,
                 avg_bytes_read: 70.4256,
                 avg_bytes_written: 0.0
@@ -1214,7 +1213,7 @@ mod tests {
             pop_stats.take_average(pops),
             FlashAverageStatsResult {
                 avg_erases: 0.0572,
-                avg_reads: 3.7772,
+                avg_reads: 3.2148,
                 avg_writes: 1.0,
                 avg_bytes_read: 69.7184,
                 avg_bytes_written: 8.0
@@ -1285,7 +1284,7 @@ mod tests {
             push_stats.take_average(pushes),
             FlashAverageStatsResult {
                 avg_erases: 0.0,
-                avg_reads: 16.864,
+                avg_reads: 13.1764,
                 avg_writes: 3.1252,
                 avg_bytes_read: 105.4112,
                 avg_bytes_written: 60.5008
@@ -1295,7 +1294,7 @@ mod tests {
             pop_stats.take_average(pops),
             FlashAverageStatsResult {
                 avg_erases: 0.0624,
-                avg_reads: 23.5768,
+                avg_reads: 17.064,
                 avg_writes: 1.0,
                 avg_bytes_read: 180.512,
                 avg_bytes_written: 8.0

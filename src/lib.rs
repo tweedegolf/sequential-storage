@@ -201,37 +201,18 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
         /// So only half of the byte needs to be zero.
         const HALF_MARKER_BITS: u32 = 4;
 
-        let mut buffer = [0; MAX_WORD_SIZE];
+        let mut buffer = [0; MAX_WORD_SIZE * 2];
         self.flash
-            .read(page_address, &mut buffer[..S::READ_SIZE])
+            .read(page_address, &mut buffer[..S::WORD_SIZE * 2])
             .await
             .map_err(|e| Error::Storage {
                 value: e,
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
             })?;
-        let start_marked = buffer[..S::READ_SIZE]
-            .iter()
-            .map(|marker_byte| marker_byte.count_zeros())
-            .sum::<u32>()
-            >= HALF_MARKER_BITS;
 
-        self.flash
-            .read(
-                page_address + (S::ERASE_SIZE - S::READ_SIZE) as u32,
-                &mut buffer[..S::READ_SIZE],
-            )
-            .await
-            .map_err(|e| Error::Storage {
-                value: e,
-                #[cfg(feature = "_test")]
-                backtrace: std::backtrace::Backtrace::capture(),
-            })?;
-        let end_marked = buffer[..S::READ_SIZE]
-            .iter()
-            .map(|marker_byte| marker_byte.count_zeros())
-            .sum::<u32>()
-            >= HALF_MARKER_BITS;
+        let start_marked = buffer[0].count_zeros() >= HALF_MARKER_BITS;
+        let end_marked = buffer[S::WORD_SIZE].count_zeros() >= HALF_MARKER_BITS;
 
         let discovered_state = match (start_marked, end_marked) {
             (true, true) => PageState::Closed,
@@ -282,12 +263,11 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
             .notice_page_state(page_index, PageState::Closed, true);
 
         let buffer = AlignedBuf([MARKER; MAX_WORD_SIZE]);
-        let page_end_address =
-            calculate_page_end_address::<S>(self.flash_range.clone(), page_index)
-                - S::WORD_SIZE as u32;
+        let second_word_address =
+            calculate_page_address::<S>(self.flash_range.clone(), page_index) + S::WORD_SIZE as u32;
         // Close the end marker
         self.flash
-            .write(page_end_address, &buffer[..S::WORD_SIZE])
+            .write(second_word_address, &buffer[..S::WORD_SIZE])
             .await
             .map_err(|e| Error::Storage {
                 value: e,
@@ -355,10 +335,9 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
             .unwrap();
             let page_data_start =
                 crate::calculate_page_address::<S>(self.flash_range.clone(), page_index)
-                    + S::WORD_SIZE as u32;
+                    + S::WORD_SIZE as u32 * 2;
             let page_data_end =
-                crate::calculate_page_end_address::<S>(self.flash_range.clone(), page_index)
-                    - S::WORD_SIZE as u32;
+                crate::calculate_page_end_address::<S>(self.flash_range.clone(), page_index);
 
             let mut it = crate::item::ItemHeaderIter::new(page_data_start, page_data_end);
             while let (Some(header), item_address) =
@@ -465,7 +444,7 @@ const MARKER: u8 = 0;
 /// The state of a page
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum PageState {
+pub(crate) enum PageState {
     /// This page was fully written and has now been sealed
     Closed,
     /// This page has been written to, but may have some space left over
@@ -689,14 +668,14 @@ mod tests {
         write_aligned(&mut flash, 0x000, &[MARKER, 0, 0, 0])
             .await
             .unwrap();
-        write_aligned(&mut flash, 0x100 - 4, &[0, 0, 0, MARKER])
+        write_aligned(&mut flash, 0x000 + 4, &[MARKER, 0, 0, 0])
             .await
             .unwrap();
         // Page 1 markers
         write_aligned(&mut flash, 0x100, &[MARKER, 0, 0, 0])
             .await
             .unwrap();
-        write_aligned(&mut flash, 0x200 - 4, &[0, 0, 0, MARKER])
+        write_aligned(&mut flash, 0x100 + 4, &[MARKER, 0, 0, 0])
             .await
             .unwrap();
         // Page 2 markers

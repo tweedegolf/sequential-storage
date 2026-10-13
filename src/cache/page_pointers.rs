@@ -247,7 +247,7 @@ impl SealedPagePointersCache for TrackedPagePointers<'_> {
 
         // Either the item we point to or the first item on the page
         let next_unerased_item = self.first_item_after_erased(page_index).unwrap_or_else(|| {
-            calculate_page_address::<S>(flash_range, page_index) + S::WORD_SIZE as u32
+            calculate_page_address::<S>(flash_range, page_index) + S::WORD_SIZE as u32 * 2
         });
 
         if item_address == next_unerased_item {
