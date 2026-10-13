@@ -190,14 +190,16 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
             return Err(Error::ItemTooBig);
         }
 
-        let current_page = self.find_youngest_page().await?;
+        let (current_page, current_page_state) = self.find_youngest_page().await?;
 
         let page_data_start_address =
-            calculate_page_address::<S>(self.flash_range(), current_page) + S::WORD_SIZE as u32;
+            calculate_page_address::<S>(self.flash_range(), current_page) + S::WORD_SIZE as u32 * 2;
         let page_data_end_address =
-            calculate_page_end_address::<S>(self.flash_range(), current_page) - S::WORD_SIZE as u32;
+            calculate_page_end_address::<S>(self.flash_range(), current_page);
 
-        self.inner.partial_close_page(current_page).await?;
+        if current_page_state != PageState::PartialOpen {
+            self.inner.partial_close_page(current_page).await?;
+        }
 
         // Find the last item on the page so we know where we need to write
 
@@ -222,13 +224,13 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
                     self.inner.partial_close_page(next_page).await?;
                     next_address = Some(
                         calculate_page_address::<S>(self.flash_range(), next_page)
-                            + S::WORD_SIZE as u32,
+                            + S::WORD_SIZE as u32 * 2,
                     );
                 }
                 (PageState::Closed, _) | (PageState::PartialOpen, true) => {
                     let next_page_data_start_address =
                         calculate_page_address::<S>(self.flash_range(), next_page)
-                            + S::WORD_SIZE as u32;
+                            + S::WORD_SIZE as u32 * 2;
 
                     if !allow_overwrite_old_data
                         && self.inner.page_contains_live_data(next_page).await?
@@ -348,7 +350,7 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
             self.inner.cache.invalidate_cache_state();
         }
 
-        let current_page = self.find_youngest_page().await?;
+        let (current_page, _) = self.find_youngest_page().await?;
 
         // Check if we have space on the next page
         let next_page = self.inner.next_page(current_page);
@@ -374,9 +376,9 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
 
         // See how much space we can find in the current page.
         let page_data_start_address =
-            calculate_page_address::<S>(self.flash_range(), current_page) + S::WORD_SIZE as u32;
+            calculate_page_address::<S>(self.flash_range(), current_page) + S::WORD_SIZE as u32 * 2;
         let page_data_end_address =
-            calculate_page_end_address::<S>(self.flash_range(), current_page) - S::WORD_SIZE as u32;
+            calculate_page_end_address::<S>(self.flash_range(), current_page);
 
         let next_item_address = match self.inner.cache.first_item_after_written(current_page) {
             Some(next_item_address) => next_item_address,
@@ -433,9 +435,8 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
 
             // See how much space we can find in the current page.
             let page_data_start_address =
-                calculate_page_address::<S>(self.flash_range(), page) + S::WORD_SIZE as u32;
-            let page_data_end_address =
-                calculate_page_end_address::<S>(self.flash_range(), page) - S::WORD_SIZE as u32;
+                calculate_page_address::<S>(self.flash_range(), page) + S::WORD_SIZE as u32 * 2;
+            let page_data_end_address = calculate_page_end_address::<S>(self.flash_range(), page);
 
             if page_empty {
                 total_free_space += page_data_end_address - page_data_start_address;
@@ -482,14 +483,14 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
         Ok(total_free_space)
     }
 
-    async fn find_youngest_page(&mut self) -> Result<usize, Error<S::Error>> {
+    async fn find_youngest_page(&mut self) -> Result<(usize, PageState), Error<S::Error>> {
         let last_used_page = self
             .inner
             .find_first_page(0, PageState::PartialOpen)
             .await?;
 
         if let Some(last_used_page) = last_used_page {
-            return Ok(last_used_page);
+            return Ok((last_used_page, PageState::PartialOpen));
         }
 
         // We have no partial open page. Search for a closed page to anker ourselves to
@@ -509,7 +510,7 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
         };
 
         if let Some(first_open_page) = first_open_page {
-            return Ok(first_open_page);
+            return Ok((first_open_page, PageState::Open));
         }
 
         // All pages are closed... This is not correct.
@@ -520,7 +521,7 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
     }
 
     async fn find_oldest_page(&mut self) -> Result<usize, Error<S::Error>> {
-        let youngest_page = self.find_youngest_page().await?;
+        let (youngest_page, _) = self.find_youngest_page().await?;
 
         // The oldest page is the first non-open page after the youngest page
         let oldest_closed_page = self
@@ -560,7 +561,7 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
             Some(address) => address,
             None => {
                 calculate_page_address::<S>(self.inner.flash_range.clone(), oldest_page)
-                    + S::WORD_SIZE as u32
+                    + S::WORD_SIZE as u32 * 2
             }
         };
 
@@ -735,7 +736,7 @@ impl<'s, S: NorFlash, C: CacheImpl<()>> QueueIterator<'s, S, C> {
                     let current_address = calculate_page_address::<S>(
                         self.storage.inner.flash_range.clone(),
                         next_page,
-                    ) + S::WORD_SIZE as u32;
+                    ) + S::WORD_SIZE as u32 * 2;
 
                     self.next_address = NextAddress::Address(current_address);
 
@@ -750,7 +751,7 @@ impl<'s, S: NorFlash, C: CacheImpl<()>> QueueIterator<'s, S, C> {
             let page_data_end_address = calculate_page_end_address::<S>(
                 self.storage.inner.flash_range.clone(),
                 current_page,
-            ) - S::WORD_SIZE as u32;
+            );
 
             // Search for the first item with data
             let mut it = ItemHeaderIter::new(current_address, page_data_end_address);
@@ -1194,9 +1195,9 @@ mod tests {
             push_stats.take_average(pushes),
             FlashAverageStatsResult {
                 avg_erases: 0.0,
-                avg_reads: 16.864,
+                avg_reads: 12.1768,
                 avg_writes: 3.1252,
-                avg_bytes_read: 105.4112,
+                avg_bytes_read: 97.4144,
                 avg_bytes_written: 60.5008
             }
         );
@@ -1204,7 +1205,7 @@ mod tests {
             peek_stats.take_average(peeks),
             FlashAverageStatsResult {
                 avg_erases: 0.0052,
-                avg_reads: 3.8656,
+                avg_reads: 3.3032,
                 avg_writes: 0.0,
                 avg_bytes_read: 70.4256,
                 avg_bytes_written: 0.0
@@ -1214,7 +1215,7 @@ mod tests {
             pop_stats.take_average(pops),
             FlashAverageStatsResult {
                 avg_erases: 0.0572,
-                avg_reads: 3.7772,
+                avg_reads: 3.2148,
                 avg_writes: 1.0,
                 avg_bytes_read: 69.7184,
                 avg_bytes_written: 8.0
@@ -1285,9 +1286,9 @@ mod tests {
             push_stats.take_average(pushes),
             FlashAverageStatsResult {
                 avg_erases: 0.0,
-                avg_reads: 16.864,
+                avg_reads: 12.1768,
                 avg_writes: 3.1252,
-                avg_bytes_read: 105.4112,
+                avg_bytes_read: 97.4144,
                 avg_bytes_written: 60.5008
             }
         );
@@ -1295,7 +1296,7 @@ mod tests {
             pop_stats.take_average(pops),
             FlashAverageStatsResult {
                 avg_erases: 0.0624,
-                avg_reads: 23.5768,
+                avg_reads: 17.064,
                 avg_writes: 1.0,
                 avg_bytes_read: 180.512,
                 avg_bytes_written: 8.0
@@ -1338,11 +1339,24 @@ mod tests {
             Cache::new_uncached(),
         );
 
+        // Layout:
+        // 1. Closed
+        // 2. Closed
+        // 3. Partial open
+        // 4. Open
+
+        storage.inner.partial_close_page(0).await.unwrap();
         storage.inner.close_page(0).await.unwrap();
+
+        storage.inner.partial_close_page(1).await.unwrap();
         storage.inner.close_page(1).await.unwrap();
+
         storage.inner.partial_close_page(2).await.unwrap();
 
-        assert_eq!(storage.find_youngest_page().await.unwrap(), 2);
+        assert_eq!(
+            storage.find_youngest_page().await.unwrap(),
+            (2, PageState::PartialOpen)
+        );
         assert_eq!(storage.find_oldest_page().await.unwrap(), 0);
     }
 

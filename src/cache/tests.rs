@@ -22,9 +22,9 @@ mod queue_tests {
             run_test(Cache::new_uncached()).await,
             FlashStatsResult {
                 erases: 149,
-                reads: 165009,
+                reads: 114520,
                 writes: 6299,
-                bytes_read: 651212,
+                bytes_read: 647214,
                 bytes_written: 53299
             }
         );
@@ -41,7 +41,7 @@ mod queue_tests {
             .await,
             FlashStatsResult {
                 erases: 149,
-                reads: 68111,
+                reads: 68070,
                 writes: 6299,
                 bytes_read: 554314,
                 bytes_written: 53299
@@ -60,7 +60,7 @@ mod queue_tests {
             .await,
             FlashStatsResult {
                 erases: 149,
-                reads: 68037,
+                reads: 68033,
                 writes: 6299,
                 bytes_read: 554240,
                 bytes_written: 53299
@@ -79,9 +79,9 @@ mod queue_tests {
             .await,
             FlashStatsResult {
                 erases: 149,
-                reads: 106931,
+                reads: 56442,
                 writes: 6299,
-                bytes_read: 186588,
+                bytes_read: 182590,
                 bytes_written: 53299
             }
         );
@@ -98,7 +98,7 @@ mod queue_tests {
             .await,
             FlashStatsResult {
                 erases: 149,
-                reads: 9959,
+                reads: 9955,
                 writes: 6299,
                 bytes_read: 89616,
                 bytes_written: 53299
@@ -170,7 +170,7 @@ mod map_tests {
             run_test(Cache::new_uncached()).await,
             FlashStatsResult {
                 erases: 198,
-                reads: 233786,
+                reads: 207470,
                 writes: 5201,
                 bytes_read: 1837101,
                 bytes_written: 50401
@@ -189,7 +189,7 @@ mod map_tests {
             .await,
             FlashStatsResult {
                 erases: 198,
-                reads: 181262,
+                reads: 181208,
                 writes: 5201,
                 bytes_read: 1784577,
                 bytes_written: 50401
@@ -208,7 +208,7 @@ mod map_tests {
             .await,
             FlashStatsResult {
                 erases: 198,
-                reads: 181162,
+                reads: 181158,
                 writes: 5201,
                 bytes_read: 1784477,
                 bytes_written: 50401
@@ -227,7 +227,7 @@ mod map_tests {
             .await,
             FlashStatsResult {
                 erases: 198,
-                reads: 215897,
+                reads: 189581,
                 writes: 5201,
                 bytes_read: 1693989,
                 bytes_written: 50401
@@ -246,7 +246,7 @@ mod map_tests {
             .await,
             FlashStatsResult {
                 erases: 198,
-                reads: 191876,
+                reads: 170630,
                 writes: 5201,
                 bytes_read: 1484871,
                 bytes_written: 50401
@@ -265,7 +265,7 @@ mod map_tests {
             .await,
             FlashStatsResult {
                 erases: 198,
-                reads: 52403,
+                reads: 42397,
                 writes: 5201,
                 bytes_read: 313708,
                 bytes_written: 50401
@@ -284,7 +284,7 @@ mod map_tests {
             .await,
             FlashStatsResult {
                 erases: 198,
-                reads: 14510,
+                reads: 14506,
                 writes: 5201,
                 bytes_read: 150592,
                 bytes_written: 50401
