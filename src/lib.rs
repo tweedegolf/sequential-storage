@@ -109,6 +109,37 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
         Ok(None)
     }
 
+    /// Find the open page we should be writing to
+    async fn find_active_page(&mut self) -> Result<Option<usize>, Error<S::Error>> {
+        match self.find_first_page(0, PageState::Closed).await? {
+            Some(first_closed_page_index) => {
+                self.find_first_page(first_closed_page_index, PageState::Open)
+                    .await
+            }
+            None => {
+                let mut first_open_page = None;
+                // We don't have a closed page, so don't know which of the possibly many open pages is the active one
+                // But there should only be one.
+                // So we scan through the pages. If it's open and has an item, then that's the active one.
+                // If no open pages have data, then we return the first open page
+                for page in self.get_pages(0) {
+                    let state = self.get_page_state(page).await?;
+                    if state.is_open() {
+                        if self.page_contains_any_data(page).await? {
+                            return Ok(Some(page));
+                        }
+
+                        if first_open_page.is_none() {
+                            first_open_page = Some(page)
+                        }
+                    }
+                }
+
+                Ok(first_open_page)
+            }
+        }
+    }
+
     /// Find the last page that is in the given page state.
     ///
     /// The search starts at `starting_page_index` (and wraps around back to 0 if required).
@@ -216,7 +247,7 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
 
         let discovered_state = match (start_marked, end_marked) {
             (true, true) => PageState::Closed,
-            (true, false) => PageState::PartialOpen,
+            (true, false) => PageState::Open,
             // Probably an interrupted erase
             (false, true) => {
                 return Err(Error::Corrupted {
@@ -224,7 +255,7 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
                     backtrace: std::backtrace::Backtrace::capture(),
                 });
             }
-            (false, false) => PageState::Open,
+            (false, false) => PageState::Undefined,
         };
 
         Ok(discovered_state)
@@ -239,8 +270,20 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
         let page_end_address =
             calculate_page_end_address::<S>(self.flash_range.clone(), page_index);
 
+        // Erase the page
         self.flash
             .erase(page_address, page_end_address)
+            .await
+            .map_err(|e| Error::Storage {
+                value: e,
+                #[cfg(feature = "_test")]
+                backtrace: std::backtrace::Backtrace::capture(),
+            })?;
+
+        // Mark the page as open
+        let buffer = AlignedBuf([MARKER; MAX_WORD_SIZE]);
+        self.flash
+            .write(page_address, &buffer[..S::WORD_SIZE])
             .await
             .map_err(|e| Error::Storage {
                 value: e,
@@ -254,7 +297,7 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
     /// Fully closes a page by writing both the start and end marker
     async fn close_page(&mut self, page_index: usize) -> Result<(), Error<S::Error>> {
         #[cfg(debug_assertions)]
-        if self.get_page_state_cached(page_index).await? != PageState::PartialOpen {
+        if self.get_page_state_cached(page_index).await? != PageState::Open {
             panic!("Not open");
         }
 
@@ -267,31 +310,6 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
         // Close the end marker
         self.flash
             .write(second_word_address, &buffer[..S::WORD_SIZE])
-            .await
-            .map_err(|e| Error::Storage {
-                value: e,
-                #[cfg(feature = "_test")]
-                backtrace: std::backtrace::Backtrace::capture(),
-            })?;
-
-        Ok(())
-    }
-
-    /// Partially close a page by writing the start marker
-    async fn partial_close_page(&mut self, page_index: usize) -> Result<(), Error<S::Error>> {
-        #[cfg(debug_assertions)]
-        if self.get_page_state_cached(page_index).await? != PageState::Open {
-            panic!("Not open");
-        }
-
-        self.cache
-            .notice_page_state(page_index, PageState::PartialOpen, true);
-
-        let buffer = AlignedBuf([MARKER; MAX_WORD_SIZE]);
-        let page_start_address = calculate_page_address::<S>(self.flash_range.clone(), page_index);
-        // Close the start marker
-        self.flash
-            .write(page_start_address, &buffer[..S::WORD_SIZE])
             .await
             .map_err(|e| Error::Storage {
                 value: e,
@@ -436,10 +454,11 @@ const MARKER: u8 = 0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub(crate) enum PageState {
+    /// This page kinda looks erased, but we can't be certain.
+    /// Must first be opened before anything is done with this page.
+    Undefined,
     /// This page was fully written and has now been sealed
     Closed,
-    /// This page has been written to, but may have some space left over
-    PartialOpen,
     /// This page is fully erased
     Open,
 }
@@ -454,20 +473,20 @@ impl PageState {
         matches!(self, Self::Closed)
     }
 
-    /// Returns `true` if the page state is [`PartialOpen`].
-    ///
-    /// [`PartialOpen`]: PageState::PartialOpen
-    #[must_use]
-    fn is_partial_open(self) -> bool {
-        matches!(self, Self::PartialOpen)
-    }
-
     /// Returns `true` if the page state is [`Open`].
     ///
     /// [`Open`]: PageState::Open
     #[must_use]
     fn is_open(self) -> bool {
         matches!(self, Self::Open)
+    }
+
+    /// Returns `true` if the page state is [`Undefined`].
+    ///
+    /// [`Undefined`]: PageState::Undefined
+    #[must_use]
+    fn is_undefined(self) -> bool {
+        matches!(self, Self::Undefined)
     }
 }
 
@@ -650,8 +669,8 @@ mod tests {
         // Page setup:
         // 0: closed
         // 1: closed
-        // 2: partial-open
-        // 3: open
+        // 2: open
+        // 3: undefined
 
         let mut flash = MockFlash::default();
 
@@ -683,40 +702,24 @@ mod tests {
 
         assert_eq!(
             storage.find_first_page(0, PageState::Open).await.unwrap(),
-            Some(3)
-        );
-        assert_eq!(
-            storage
-                .find_first_page(0, PageState::PartialOpen)
-                .await
-                .unwrap(),
             Some(2)
         );
         assert_eq!(
-            storage
-                .find_first_page(1, PageState::PartialOpen)
-                .await
-                .unwrap(),
+            storage.find_first_page(1, PageState::Open).await.unwrap(),
             Some(2)
         );
         assert_eq!(
-            storage
-                .find_first_page(2, PageState::PartialOpen)
-                .await
-                .unwrap(),
+            storage.find_first_page(2, PageState::Open).await.unwrap(),
             Some(2)
         );
         assert_eq!(
             storage.find_first_page(3, PageState::Open).await.unwrap(),
-            Some(3)
+            Some(2)
         );
 
         storage.flash_range = 0x000..0x200;
         assert_eq!(
-            storage
-                .find_first_page(0, PageState::PartialOpen)
-                .await
-                .unwrap(),
+            storage.find_first_page(0, PageState::Open).await.unwrap(),
             None
         );
         storage.flash_range = 0x000..0x400;
