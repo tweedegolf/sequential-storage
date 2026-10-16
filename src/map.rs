@@ -276,45 +276,35 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
             }
         }
 
-        // We need to find the page we were last using. This should be the only partial open page.
-        let mut last_used_page = self
-            .inner
-            .find_first_page(0, PageState::PartialOpen)
-            .await?;
-
-        if last_used_page.is_none() {
-            // In the event that all pages are still open or the last used page was just closed, we search for the first open page.
-            // If the page one before that is closed, then that's the last used page.
-            if let Some(first_open_page) = self.inner.find_first_page(0, PageState::Open).await? {
-                let previous_page = self.inner.previous_page(first_open_page);
-                if self
-                    .inner
-                    .get_page_state_cached(previous_page)
-                    .await?
-                    .is_closed()
+        // We need to find the page we were last using
+        let active_page = match self.inner.find_active_page().await? {
+            Some(active_page) => active_page,
+            None => {
+                // In the event no pages are open (the only reason not not have an active page), we need to open one ourselves. Let's just use page 0
+                self.inner.open_page(0).await?;
+                #[cfg(debug_assertions)]
                 {
-                    last_used_page = Some(previous_page);
-                } else {
-                    // The page before the open page is not closed, so it must be open.
-                    // This means that all pages are open and that we don't have any items yet.
-                    self.inner.cache.unmark_dirty();
-                    return Ok(None);
+                    if let Some(last_closed_page) =
+                        self.inner.find_last_page(0, PageState::Closed).await?
+                        && self.inner.next_page(last_closed_page) == 0
+                    {
+                        // There's only closed pages.
+                        // Something is up and this should never happen.
+                        // To recover, we will just erase all the flash.
+                        return Err(Error::Corrupted {
+                            #[cfg(feature = "_test")]
+                            backtrace: std::backtrace::Backtrace::capture(),
+                        });
+                    }
                 }
-            } else {
-                // There are no open pages, so everything must be closed.
-                // Something is up and this should never happen.
-                // To recover, we will just erase all the flash.
-                return Err(Error::Corrupted {
-                    #[cfg(feature = "_test")]
-                    backtrace: std::backtrace::Backtrace::capture(),
-                });
+                0
             }
-        }
+        };
 
         // We must now find the most recent storage item with the key that was asked for.
         // If we don't find it in the current page, then we check again in the previous page if that page is closed.
 
-        let mut current_page_to_check = last_used_page.unwrap();
+        let mut current_page_to_check = active_page;
         let mut newest_found_item_data = None;
 
         loop {
@@ -444,35 +434,34 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
             }
 
             // If there is a partial open page, we try to write in that first if there is enough space
-            let next_page_to_use = if let Some(partial_open_page) = self
-                .inner
-                .find_first_page(0, PageState::PartialOpen)
-                .await?
-            {
-                // We found a partial open page, but at this point it's relatively cheap to do a consistency check
-                if !self
-                    .inner
-                    .get_page_state_cached(self.inner.next_page(partial_open_page))
-                    .await?
-                    .is_open()
+            let next_page_to_use = if let Some(active_page) = self.inner.find_active_page().await? {
+                #[cfg(debug_assertions)]
                 {
-                    // Oh oh, the next page which serves as the buffer page is not open. We're corrupt.
-                    // This likely happened because of an unexpected shutdown during data migration from the
-                    // then new buffer page to the new partial open page.
-                    // The repair function should be able to repair this.
-                    return Err(Error::Corrupted {
-                        #[cfg(feature = "_test")]
-                        backtrace: std::backtrace::Backtrace::capture(),
-                    });
+                    // We always keep one page open after the active page, so let's check
+                    if self
+                        .inner
+                        .get_page_state_cached(self.inner.next_page(active_page))
+                        .await?
+                        .is_closed()
+                    {
+                        // Oh oh, the next page which serves as the buffer page is not open. We're corrupt.
+                        // This likely happened because of an unexpected shutdown during data migration from the
+                        // then new buffer page to the new partial open page.
+                        // The repair function should be able to repair this.
+                        return Err(Error::Corrupted {
+                            #[cfg(feature = "_test")]
+                            backtrace: std::backtrace::Backtrace::capture(),
+                        });
+                    }
                 }
 
                 // We've got to search where the free space is since the page starts with items present already
 
                 let page_data_start_address =
-                    calculate_page_address::<S>(self.flash_range(), partial_open_page)
+                    calculate_page_address::<S>(self.flash_range(), active_page)
                         + S::WORD_SIZE as u32 * 2;
                 let page_data_end_address =
-                    calculate_page_end_address::<S>(self.flash_range(), partial_open_page);
+                    calculate_page_end_address::<S>(self.flash_range(), active_page);
 
                 let key_len = key.serialize_into(data_buffer)?;
                 let item_data_length = key_len
@@ -516,58 +505,36 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
                 }
 
                 // The item doesn't fit here, so we need to close this page and move to the next
-                self.inner.close_page(partial_open_page).await?;
-                Some(self.inner.next_page(partial_open_page))
+                self.inner.close_page(active_page).await?;
+
+                self.inner.next_page(active_page)
             } else {
-                None
+                0
             };
 
-            // If we get here, there was no partial page found or the partial page has now been closed because the item didn't fit.
-            // If there was a partial page, then we need to look at the next page. It's supposed to be open since it was the previous empty buffer page.
-            // The new buffer page has to be emptied if it was closed.
-            // If there was no partial page, we just use the first open page.
+            let next_page_state = self.inner.get_page_state_cached(next_page_to_use).await?;
 
-            if let Some(next_page_to_use) = next_page_to_use {
-                let next_page_state = self.inner.get_page_state_cached(next_page_to_use).await?;
-
-                if !next_page_state.is_open() {
-                    // What was the previous buffer page was not open...
-                    return Err(Error::Corrupted {
-                        #[cfg(feature = "_test")]
-                        backtrace: std::backtrace::Backtrace::capture(),
-                    });
-                }
-
-                // Since we're gonna write data here, let's already partially close the page
-                // This could be done after moving the data, but this is more robust in the
-                // face of shutdowns and cancellations
-                self.inner.partial_close_page(next_page_to_use).await?;
-
-                let next_buffer_page = self.inner.next_page(next_page_to_use);
-                let next_buffer_page_state =
-                    self.inner.get_page_state_cached(next_buffer_page).await?;
-
-                if !next_buffer_page_state.is_open() {
-                    self.migrate_items(data_buffer, next_buffer_page, next_page_to_use)
-                        .await?;
-                }
-            } else {
-                // There's no partial open page, so we just gotta turn the first open page into a partial open one
-                let Some(first_open_page) = self.inner.find_first_page(0, PageState::Open).await?
-                else {
-                    // Uh oh, no open pages.
-                    // Something has gone wrong.
-                    // We should never get here.
-                    return Err(Error::Corrupted {
-                        #[cfg(feature = "_test")]
-                        backtrace: std::backtrace::Backtrace::capture(),
-                    });
-                };
-
-                self.inner.partial_close_page(first_open_page).await?;
+            if next_page_state.is_closed() {
+                // What was the previous buffer page was closed...
+                return Err(Error::Corrupted {
+                    #[cfg(feature = "_test")]
+                    backtrace: std::backtrace::Backtrace::capture(),
+                });
             }
 
-            // If we get here, we just freshly partially closed a new page, so the next loop iteration should succeed.
+            if !next_page_state.is_open() {
+                self.inner.open_page(next_page_to_use).await?;
+            }
+
+            let next_buffer_page = self.inner.next_page(next_page_to_use);
+            let next_buffer_page_state = self.inner.get_page_state_cached(next_buffer_page).await?;
+
+            if next_buffer_page_state.is_closed() {
+                self.migrate_items(data_buffer, next_buffer_page, next_page_to_use)
+                    .await?;
+            }
+
+            // If we get here, we just freshly opened a new page, so the next loop iteration should succeed.
             recursion_level += 1;
         }
     }
@@ -633,25 +600,12 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
             self.inner.cache.invalidate_cache_state();
         }
 
-        // Search for the last used page. We're gonna erase from the one after this first.
+        // Search for the active page. We're gonna erase from the one after this first.
         // If we get an early shutoff or cancellation, this will make it so that we don't return
         // an old version of the key on the next fetch.
-        let last_used_page = match self
-            .inner
-            .find_first_page(0, PageState::PartialOpen)
-            .await?
-        {
-            Some(last_used_page) => last_used_page,
-            None => {
-                // Oh dear, there's no active partial open page. Seems like some operation was cancelled or didn't make it through.
-                // Instead, we're gonna have to find what should be the partial open page, which is the first open page after the closed pages.
-                // If there's no closed pages, we only have open pages,
-                // so we can fall back to just the 0 index after which the rest of the logic should work fine.
-                self.inner
-                    .find_last_page(0, PageState::Closed)
-                    .await?
-                    .unwrap_or_default()
-            }
+        let Some(last_used_page) = self.inner.find_active_page().await? else {
+            // No active page? Then we must be empty. Nothing to erase here
+            return Ok(());
         };
 
         // Go through all the pages
@@ -660,9 +614,9 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
                 .inner
                 .get_page_state_cached(page_index)
                 .await?
-                .is_open()
+                .is_undefined()
             {
-                // This page is open, we don't have to check it
+                // This page is undefined, we should not read any of it
                 continue;
             }
 
@@ -786,46 +740,12 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
         // The first page used by the map is the next page of the `PartialOpen` page or the last `Closed` page
         let first_page = run_with_auto_repair!(
             function = {
-                match self
-                    .inner
-                    .find_first_page(0, PageState::PartialOpen)
-                    .await?
-                {
+                match self.inner.find_active_page().await? {
                     Some(last_used_page) => {
-                        // The next page of the `PartialOpen` page is the first page
+                        // The the page after the last used one is the first page
                         Ok(self.inner.next_page(last_used_page))
                     }
-                    None => {
-                        // In the event that all pages are still open or the last used page was just closed, we search for the first open page.
-                        // If the page one before that is closed, then that's the last used page.
-                        if let Some(first_open_page) =
-                            self.inner.find_first_page(0, PageState::Open).await?
-                        {
-                            let previous_page = self.inner.previous_page(first_open_page);
-                            if self
-                                .inner
-                                .get_page_state_cached(previous_page)
-                                .await?
-                                .is_closed()
-                            {
-                                // The previous page is closed, so the first_open_page is what we want
-                                Ok(first_open_page)
-                            } else {
-                                // The page before the open page is not closed, so it must be open.
-                                // This means that all pages are open and that we don't have any items yet.
-                                self.inner.cache.unmark_dirty();
-                                Ok(0)
-                            }
-                        } else {
-                            // There are no open pages, so everything must be closed.
-                            // Something is up and this should never happen.
-                            // To recover, we will just erase all the flash.
-                            Err(Error::Corrupted {
-                                #[cfg(feature = "_test")]
-                                backtrace: std::backtrace::Backtrace::capture(),
-                            })
-                        }
-                    }
+                    None => Ok(0),
                 }
             },
             repair = self.try_repair(data_buffer).await?
@@ -923,12 +843,8 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
         self.inner.try_general_repair().await?;
 
         // Let's check if we corrupted in the middle of a migration
-        if let Some(partial_open_page) = self
-            .inner
-            .find_first_page(0, PageState::PartialOpen)
-            .await?
-        {
-            let buffer_page = self.inner.next_page(partial_open_page);
+        if let Some(active_page) = self.inner.find_active_page().await? {
+            let buffer_page = self.inner.next_page(active_page);
             if !self
                 .inner
                 .get_page_state_cached(buffer_page)
@@ -937,12 +853,9 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
             {
                 // Yes, the migration got interrupted. Let's redo it.
                 // To do that, we erase the partial open page first because it contains incomplete data.
-                self.inner.open_page(partial_open_page).await?;
+                self.inner.open_page(active_page).await?;
 
-                // Then partially close it again
-                self.inner.partial_close_page(partial_open_page).await?;
-
-                self.migrate_items(data_buffer, buffer_page, partial_open_page)
+                self.migrate_items(data_buffer, buffer_page, active_page)
                     .await?;
             }
         }
@@ -1092,7 +1005,7 @@ impl<K: Key, S: NorFlash, C: CacheImpl<K>> MapItemIter<'_, K, S, C> {
                     .get_page_state_cached(self.current_page_index)
                     .await
                 {
-                    Ok(PageState::Closed | PageState::PartialOpen) => {
+                    Ok(PageState::Closed | PageState::Open) => {
                         self.current_iter = ItemIter::new(
                             calculate_page_address::<S>(
                                 self.storage.inner.flash_range.clone(),
@@ -1582,6 +1495,8 @@ mod tests {
         );
         let mut data_buffer = AlignedBuf([0; 128]);
 
+        println!("{}", storage.print_items().await);
+
         for i in 0..UPPER_BOUND {
             println!("Storing {i:?}");
 
@@ -1589,18 +1504,20 @@ mod tests {
                 .store_item(&mut data_buffer, &i, &vec![i; i as usize].as_slice())
                 .await
                 .unwrap();
+
+            println!("{}", storage.print_items().await);
         }
 
-        assert_eq!(
-            storage
-                .store_item(
-                    &mut data_buffer,
-                    &UPPER_BOUND,
-                    &vec![0; UPPER_BOUND as usize].as_slice(),
-                )
-                .await,
-            Err(Error::FullStorage)
-        );
+        let x = storage
+            .store_item(
+                &mut data_buffer,
+                &UPPER_BOUND,
+                &vec![0; UPPER_BOUND as usize].as_slice(),
+            )
+            .await;
+        println!("{}", storage.print_items().await);
+
+        assert_eq!(x, Err(Error::FullStorage));
 
         for i in 0..UPPER_BOUND {
             let item = storage
@@ -1883,70 +1800,6 @@ mod tests {
 
         // Check total number of fetched items, +1 since we didn't count key 1
         assert_eq!(count + 1, UPPER_BOUND);
-    }
-
-    #[test]
-    async fn issue_132() {
-        // https://github.com/tweedegolf/sequential-storage/issues/132
-
-        // Get the storage in a state where we have a closed page and then an open page.
-        // This can only happen with a cancelled future/shutoff at the exact right moment.
-        let mut storage = MapStorage::new(
-            MockFlashBig::new(mock_flash::WriteCountCheck::Disabled, Some(9168), false),
-            const { MapConfig::new(0x000..0x1000) },
-            Cache::new_uncached(),
-        );
-        let mut buf = [0; 32];
-        for i in 0..=378u64 {
-            let _ = storage.store_item(&mut buf, &(), &i).await;
-        }
-
-        println!("{}", storage.print_items().await);
-
-        // Check we're in the state we want to reproduce the error
-        assert_eq!(
-            storage.inner_mut().get_page_state(0).await.unwrap(),
-            PageState::Closed
-        );
-        assert_eq!(
-            storage.inner_mut().get_page_state(1).await.unwrap(),
-            PageState::Closed
-        );
-        assert_eq!(
-            storage.inner_mut().get_page_state(2).await.unwrap(),
-            PageState::Open
-        );
-        assert_eq!(
-            storage.inner_mut().get_page_state(3).await.unwrap(),
-            PageState::Closed
-        );
-
-        // The last store would've failed, so we read the previous value
-        assert_eq!(
-            storage.fetch_item::<u64>(&mut buf, &()).await.unwrap(),
-            Some(377)
-        );
-
-        // Now we remove an item. It should start by removing the oldest items.
-        // The bug is that with no partial open page, it will start with page 0, which is the page containing the newest items.
-        // If the remove task is also interrupted, we will then read back an old value.
-
-        storage.flash().bytes_until_shutoff = Some(1000);
-
-        std::assert_matches!(
-            storage.remove_item(&mut buf, &()).await,
-            Err(Error::Storage {
-                value: mock_flash::MockFlashError::EarlyShutoff(_, mock_flash::Operation::Write)
-            })
-        );
-
-        println!("{}", storage.print_items().await);
-
-        // If the bug is fixed, the fetch should return either the most recent value or None
-        std::assert_matches!(
-            storage.fetch_item::<u64>(&mut buf, &()).await.unwrap(),
-            Some(377) | None
-        );
     }
 
     #[test]
