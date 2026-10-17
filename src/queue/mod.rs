@@ -1376,7 +1376,7 @@ mod tests {
         );
 
         for _ in 0..100 {
-            match storage.push(&[0, 1, 2, 3, 4], true).await {
+            match storage.push(&AlignedBuf([0, 1, 2, 3, 4]), true).await {
                 Ok(_) => {}
                 Err(e) => {
                     println!("{}", storage.print_items().await);
