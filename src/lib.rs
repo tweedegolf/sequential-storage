@@ -505,6 +505,8 @@ impl PageState {
 #[non_exhaustive]
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+// _test adds backtraces which are not Clone
+#[cfg_attr(not(feature = "_test"), derive(Clone))]
 pub enum Error<S> {
     /// An error in the storage (flash)
     Storage {
