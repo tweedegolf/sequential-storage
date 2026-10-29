@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- `sequential_storage::Error` now implements `Clone`
+
 ## 8.0.2 - 01-10-26
 
 - Fixed a bug for single page queues where they would return 'full storage' when it's really exhausted but empty and could be erased again
