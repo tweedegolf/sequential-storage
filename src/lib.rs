@@ -11,6 +11,7 @@ use core::{
 };
 use embedded_storage_async::nor_flash::NorFlash;
 use map::SerializationError;
+use unified_storage::Storage;
 
 #[cfg(feature = "alloc")]
 mod alloc_impl;
@@ -620,6 +621,60 @@ impl<const SIZE: usize> Deref for AlignedBuf<SIZE> {
 impl<const SIZE: usize> DerefMut for AlignedBuf<SIZE> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
+    }
+}
+
+trait StorageExt {
+    fn word_size(&self) -> u32;
+
+    /// Round up the the given number to align with the wordsize of the storage.
+    /// If the number is already aligned, it is not changed.
+    fn round_up_to_alignment(&self, value: u32) -> u32;
+
+    /// Round up the the given number to align with the wordsize of the storage.
+    /// If the number is already aligned, it is not changed.
+    fn round_up_to_alignment_usize(&self, value: usize) -> usize;
+
+    /// Round down the the given number to align with the wordsize of the flash.
+    /// If the number is already aligned, it is not changed.
+    fn round_down_to_alignment(&self, value: u32) -> u32;
+
+    /// Round down the the given number to align with the wordsize of the flash.
+    /// If the number is already aligned, it is not changed.
+    fn round_down_to_alignment_usize(&self, value: usize) -> usize;
+
+    /// Calculate the first address of the given page
+    fn calculate_page_address(&self, flash_range: Range<u32>, page_index: u32) -> u32;
+}
+
+impl<S: Storage> StorageExt for S {
+    fn word_size(&self) -> u32 {
+        assert!(self.uniform_layout());
+        let layout = self.layout(0).expect("no layout at address 0");
+        layout.min_write_size()
+    }
+
+    fn round_up_to_alignment(&self, value: u32) -> u32 {
+        value.next_multiple_of(self.word_size())
+    }
+
+    fn round_up_to_alignment_usize(&self, value: usize) -> usize {
+        value.next_multiple_of(self.word_size() as usize)
+    }
+
+    fn round_down_to_alignment(&self, value: u32) -> u32 {
+        let alignment = self.word_size() as u32;
+        (value / alignment) * alignment
+    }
+
+    fn round_down_to_alignment_usize(&self, value: usize) -> usize {
+        self.round_down_to_alignment(value as u32) as usize
+    }
+
+    /// Calculate the first address of the given page
+    fn calculate_page_address(&self, flash_range: Range<u32>, page_index: u32) -> u32 {
+        let erase_size = self.layout(0).expect("no layout at address 0").erase_size();
+        flash_range.start + (erase_size * page_index)
     }
 }
 

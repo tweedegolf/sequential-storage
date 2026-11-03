@@ -576,6 +576,7 @@ version = "8.0.2"
 dependencies = [
  "defmt",
  "embedded-storage-async",
+ "unified-storage",
 ]
 
 [[package]]
@@ -632,6 +633,14 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "unified-storage"
+version = "0.1.0"
+source = "git+https://github.com/diondokter/unified-storage/#f1f65ee8c12d13109a6ae45240e839c735c550bb"
+dependencies = [
+ "embedded-storage-async",
+]
 
 [[package]]
 name = "vcell"
