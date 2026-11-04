@@ -1450,10 +1450,10 @@ pub enum SerializationError {
 impl core::fmt::Display for SerializationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            SerializationError::BufferTooSmall => write!(f, "Buffer too small"),
-            SerializationError::InvalidData => write!(f, "Invalid data"),
-            SerializationError::InvalidFormat => write!(f, "Invalid format"),
-            SerializationError::Custom(val) => write!(f, "Custom error: {val}"),
+            SerializationError::BufferTooSmall => write!(f, "buffer too small"),
+            SerializationError::InvalidData => write!(f, "invalid data"),
+            SerializationError::InvalidFormat => write!(f, "invalid format"),
+            SerializationError::Custom(val) => write!(f, "custom error: {val}"),
         }
     }
 }
