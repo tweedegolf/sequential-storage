@@ -15,8 +15,7 @@ use self::item::{ItemHeaderIter, ItemUnborrowed};
 
 use super::{
     Debug, Error, GenericStorage, MAX_WORD_SIZE, NorFlash, NorFlashExt, PageState, Range,
-    calculate_page_address, calculate_page_end_address, calculate_page_index, calculate_page_size,
-    item, run_with_auto_repair,
+    calculate_page_index, calculate_page_size, item, run_with_auto_repair,
 };
 
 /// Configuration for a map
@@ -224,9 +223,7 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
         'cache: {
             if let Some(cached_location) = self.inner.cache.key_location(search_key) {
                 let page_index = calculate_page_index::<S>(self.flash_range(), cached_location);
-                let page_data_end_address =
-                    calculate_page_end_address::<S>(self.flash_range(), page_index)
-                        - S::WORD_SIZE as u32;
+                let page_data_end_address = self.inner.page_data_end_address(page_index);
 
                 let Some(header) = ItemHeader::read_new(
                     &mut self.inner.flash,
@@ -319,12 +316,8 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
         let mut newest_found_item_data = None;
 
         loop {
-            let page_data_start_address =
-                calculate_page_address::<S>(self.flash_range(), current_page_to_check)
-                    + S::WORD_SIZE as u32;
-            let page_data_end_address =
-                calculate_page_end_address::<S>(self.flash_range(), current_page_to_check)
-                    - S::WORD_SIZE as u32;
+            let page_data_start_address = self.inner.page_data_start_address(current_page_to_check);
+            let page_data_end_address = self.inner.page_data_end_address(current_page_to_check);
 
             let mut it = ItemIter::new(page_data_start_address, page_data_end_address);
             while let Some((item, address)) = it.next(&mut self.inner.flash, data_buffer).await? {
@@ -470,12 +463,8 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
 
                 // We've got to search where the free space is since the page starts with items present already
 
-                let page_data_start_address =
-                    calculate_page_address::<S>(self.flash_range(), partial_open_page)
-                        + S::WORD_SIZE as u32;
-                let page_data_end_address =
-                    calculate_page_end_address::<S>(self.flash_range(), partial_open_page)
-                        - S::WORD_SIZE as u32;
+                let page_data_start_address = self.inner.page_data_start_address(partial_open_page);
+                let page_data_end_address = self.inner.page_data_end_address(partial_open_page);
 
                 let key_len = key.serialize_into(data_buffer)?;
                 let item_data_length = key_len
@@ -669,11 +658,8 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
                 continue;
             }
 
-            let page_data_start_address =
-                calculate_page_address::<S>(self.flash_range(), page_index) + S::WORD_SIZE as u32;
-            let page_data_end_address =
-                calculate_page_end_address::<S>(self.flash_range(), page_index)
-                    - S::WORD_SIZE as u32;
+            let page_data_start_address = self.inner.page_data_start_address(page_index);
+            let page_data_end_address = self.inner.page_data_end_address(page_index);
 
             // Go through all items on the page
             let mut item_headers =
@@ -834,10 +820,8 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
             repair = self.try_repair(data_buffer).await?
         )?;
 
-        let start_address =
-            calculate_page_address::<S>(self.flash_range(), first_page) + S::WORD_SIZE as u32;
-        let end_address =
-            calculate_page_end_address::<S>(self.flash_range(), first_page) - S::WORD_SIZE as u32;
+        let start_address = self.inner.page_data_start_address(first_page);
+        let end_address = self.inner.page_data_end_address(first_page);
 
         Ok(MapItemIter {
             storage: self,
@@ -857,12 +841,11 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
         // We need to move the data from the next buffer page to the next_page_to_use, but only if that data
         // doesn't have a newer value somewhere else.
 
-        let mut next_page_write_address =
-            calculate_page_address::<S>(self.flash_range(), target_page) + S::WORD_SIZE as u32;
+        let mut next_page_write_address = self.inner.page_data_start_address(target_page);
 
         let mut it = ItemIter::new(
-            calculate_page_address::<S>(self.flash_range(), source_page) + S::WORD_SIZE as u32,
-            calculate_page_end_address::<S>(self.flash_range(), source_page) - S::WORD_SIZE as u32,
+            self.inner.page_data_start_address(source_page),
+            self.inner.page_data_end_address(source_page),
         );
         while let Some((item, item_address)) = it.next(&mut self.inner.flash, data_buffer).await? {
             let (key, _) = K::deserialize_from(item.data())?;
@@ -1098,14 +1081,12 @@ impl<K: Key, S: NorFlash, C: CacheImpl<K>> MapItemIter<'_, K, S, C> {
                 {
                     Ok(PageState::Closed | PageState::PartialOpen) => {
                         self.current_iter = ItemIter::new(
-                            calculate_page_address::<S>(
-                                self.storage.inner.flash_range.clone(),
-                                self.current_page_index,
-                            ) + S::WORD_SIZE as u32,
-                            calculate_page_end_address::<S>(
-                                self.storage.inner.flash_range.clone(),
-                                self.current_page_index,
-                            ) - S::WORD_SIZE as u32,
+                            self.storage
+                                .inner
+                                .page_data_start_address(self.current_page_index),
+                            self.storage
+                                .inner
+                                .page_data_end_address(self.current_page_index),
                         );
                         break;
                     }

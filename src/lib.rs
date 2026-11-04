@@ -409,6 +409,14 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
     pub const fn flash_range(&self) -> Range<u32> {
         self.flash_range.start..self.flash_range.end
     }
+
+    pub(crate) fn page_data_start_address(&self, page_index: usize) -> u32 {
+        calculate_page_address::<S>(self.flash_range.clone(), page_index) + S::WORD_SIZE as u32
+    }
+
+    pub(crate) fn page_data_end_address(&self, page_index: usize) -> u32 {
+        calculate_page_end_address::<S>(self.flash_range.clone(), page_index) - S::WORD_SIZE as u32
+    }
 }
 
 /// Round up the the given number to align with the wordsize of the flash.
