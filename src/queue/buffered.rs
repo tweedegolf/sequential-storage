@@ -302,10 +302,7 @@ impl<S: NorFlash, C: CacheImpl<()>, const RAM_BYTES: usize> BufferedQueue<S, C, 
     pub async fn peek<'d>(
         &mut self,
         data_buffer: &'d mut [u8],
-    ) -> Result<Option<&'d mut [u8]>, Error<S::Error>>
-    where
-        S: MultiwriteNorFlash,
-    {
+    ) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
         // Reborrow so we can reuse data_buffer if flash returns None.
         let flash_len = self.storage.peek(&mut *data_buffer).await?.map(|s| s.len());
         if let Some(len) = flash_len {
