@@ -350,12 +350,12 @@ impl<S: NorFlash, C: CacheImpl<()>> QueueStorage<S, C> {
             state @ PageState::Closed => {
                 if self.inner.is_page_empty(next_page, Some(state)).await? {
                     self.inner.cache.unmark_dirty();
-                    return Ok(Some((S::ERASE_SIZE - (2 * S::WORD_SIZE)) as u32));
+                    return Ok(Some((calculate_page_size::<S>()) as u32));
                 }
             }
             PageState::Open => {
                 self.inner.cache.unmark_dirty();
-                return Ok(Some((S::ERASE_SIZE - (2 * S::WORD_SIZE)) as u32));
+                return Ok(Some((calculate_page_size::<S>()) as u32));
             }
             PageState::PartialOpen => {
                 // This should never happen
