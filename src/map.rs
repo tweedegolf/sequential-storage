@@ -316,10 +316,7 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
         let mut newest_found_item_data = None;
 
         loop {
-            let page_data_start_address = self.inner.page_data_start_address(current_page_to_check);
-            let page_data_end_address = self.inner.page_data_end_address(current_page_to_check);
-
-            let mut it = ItemIter::new(page_data_start_address, page_data_end_address);
+            let mut it = self.inner.iter_page_items(current_page_to_check);
             while let Some((item, address)) = it.next(&mut self.inner.flash, data_buffer).await? {
                 let (found_key, found_key_len) = K::deserialize_from(item.data())?;
                 if found_key == *search_key {
@@ -820,14 +817,13 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
             repair = self.try_repair(data_buffer).await?
         )?;
 
-        let start_address = self.inner.page_data_start_address(first_page);
-        let end_address = self.inner.page_data_end_address(first_page);
+        let current_iter = self.inner.iter_page_items(first_page);
 
         Ok(MapItemIter {
             storage: self,
             first_page,
             current_page_index: first_page,
-            current_iter: ItemIter::new(start_address, end_address),
+            current_iter,
             _key: PhantomData,
         })
     }
@@ -843,10 +839,7 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
 
         let mut next_page_write_address = self.inner.page_data_start_address(target_page);
 
-        let mut it = ItemIter::new(
-            self.inner.page_data_start_address(source_page),
-            self.inner.page_data_end_address(source_page),
-        );
+        let mut it = self.inner.iter_page_items(source_page);
         while let Some((item, item_address)) = it.next(&mut self.inner.flash, data_buffer).await? {
             let (key, _) = K::deserialize_from(item.data())?;
 
@@ -1080,14 +1073,8 @@ impl<K: Key, S: NorFlash, C: CacheImpl<K>> MapItemIter<'_, K, S, C> {
                     .await
                 {
                     Ok(PageState::Closed | PageState::PartialOpen) => {
-                        self.current_iter = ItemIter::new(
-                            self.storage
-                                .inner
-                                .page_data_start_address(self.current_page_index),
-                            self.storage
-                                .inner
-                                .page_data_end_address(self.current_page_index),
-                        );
+                        self.current_iter =
+                            self.storage.inner.iter_page_items(self.current_page_index);
                         break;
                     }
                     _ => continue,
