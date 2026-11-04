@@ -1,6 +1,6 @@
 # Sequential-storage
 
-[![crates.io](https://img.shields.io/crates/v/sequential-storage.svg)](https://crates.io/crates/sequential-storage) [![Documentation](https://docs.rs/sequential-storage/badge.svg)](https://docs.rs/sequential-storage)
+[![crates.io](https://img.shields.io/crates/v/sequential-storage.svg)](https://crates.io/crates/sequential-storage) [![Documentation](https://docs.rs/sequential-storage/badge.svg)](https://docs.rs/sequential-storage) [![MemBrowse](https://membrowse.com/badge.svg)](https://membrowse.com/public/tweedegolf/sequential-storage)
 
 A crate for storing data in flash with minimal erase cycles.
 

@@ -1,0 +1,45 @@
+name: MemBrowse Memory Report
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install toolchain
+        run: rustup toolchain install nightly --profile minimal --component rust-src,llvm-tools --target thumbv7em-none-eabihf
+
+      - name: Build
+        working-directory: ./example
+        run: cargo +nightly rustc --release -- -C link-arg=-Map=target/thumbv7em-none-eabihf/release/example.map
+
+      - name: Run MemBrowse analysis
+        uses: membrowse/membrowse-action@eaa94ed53b704064706e7187602d5d0b201921b6 # main, includes onboard checkout fix (#193)
+        with:
+          target_name: nrf52840-example
+          elf: example/target/thumbv7em-none-eabihf/release/example
+          ld: example/memory.x
+          map_file: example/target/thumbv7em-none-eabihf/release/example.map
+          api_key: ${{ secrets.MEMBROWSE_API_KEY }}
+          api_url: ${{ vars.MEMBROWSE_API_URL }}
+          verbose: INFO
+          # Uncomment to allow CI to pass even when memory budgets are exceeded
+          # dont_fail_on_alerts: true
