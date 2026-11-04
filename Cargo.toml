@@ -14,7 +14,7 @@ rust-version = "1.87"
 
 [dependencies]
 embedded-storage-async = "0.4.1"
-unified-storage = { git="https://github.com/diondokter/unified-storage/" }
+unified-storage = { git = "https://github.com/bergzand/unified-storage", branch = "wip/sequential-storage-helpers"}
 
 # Optional:
 defmt = { version = "1.0.1", optional = true }

@@ -1,12 +1,13 @@
 //! Implementation of the map logic.
 
 use core::{marker::PhantomData, mem::size_of};
-use embedded_storage_async::nor_flash::MultiwriteNorFlash;
+use unified_storage::Storage;
 
 #[cfg(feature = "postcard")]
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    StorageExt,
     cache::CacheImpl,
     item::{Item, ItemHeader, ItemIter},
 };
@@ -14,52 +15,48 @@ use crate::{
 use self::item::{ItemHeaderIter, ItemUnborrowed};
 
 use super::{
-    Debug, Error, GenericStorage, MAX_WORD_SIZE, NorFlash, NorFlashExt, PageState, Range,
-    calculate_page_index, calculate_page_size, item, run_with_auto_repair,
+    Debug, Error, GenericStorage, MAX_WORD_SIZE, PageState, Range, item, run_with_auto_repair,
 };
 
 /// Configuration for a map
-pub struct MapConfig<S> {
+pub struct MapConfig<S: Storage> {
     flash_range: Range<u32>,
-    _phantom: PhantomData<S>,
+    flash: S,
 }
 
-impl<S: NorFlash> MapConfig<S> {
+impl<S: Storage> MapConfig<S> {
     /// Create a new map configuration. Will panic if the data is invalid.
     /// If you want a fallible version, use [`Self::try_new`].
     #[must_use]
-    pub const fn new(flash_range: Range<u32>) -> Self {
-        match Self::try_new(flash_range) {
+    pub fn new(flash: S, flash_range: Range<u32>) -> Self {
+        match Self::try_new(flash, flash_range) {
             Ok(config) => config,
             Err(_) => panic!("Map config must be correct"),
         }
     }
 
     /// Create a new map configuration. Will return None if the data is invalid
-    pub const fn try_new(flash_range: Range<u32>) -> Result<Self, MapConfigError> {
-        if !flash_range.start.is_multiple_of(S::ERASE_SIZE as u32) {
+    pub fn try_new(flash: S, flash_range: Range<u32>) -> Result<Self, MapConfigError> {
+        if !flash_range.start.is_multiple_of(flash.erase_size()) {
             return Err(MapConfigError::StartRangeNotAtPageBoundary);
         }
-        if !flash_range.end.is_multiple_of(S::ERASE_SIZE as u32) {
+        if !flash_range.end.is_multiple_of(flash.erase_size()) {
             return Err(MapConfigError::EndRangeNotAtPageBoundary);
         }
         // At least 2 pages are used
-        if flash_range.end - flash_range.start < S::ERASE_SIZE as u32 * 2 {
+        if flash_range.end - flash_range.start < flash.erase_size() * 2 {
             return Err(MapConfigError::RangeTooSmall);
         }
 
         // A page must be able to store the 2 page states and at least one item header and a word for item data
-        if S::ERASE_SIZE < S::WORD_SIZE * 3 + ItemHeader::data_address::<S>(0) as usize {
+        if flash.erase_size() < flash.word_size() * 3 + ItemHeader::data_address(&flash, 0) {
             return Err(MapConfigError::PagesTooSmall);
         }
-        if S::WORD_SIZE > MAX_WORD_SIZE {
+        if flash.word_usize() > MAX_WORD_SIZE {
             return Err(MapConfigError::WordSizeTooLarge);
         }
 
-        Ok(Self {
-            flash_range,
-            _phantom: PhantomData,
-        })
+        Ok(Self { flash_range, flash })
     }
 }
 
@@ -152,21 +149,21 @@ pub enum MapConfigError {
 /// ```
 ///
 /// For your convenience there are premade implementations for the [Key] and [Value] traits.
-pub struct MapStorage<K: Key, S: NorFlash, C: CacheImpl<K>> {
+pub struct MapStorage<K: Key, S: Storage, C: CacheImpl<K>> {
     inner: GenericStorage<S, C, K>,
     _phantom: PhantomData<K>,
 }
 
-impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
+impl<S: Storage, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
     /// Create a new map instance
     ///
     /// The provided cache instance must be new or must be in the exact correct state for the current flash contents.
     /// If the cache is bad, undesirable things will happen.
     /// So, it's ok to reuse the cache gotten from the [`Self::destroy`] method when the flash hasn't changed since calling destroy.
-    pub const fn new(storage: S, config: MapConfig<S>, cache: C) -> Self {
+    pub fn new(config: MapConfig<S>, cache: C) -> Self {
         Self {
             inner: GenericStorage {
-                flash: storage,
+                flash: config.flash,
                 flash_range: config.flash_range,
                 cache,
                 _phantom: PhantomData,
@@ -222,7 +219,10 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
 
         'cache: {
             if let Some(cached_location) = self.inner.cache.key_location(search_key) {
-                let page_index = calculate_page_index::<S>(self.flash_range(), cached_location);
+                let page_index = self
+                    .inner
+                    .flash
+                    .calculate_page_index(self.flash_range().clone(), cached_location);
                 let page_data_end_address = self.inner.page_data_end_address(page_index);
 
                 let Some(header) = ItemHeader::read_new(
@@ -395,7 +395,13 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
                 .store_item_inner::<dyn Value>(data_buffer, key, item)
                 .await,
             repair = self.try_repair(data_buffer).await?
-        )
+        )?;
+        self.flash().flush().await.map_err(|e| Error::Storage {
+            value: e,
+            #[cfg(feature = "_test")]
+            backtrace: std::backtrace::Backtrace::capture(),
+        })?;
+        Ok(())
     }
 
     /// Same as [Self::store_item], except it doesn't turn the passed value generic into a trait object and passes it generically down the stack.
@@ -414,7 +420,13 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
         run_with_auto_repair!(
             function = self.store_item_inner::<V>(data_buffer, key, item).await,
             repair = self.try_repair(data_buffer).await?
-        )
+        )?;
+        self.flash().flush().await.map_err(|e| Error::Storage {
+            value: e,
+            #[cfg(feature = "_test")]
+            backtrace: std::backtrace::Backtrace::capture(),
+        })?;
+        Ok(())
     }
 
     async fn store_item_inner<'d, V: Value<'d> + ?Sized>(
@@ -471,8 +483,11 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
 
                 if item_data_length > u16::MAX as usize
                     || item_data_length
-                        > calculate_page_size::<S>()
-                            .saturating_sub(ItemHeader::data_address::<S>(0) as usize)
+                        > self
+                            .inner
+                            .calculate_page_data_size()
+                            .saturating_sub(ItemHeader::data_address(self.flash(), 0) as usize)
+                            as usize
                 {
                     self.inner.cache.unmark_dirty();
                     return Err(Error::ItemTooBig);
@@ -578,13 +593,17 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
         data_buffer: &mut [u8],
         search_key: &K,
     ) -> Result<(), Error<S::Error>>
-    where
-        S: MultiwriteNorFlash,
-    {
+where {
         run_with_auto_repair!(
             function = self.remove_item_inner(data_buffer, Some(search_key)).await,
             repair = self.try_repair(data_buffer).await?
-        )
+        )?;
+        self.flash().flush().await.map_err(|e| Error::Storage {
+            value: e,
+            #[cfg(feature = "_test")]
+            backtrace: std::backtrace::Backtrace::capture(),
+        })?;
+        Ok(())
     }
 
     /// Fully remove all stored items. Additional calls to fetch with any key will return None until
@@ -597,14 +616,20 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
     /// You might want to simply erase the flash range, e.g. if your flash does not implement [`MultiwriteNorFlash`].
     /// Consider using the helper method for that: [`Self::erase_all`].
     /// </div>
-    pub async fn remove_all_items(&mut self, data_buffer: &mut [u8]) -> Result<(), Error<S::Error>>
-    where
-        S: MultiwriteNorFlash,
-    {
+    pub async fn remove_all_items(
+        &mut self,
+        data_buffer: &mut [u8],
+    ) -> Result<(), Error<S::Error>> {
         run_with_auto_repair!(
             function = self.remove_item_inner(data_buffer, None).await,
             repair = self.try_repair(data_buffer).await?
-        )
+        )?;
+        self.flash().flush().await.map_err(|e| Error::Storage {
+            value: e,
+            #[cfg(feature = "_test")]
+            backtrace: std::backtrace::Backtrace::capture(),
+        })?;
+        Ok(())
     }
 
     /// If `search_key` is None, then all items will be removed
@@ -612,10 +637,13 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
         &mut self,
         data_buffer: &mut [u8],
         search_key: Option<&K>,
-    ) -> Result<(), Error<S::Error>>
-    where
-        S: MultiwriteNorFlash,
-    {
+    ) -> Result<(), Error<S::Error>> {
+        // Bail out early if the operation is not supported by the storage. Prevents both corrupting
+        // the cache and searching for the item when the operation cannot be completed anyway.
+        if !self.inner.flash.is_twiceand() {
+            return Err(Error::UnsupportedStorageOperation);
+        }
+
         if let Some(key) = &search_key {
             self.inner.cache.notice_key_erased(key);
         } else {
@@ -743,8 +771,7 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
     /// let mut data_buffer = [0; 128];
     ///
     /// // Create the iterator of map items
-    /// let mut iterator = storage.fetch_all_items(
-    ///     &mut data_buffer
+    /// let mut iterator = storage.fetch_all_items( &mut data_buffer
     /// )
     /// .await
     /// .unwrap();
@@ -878,11 +905,20 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
                     .await?;
                 next_page_write_address = found_item
                     .header
-                    .next_item_address::<S>(next_page_write_address);
+                    .next_item_address(self.flash(), next_page_write_address);
             }
         }
 
         self.inner.open_page(source_page).await?;
+        self.inner
+            .flash()
+            .flush()
+            .await
+            .map_err(|e| Error::Storage {
+                value: e,
+                #[cfg(feature = "_test")]
+                backtrace: std::backtrace::Backtrace::capture(),
+            })?;
 
         Ok(())
     }
@@ -926,6 +962,15 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
                     .await?;
             }
         }
+        self.inner
+            .flash()
+            .flush()
+            .await
+            .map_err(|e| Error::Storage {
+                value: e,
+                #[cfg(feature = "_test")]
+                backtrace: std::backtrace::Backtrace::capture(),
+            })?;
 
         Ok(())
     }
@@ -942,8 +987,8 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
     /// The associated data of each item is additionally padded to a full flash word size, but that's not part of this number.\
     /// This means the full item length is `returned number + (data length).next_multiple_of(S::WORD_SIZE)`.
     #[must_use]
-    pub const fn item_overhead_size() -> u32 {
-        GenericStorage::<S, C, K>::item_overhead_size()
+    pub fn item_overhead_size(&self) -> u32 {
+        self.inner.item_overhead_size()
     }
 
     /// Destroy the instance to get back the flash and the cache.
@@ -1031,7 +1076,7 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
 /// }
 /// # })
 /// ```
-pub struct MapItemIter<'s, K: Key, S: NorFlash, C: CacheImpl<K>> {
+pub struct MapItemIter<'s, K: Key, S: Storage, C: CacheImpl<K>> {
     storage: &'s mut MapStorage<K, S, C>,
     first_page: usize,
     current_page_index: usize,
@@ -1039,7 +1084,7 @@ pub struct MapItemIter<'s, K: Key, S: NorFlash, C: CacheImpl<K>> {
     _key: PhantomData<K>,
 }
 
-impl<K: Key, S: NorFlash, C: CacheImpl<K>> MapItemIter<'_, K, S, C> {
+impl<K: Key, S: Storage, C: CacheImpl<K>> MapItemIter<'_, K, S, C> {
     /// Get the next item in the iterator. Be careful that the given `data_buffer` should large enough to contain the serialized key and value.
     pub async fn next<'a, V: Value<'a>>(
         &mut self,

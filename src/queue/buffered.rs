@@ -29,7 +29,7 @@
 //! critical-section mutex so it can be enqueued to from an interrupt handler, and signals
 //! a drain task the moment data arrives.
 
-use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
+use unified_storage::Storage;
 
 use super::QueueStorage;
 use crate::{Error, cache::CacheImpl};
@@ -213,12 +213,12 @@ pub enum OverflowPolicy {
 /// ```
 ///
 /// For ISR-safe use, enable the `shared-ram-ring` feature and use [`SharedRamRing`] instead.
-pub struct BufferedQueue<S: NorFlash, C: CacheImpl<()>, const RAM_BYTES: usize> {
+pub struct BufferedQueue<S: Storage, C: CacheImpl<()>, const RAM_BYTES: usize> {
     storage: QueueStorage<S, C>,
     ram: RamRing<RAM_BYTES>,
 }
 
-impl<S: NorFlash, C: CacheImpl<()>, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_BYTES> {
+impl<S: Storage, C: CacheImpl<()>, const RAM_BYTES: usize> BufferedQueue<S, C, RAM_BYTES> {
     /// Wrap an existing [`QueueStorage`] with a RAM ring buffer.
     pub fn new(storage: QueueStorage<S, C>) -> Self {
         Self {
@@ -278,10 +278,7 @@ impl<S: NorFlash, C: CacheImpl<()>, const RAM_BYTES: usize> BufferedQueue<S, C, 
     pub async fn pop<'d>(
         &mut self,
         data_buffer: &'d mut [u8],
-    ) -> Result<Option<&'d mut [u8]>, Error<S::Error>>
-    where
-        S: MultiwriteNorFlash,
-    {
+    ) -> Result<Option<&'d mut [u8]>, Error<S::Error>> {
         // Reborrow so we can reuse data_buffer if flash returns None.
         let flash_len = self.storage.pop(&mut *data_buffer).await?.map(|s| s.len());
         if let Some(len) = flash_len {
@@ -431,7 +428,7 @@ impl<const N: usize> SharedRamRing<N> {
     ///
     /// The critical section is held only for the brief ring peek/discard; the slow flash
     /// write runs outside it.
-    pub async fn drain_one<S: NorFlash, C: CacheImpl<()>>(
+    pub async fn drain_one<S: Storage, C: CacheImpl<()>>(
         &self,
         storage: &mut QueueStorage<S, C>,
         scratch: &mut [u8],
@@ -451,7 +448,7 @@ impl<const N: usize> SharedRamRing<N> {
     /// Drain all ring items to flash.
     ///
     /// `scratch` must be large enough for the largest pending item.
-    pub async fn drain_all<S: NorFlash, C: CacheImpl<()>>(
+    pub async fn drain_all<S: Storage, C: CacheImpl<()>>(
         &self,
         storage: &mut QueueStorage<S, C>,
         scratch: &mut [u8],
@@ -469,7 +466,7 @@ impl<const N: usize> SharedRamRing<N> {
     ///     ring.wait_and_drain_all(&mut storage, &mut scratch, false).await.unwrap();
     /// }
     /// ```
-    pub async fn wait_and_drain_all<S: NorFlash, C: CacheImpl<()>>(
+    pub async fn wait_and_drain_all<S: Storage, C: CacheImpl<()>>(
         &self,
         storage: &mut QueueStorage<S, C>,
         scratch: &mut [u8],
@@ -480,7 +477,7 @@ impl<const N: usize> SharedRamRing<N> {
     }
 
     /// Pop the oldest item (drains ring to flash first to preserve ordering).
-    pub async fn pop<'d, S: MultiwriteNorFlash, C: CacheImpl<()>>(
+    pub async fn pop<'d, S: Storage, C: CacheImpl<()>>(
         &self,
         storage: &mut QueueStorage<S, C>,
         data_buffer: &'d mut [u8],
@@ -494,7 +491,7 @@ impl<const N: usize> SharedRamRing<N> {
     }
 
     /// Peek at the oldest item without removing it (drains ring to flash first).
-    pub async fn peek<'d, S: MultiwriteNorFlash, C: CacheImpl<()>>(
+    pub async fn peek<'d, S: Storage, C: CacheImpl<()>>(
         &self,
         storage: &mut QueueStorage<S, C>,
         data_buffer: &'d mut [u8],
