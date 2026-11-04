@@ -27,7 +27,7 @@ use core::ops::Range;
 use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
 
 use crate::{
-    AlignedBuf, Error, GenericStorage, MAX_WORD_SIZE, NorFlashExt, PageState,
+    AlignedBuf, Error, GenericStorage, MAX_WORD_SIZE, NorFlashExt,
     cache::{CacheImpl, SealedCacheImpl},
     calculate_page_address, calculate_page_end_address, calculate_page_index,
     round_down_to_alignment, round_down_to_alignment_usize, round_up_to_alignment,
@@ -528,28 +528,6 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
         }
     }
 
-    /// Checks if the page is open or closed with all items erased.
-    /// By definition a partial-open page is not empty since it can still be written.
-    ///
-    /// The page state can optionally be given if it's already known.
-    /// In that case the state will not be checked again.
-    pub(crate) async fn is_page_empty(
-        &mut self,
-        page_index: usize,
-        page_state: Option<PageState>,
-    ) -> Result<bool, Error<S::Error>> {
-        let page_state = match page_state {
-            Some(page_state) => page_state,
-            None => self.get_page_state_cached(page_index).await?,
-        };
-
-        match page_state {
-            PageState::Closed => Ok(!self.page_contains_live_data(page_index).await?),
-            PageState::PartialOpen => Ok(false),
-            PageState::Open => Ok(true),
-        }
-    }
-
     /// Checks if the page has any non-erased item
     pub(crate) async fn page_contains_live_data(
         &mut self,
@@ -571,6 +549,20 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
         .await?
         .0
         .is_some())
+    }
+
+    /// Checks if the page has any item
+    pub(crate) async fn page_contains_any_data(
+        &mut self,
+        page_index: usize,
+    ) -> Result<bool, Error<S::Error>> {
+        let page_data_start_address =
+            calculate_page_address::<S>(self.flash_range.clone(), page_index)
+                + S::WORD_SIZE as u32 * 2;
+        let page_data_end_address =
+            calculate_page_end_address::<S>(self.flash_range.clone(), page_index);
+
+        Ok(ItemHeader::read_new(&mut self.flash, page_data_start_address, page_data_end_address).await?.is_some())
     }
 }
 
