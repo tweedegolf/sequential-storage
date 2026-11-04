@@ -139,10 +139,9 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
 
         let page_data_start =
             crate::calculate_page_address::<Self>(Self::FULL_FLASH_RANGE, page_index)
-                + Self::WORD_SIZE as u32;
+                + Self::WORD_SIZE as u32 * 2;
         let page_data_end =
-            crate::calculate_page_end_address::<Self>(Self::FULL_FLASH_RANGE, page_index)
-                - Self::WORD_SIZE as u32;
+            crate::calculate_page_end_address::<Self>(Self::FULL_FLASH_RANGE, page_index);
 
         let mut found_item = None;
         let mut it = crate::item::ItemHeaderIter::new(page_data_start, page_data_end);

@@ -225,8 +225,7 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
             if let Some(cached_location) = self.inner.cache.key_location(search_key) {
                 let page_index = calculate_page_index::<S>(self.flash_range(), cached_location);
                 let page_data_end_address =
-                    calculate_page_end_address::<S>(self.flash_range(), page_index)
-                        - S::WORD_SIZE as u32;
+                    calculate_page_end_address::<S>(self.flash_range(), page_index);
 
                 let Some(header) = ItemHeader::read_new(
                     &mut self.inner.flash,
@@ -321,10 +320,9 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
         loop {
             let page_data_start_address =
                 calculate_page_address::<S>(self.flash_range(), current_page_to_check)
-                    + S::WORD_SIZE as u32;
+                    + S::WORD_SIZE as u32 * 2;
             let page_data_end_address =
-                calculate_page_end_address::<S>(self.flash_range(), current_page_to_check)
-                    - S::WORD_SIZE as u32;
+                calculate_page_end_address::<S>(self.flash_range(), current_page_to_check);
 
             let mut it = ItemIter::new(page_data_start_address, page_data_end_address);
             while let Some((item, address)) = it.next(&mut self.inner.flash, data_buffer).await? {
@@ -472,10 +470,9 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
 
                 let page_data_start_address =
                     calculate_page_address::<S>(self.flash_range(), partial_open_page)
-                        + S::WORD_SIZE as u32;
+                        + S::WORD_SIZE as u32 * 2;
                 let page_data_end_address =
-                    calculate_page_end_address::<S>(self.flash_range(), partial_open_page)
-                        - S::WORD_SIZE as u32;
+                    calculate_page_end_address::<S>(self.flash_range(), partial_open_page);
 
                 let key_len = key.serialize_into(data_buffer)?;
                 let item_data_length = key_len
@@ -670,10 +667,10 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
             }
 
             let page_data_start_address =
-                calculate_page_address::<S>(self.flash_range(), page_index) + S::WORD_SIZE as u32;
+                calculate_page_address::<S>(self.flash_range(), page_index)
+                    + S::WORD_SIZE as u32 * 2;
             let page_data_end_address =
-                calculate_page_end_address::<S>(self.flash_range(), page_index)
-                    - S::WORD_SIZE as u32;
+                calculate_page_end_address::<S>(self.flash_range(), page_index);
 
             // Go through all items on the page
             let mut item_headers =
@@ -835,9 +832,8 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
         )?;
 
         let start_address =
-            calculate_page_address::<S>(self.flash_range(), first_page) + S::WORD_SIZE as u32;
-        let end_address =
-            calculate_page_end_address::<S>(self.flash_range(), first_page) - S::WORD_SIZE as u32;
+            calculate_page_address::<S>(self.flash_range(), first_page) + S::WORD_SIZE as u32 * 2;
+        let end_address = calculate_page_end_address::<S>(self.flash_range(), first_page);
 
         Ok(MapItemIter {
             storage: self,
@@ -858,11 +854,11 @@ impl<S: NorFlash, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
         // doesn't have a newer value somewhere else.
 
         let mut next_page_write_address =
-            calculate_page_address::<S>(self.flash_range(), target_page) + S::WORD_SIZE as u32;
+            calculate_page_address::<S>(self.flash_range(), target_page) + S::WORD_SIZE as u32 * 2;
 
         let mut it = ItemIter::new(
-            calculate_page_address::<S>(self.flash_range(), source_page) + S::WORD_SIZE as u32,
-            calculate_page_end_address::<S>(self.flash_range(), source_page) - S::WORD_SIZE as u32,
+            calculate_page_address::<S>(self.flash_range(), source_page) + S::WORD_SIZE as u32 * 2,
+            calculate_page_end_address::<S>(self.flash_range(), source_page),
         );
         while let Some((item, item_address)) = it.next(&mut self.inner.flash, data_buffer).await? {
             let (key, _) = K::deserialize_from(item.data())?;
@@ -1101,11 +1097,11 @@ impl<K: Key, S: NorFlash, C: CacheImpl<K>> MapItemIter<'_, K, S, C> {
                             calculate_page_address::<S>(
                                 self.storage.inner.flash_range.clone(),
                                 self.current_page_index,
-                            ) + S::WORD_SIZE as u32,
+                            ) + S::WORD_SIZE as u32 * 2,
                             calculate_page_end_address::<S>(
                                 self.storage.inner.flash_range.clone(),
                                 self.current_page_index,
-                            ) - S::WORD_SIZE as u32,
+                            ),
                         );
                         break;
                     }
