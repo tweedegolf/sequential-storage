@@ -377,11 +377,11 @@ impl<S: Storage, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
             let page_data_start = self
                 .flash
                 .calculate_page_address(self.flash_range.clone(), page_index)
-                + self.flash.word_size() as u32;
+                + self.flash.word_size();
             let page_data_end = self
                 .flash
                 .calculate_page_end_address(self.flash_range.clone(), page_index)
-                - self.flash.word_size() as u32;
+                - self.flash.word_size();
 
             let mut it = crate::item::ItemHeaderIter::new(page_data_start, page_data_end);
             while let (Some(header), item_address) =

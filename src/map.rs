@@ -487,7 +487,6 @@ impl<S: Storage, C: CacheImpl<K>, K: Key> MapStorage<K, S, C> {
                             .inner
                             .calculate_page_data_size()
                             .saturating_sub(ItemHeader::data_address(self.flash(), 0) as usize)
-                            as usize
                 {
                     self.inner.cache.unmark_dirty();
                     return Err(Error::ItemTooBig);
