@@ -584,23 +584,23 @@ where
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Error::Storage { value, .. } => write!(f, "Storage error: {value}"),
-            Error::FullStorage => write!(f, "Storage is full"),
+            Error::Storage { value, .. } => write!(f, "storage error: {value}"),
+            Error::FullStorage => write!(f, "storage is full"),
             #[cfg(not(feature = "_test"))]
             Error::Corrupted { .. } => write!(f, "Storage is corrupted"),
             #[cfg(feature = "_test")]
-            Error::Corrupted { backtrace } => write!(f, "Storage is corrupted\n{backtrace}"),
+            Error::Corrupted { backtrace } => write!(f, "storage is corrupted\n{backtrace}"),
             #[cfg(not(feature = "_test"))]
             Error::LogicBug { .. } => write!(f, "Logic bug"),
             #[cfg(feature = "_test")]
-            Error::LogicBug { backtrace } => write!(f, "Logic bug\n{backtrace}"),
-            Error::BufferTooBig => write!(f, "A provided buffer was to big to be used"),
+            Error::LogicBug { backtrace } => write!(f, "logic bug\n{backtrace}"),
+            Error::BufferTooBig => write!(f, "a provided buffer was to big to be used"),
             Error::BufferTooSmall(needed) => write!(
                 f,
-                "A provided buffer was to small to be used. Needed was {needed}"
+                "a provided buffer was to small to be used. Needed was {needed}"
             ),
-            Error::SerializationError(value) => write!(f, "Map value error: {value}"),
-            Error::ItemTooBig => write!(f, "The item is too big to fit in the flash"),
+            Error::SerializationError(value) => write!(f, "map value error: {value}"),
+            Error::ItemTooBig => write!(f, "the item is too big to fit in the flash"),
         }
     }
 }
