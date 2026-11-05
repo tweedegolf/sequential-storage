@@ -29,9 +29,8 @@ use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
 use crate::{
     AlignedBuf, Error, GenericStorage, MAX_WORD_SIZE, NorFlashExt, PageState,
     cache::{CacheImpl, SealedCacheImpl},
-    calculate_page_address, calculate_page_end_address, calculate_page_index,
-    round_down_to_alignment, round_down_to_alignment_usize, round_up_to_alignment,
-    round_up_to_alignment_usize,
+    calculate_page_index, round_down_to_alignment, round_down_to_alignment_usize,
+    round_up_to_alignment, round_up_to_alignment_usize,
 };
 
 #[derive(Debug, Clone)]
@@ -555,11 +554,8 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
         &mut self,
         page_index: usize,
     ) -> Result<bool, Error<S::Error>> {
-        let page_data_start_address =
-            calculate_page_address::<S>(self.flash_range.clone(), page_index) + S::WORD_SIZE as u32;
-        let page_data_end_address =
-            calculate_page_end_address::<S>(self.flash_range.clone(), page_index)
-                - S::WORD_SIZE as u32;
+        let page_data_start_address = self.page_data_start_address(page_index);
+        let page_data_end_address = self.page_data_end_address(page_index);
 
         Ok(ItemHeaderIter::new(
             self.cache
