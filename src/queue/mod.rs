@@ -98,7 +98,7 @@ pub enum QueueConfigError {
 /// // Initialize the flash. This can be internal or external
 /// let mut flash = init_flash();
 ///
-/// let mut storage = QueueStorage::new(flash, const { QueueConfig::new(0x1000..0x3000) }, Cache::new_uncached());
+/// let mut storage = QueueStorage::new(QueueConfig::new(flash, 0x1000..0x3000), Cache::new_uncached());
 /// // We need to give the crate a buffer to work with.
 /// // It must be big enough to serialize the biggest value of your storage type in.
 /// let mut data_buffer = [0; 128];
@@ -905,8 +905,10 @@ mod tests {
     #[test]
     async fn peek_and_overwrite_old_data() {
         let mut storage = QueueStorage::new(
-            MockFlashTiny::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x00..0x40) },
+            QueueConfig::new(
+                MockFlashTiny::new(WriteCountCheck::Twice, None, true),
+                0x00..0x40,
+            ),
             Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -980,8 +982,10 @@ mod tests {
     #[test]
     async fn push_pop() {
         let mut storage = QueueStorage::new(
-            MockFlashBig::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x000..0x1000) },
+            QueueConfig::new(
+                MockFlashBig::new(WriteCountCheck::Twice, None, true),
+                0x000..0x1000,
+            ),
             Cache::new_uncached(),
         );
 
@@ -1013,8 +1017,10 @@ mod tests {
     #[test]
     async fn iter_pop_out_of_order() {
         let mut storage = QueueStorage::new(
-            MockFlashBig::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x000..0x1000) },
+            QueueConfig::new(
+                MockFlashBig::new(WriteCountCheck::Twice, None, true),
+                0x000..0x1000,
+            ),
             Cache::new_uncached(),
         );
 
@@ -1050,8 +1056,10 @@ mod tests {
     #[test]
     async fn push_pop_tiny() {
         let mut storage = QueueStorage::new(
-            MockFlashTiny::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x00..0x40) },
+            QueueConfig::new(
+                MockFlashTiny::new(WriteCountCheck::Twice, None, true),
+                0x00..0x40,
+            ),
             Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -1087,8 +1095,10 @@ mod tests {
     /// Same as [push_lots_then_pop_lots], except with added peeking and using the iterator style
     async fn push_peek_pop_many() {
         let mut storage = QueueStorage::new(
-            MockFlashBig::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x000..0x1000) },
+            QueueConfig::new(
+                MockFlashBig::new(WriteCountCheck::Twice, None, true),
+                0x000..0x1000,
+            ),
             Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -1240,8 +1250,10 @@ mod tests {
     #[test]
     async fn push_lots_then_pop_lots() {
         let mut storage = QueueStorage::new(
-            MockFlashBig::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x000..0x1000) },
+            QueueConfig::new(
+                MockFlashBig::new(WriteCountCheck::Twice, None, true),
+                0x000..0x1000,
+            ),
             Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -1321,8 +1333,10 @@ mod tests {
     #[test]
     async fn pop_with_empty_section() {
         let mut storage = QueueStorage::new(
-            MockFlashTiny::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x00..0x40) },
+            QueueConfig::new(
+                MockFlashTiny::new(WriteCountCheck::Twice, None, true),
+                0x00..0x40,
+            ),
             Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -1348,8 +1362,10 @@ mod tests {
     #[test]
     async fn search_pages() {
         let mut storage = QueueStorage::new(
-            MockFlashBig::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x000..0x1000) },
+            QueueConfig::new(
+                MockFlashBig::new(WriteCountCheck::Twice, None, true),
+                0x000..0x1000,
+            ),
             Cache::new_uncached(),
         );
 
@@ -1364,8 +1380,10 @@ mod tests {
     #[test]
     async fn store_too_big_item() {
         let mut storage = QueueStorage::new(
-            MockFlashBig::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x000..0x1000) },
+            QueueConfig::new(
+                MockFlashBig::new(WriteCountCheck::Twice, None, true),
+                0x000..0x1000,
+            ),
             Cache::new_uncached(),
         );
 
@@ -1385,8 +1403,10 @@ mod tests {
     #[test]
     async fn push_on_single_page() {
         let mut storage = QueueStorage::new(
-            mock_flash::MockFlashBase::<1, 4, 256>::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x000..0x400) },
+            QueueConfig::new(
+                mock_flash::MockFlashBase::<1, 4, 256>::new(WriteCountCheck::Twice, None, true),
+                0x000..0x400,
+            ),
             Cache::new_uncached(),
         );
 
@@ -1404,8 +1424,10 @@ mod tests {
     #[test]
     async fn push_pop_on_single_page_without_overwrite() {
         let mut storage = QueueStorage::new(
-            mock_flash::MockFlashBase::<1, 4, 1024>::new(WriteCountCheck::Twice, None, true),
-            QueueConfig::new(0x0000..0x1000),
+            QueueConfig::new(
+                mock_flash::MockFlashBase::<1, 4, 1024>::new(WriteCountCheck::Twice, None, true),
+                0x0000..0x1000,
+            ),
             Cache::new_uncached(),
         );
         let mut buf = [0; 80];

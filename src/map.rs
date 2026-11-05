@@ -107,7 +107,7 @@ pub enum MapConfigError {
 /// // We also put the config in a const block so if the config is bad we'll get a compile time error
 ///
 /// // With the generics we specify that this is a map with `u8` as the key
-/// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000) }, Cache::new_uncached());
+/// let mut storage = MapStorage::<u8, _, _>::new(MapConfig::new(flash, 0x1000..0x3000), Cache::new_uncached());
 ///
 /// // We need to give the crate a buffer to work with.
 /// // It must be big enough to serialize the biggest value of your storage type in,
@@ -767,7 +767,7 @@ where {
     /// # block_on(async {
     /// let mut flash = init_flash();
     ///
-    /// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000) }, Cache::new_uncached());
+    /// let mut storage = MapStorage::<u8, _, _>::new(MapConfig::new(flash, 0x1000..0x3000), Cache::new_uncached());
     /// let mut data_buffer = [0; 128];
     ///
     /// // Create the iterator of map items
@@ -1051,7 +1051,7 @@ where {
 /// # block_on(async {
 /// let mut flash = init_flash();
 ///
-/// let mut storage = MapStorage::<u8, _, _>::new(flash, const { MapConfig::new(0x1000..0x3000) }, Cache::new_uncached());
+/// let mut storage = MapStorage::<u8, _, _>::new(MapConfig::new(flash, 0x1000..0x3000), Cache::new_uncached());
 /// let mut data_buffer = [0; 128];
 ///
 /// // Create the iterator of map items
@@ -1484,8 +1484,7 @@ mod tests {
     #[test]
     async fn store_and_fetch() {
         let mut storage = MapStorage::<u8, _, _>::new(
-            MockFlashBig::default(),
-            MapConfig::new(0x000..0x1000),
+            MapConfig::new(MockFlashBig::default(), 0x000..0x1000),
             Cache::new_uncached(),
         );
 
@@ -1593,8 +1592,7 @@ mod tests {
         const UPPER_BOUND: u8 = 3;
 
         let mut storage = MapStorage::new(
-            MockFlashTiny::default(),
-            const { MapConfig::new(0x00..0x40) },
+            MapConfig::new(MockFlashTiny::default(), 0x00..0x40),
             Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1637,8 +1635,7 @@ mod tests {
         const UPPER_BOUND: u8 = 68;
 
         let mut storage = MapStorage::new(
-            MockFlashBig::default(),
-            const { MapConfig::new(0x0000..0x1000) },
+            MapConfig::new(MockFlashBig::default(), 0x0000..0x1000),
             Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1679,8 +1676,10 @@ mod tests {
     #[test]
     async fn store_many_items_big() {
         let mut storage = MapStorage::new(
-            mock_flash::MockFlashBase::<4, 1, 4096>::default(),
-            const { MapConfig::new(0x0000..0x4000) },
+            MapConfig::new(
+                mock_flash::MockFlashBase::<4, 1, 4096>::default(),
+                0x0000..0x4000,
+            ),
             Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1720,12 +1719,14 @@ mod tests {
     #[test]
     async fn remove_items() {
         let mut storage = MapStorage::new(
-            mock_flash::MockFlashBase::<4, 1, 4096>::new(
-                mock_flash::WriteCountCheck::Twice,
-                None,
-                true,
+            MapConfig::new(
+                mock_flash::MockFlashBase::<4, 1, 4096>::new(
+                    mock_flash::WriteCountCheck::Twice,
+                    None,
+                    true,
+                ),
+                0x0000..0x4000,
             ),
-            const { MapConfig::new(0x0000..0x4000) },
             Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1783,12 +1784,14 @@ mod tests {
     #[test]
     async fn remove_all() {
         let mut storage = MapStorage::new(
-            mock_flash::MockFlashBase::<4, 1, 4096>::new(
-                mock_flash::WriteCountCheck::Twice,
-                None,
-                true,
+            MapConfig::new(
+                mock_flash::MockFlashBase::<4, 1, 4096>::new(
+                    mock_flash::WriteCountCheck::Twice,
+                    None,
+                    true,
+                ),
+                0x0000..0x4000,
             ),
-            const { MapConfig::new(0x0000..0x4000) },
             Cache::new_uncached(),
         );
         let mut data_buffer = AlignedBuf([0; 128]);
@@ -1832,8 +1835,10 @@ mod tests {
     #[test]
     async fn store_too_big_item() {
         let mut storage = MapStorage::new(
-            MockFlashBig::new(mock_flash::WriteCountCheck::Twice, None, true),
-            const { MapConfig::new(0x000..0x1000) },
+            MapConfig::new(
+                MockFlashBig::new(mock_flash::WriteCountCheck::Twice, None, true),
+                0x000..0x1000,
+            ),
             Cache::new_uncached(),
         );
 
@@ -1854,8 +1859,7 @@ mod tests {
     async fn item_iterator() {
         const UPPER_BOUND: u8 = 64;
         let mut storage = MapStorage::new(
-            MockFlashBig::default(),
-            const { MapConfig::new(0x000..0x1000) },
+            MapConfig::new(MockFlashBig::default(), 0x000..0x1000),
             Cache::new_uncached(),
         );
 
@@ -1909,8 +1913,10 @@ mod tests {
         // Get the storage in a state where we have a closed page and then an open page.
         // This can only happen with a cancelled future/shutoff at the exact right moment.
         let mut storage = MapStorage::new(
-            MockFlashBig::new(mock_flash::WriteCountCheck::Disabled, Some(9168), false),
-            const { MapConfig::new(0x000..0x1000) },
+            MapConfig::new(
+                MockFlashBig::new(mock_flash::WriteCountCheck::Disabled, Some(9168), false),
+                0x000..0x1000,
+            ),
             Cache::new_uncached(),
         );
         let mut buf = [0; 32];
@@ -1953,7 +1959,8 @@ mod tests {
         std::assert_matches!(
             storage.remove_item(&mut buf, &()).await,
             Err(Error::Storage {
-                value: mock_flash::MockFlashError::EarlyShutoff(_, mock_flash::Operation::Write)
+                value: mock_flash::MockFlashError::EarlyShutoff(_, mock_flash::Operation::Write),
+                ..
             })
         );
 
@@ -1969,8 +1976,7 @@ mod tests {
     #[test]
     async fn store_unit_key() {
         let mut storage = MapStorage::new(
-            MockFlashBig::default(),
-            const { MapConfig::new(0x000..0x1000) },
+            MapConfig::new(MockFlashBig::default(), 0x000..0x1000),
             Cache::new_uncached(),
         );
 
@@ -2041,8 +2047,7 @@ mod tests {
         fn assert_sync<T: Sync + Send>(_: T) {}
 
         let mut storage = MapStorage::new(
-            MockFlashBig::default(),
-            const { MapConfig::new(0x000..0x1000) },
+            MapConfig::new(MockFlashBig::default(), 0x000..0x1000),
             Cache::new_uncached(),
         );
 

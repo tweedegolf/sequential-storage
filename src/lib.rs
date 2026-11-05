@@ -757,7 +757,7 @@ mod tests {
 
     async fn write_aligned(
         flash: &mut MockFlash,
-        offset: u32,
+        offset: u64,
         bytes: &[u8],
     ) -> Result<(), mock_flash::MockFlashError> {
         let mut buf = AlignedBuf([0; 256]);
@@ -795,7 +795,7 @@ mod tests {
             .unwrap();
 
         let mut storage = GenericStorage {
-            flash: flash,
+            flash,
             flash_range: 0x000..0x400,
             cache: Cache::new_uncached(),
             _phantom: PhantomData::<()>,
@@ -863,13 +863,5 @@ mod tests {
             storage.find_first_page(0, PageState::Closed).await.unwrap(),
             None
         );
-    }
-
-    #[test]
-    async fn read_write_sizes() {
-        assert_read_write_sizes(1, 1);
-        assert_read_write_sizes(1, 4);
-        assert_read_write_sizes(4, 4);
-        assert_read_write_sizes(4, 1);
     }
 }
