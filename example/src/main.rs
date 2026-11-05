@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![deny(warnings)]
 
 use core::ops::Range;
 
