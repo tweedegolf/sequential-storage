@@ -21,6 +21,8 @@ embedded-storage-async = "0.4.1"
 
 sequential-storage = { path = "../", features = ["defmt"] }
 
+unified-storage = { git = "https://github.com/bergzand/unified-storage", rev = "11b36e509f817bff32ff9d0e2cba2313c89c45d8", default-features = false}
+
 [profile.release]
 lto = true
 debug = true

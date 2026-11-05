@@ -398,6 +398,7 @@ dependencies = [
  "embedded-storage-async",
  "panic-probe",
  "sequential-storage",
+ "unified-storage",
 ]
 
 [[package]]
@@ -637,7 +638,7 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 [[package]]
 name = "unified-storage"
 version = "0.1.0"
-source = "git+https://github.com/diondokter/unified-storage/#f1f65ee8c12d13109a6ae45240e839c735c550bb"
+source = "git+https://github.com/bergzand/unified-storage?rev=11b36e509f817bff32ff9d0e2cba2313c89c45d8#11b36e509f817bff32ff9d0e2cba2313c89c45d8"
 dependencies = [
  "embedded-storage-async",
 ]

@@ -1,12 +1,10 @@
 #![no_std]
 #![no_main]
-#![deny(warnings)]
 
 use core::ops::Range;
 
 use defmt::unwrap;
 use embassy_executor::Spawner;
-use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 use sequential_storage::{
     cache::{
         Cache, CacheImpl, Uncached, key_pointers::ArrayKeyPointers,
@@ -26,10 +24,10 @@ async fn main(_spawner: Spawner) {
 
     let flash = embassy_nrf::nvmc::Nvmc::new(p.NVMC);
     let flash = embassy_embedded_hal::adapter::BlockingAsync::new(flash);
+    let flash = unified_storage::MultiWriteNorFlash::wrap(flash);
 
     let mut queue_storage = QueueStorage::new(
-        flash,
-        const { QueueConfig::new(QUEUE_FLASH_RANGE) },
+        QueueConfig::new(flash, QUEUE_FLASH_RANGE),
         Cache::new(
             ArrayPageStates::<4>::new(),
             ArrayPagePointers::<4>::new(),
@@ -42,8 +40,7 @@ async fn main(_spawner: Spawner) {
     let (flash, _) = queue_storage.destroy();
 
     let mut map_storage = MapStorage::new(
-        flash,
-        const { MapConfig::new(MAP_FLASH_RANGE) },
+        MapConfig::new(flash, MAP_FLASH_RANGE),
         Cache::new(
             ArrayPageStates::<4>::new(),
             ArrayPagePointers::<4>::new(),
@@ -58,7 +55,7 @@ async fn main(_spawner: Spawner) {
 }
 
 async fn run_queue<E: defmt::Format>(
-    storage: &mut QueueStorage<impl MultiwriteNorFlash<Error = E>, impl CacheImpl<()>>,
+    storage: &mut QueueStorage<impl unified_storage::Storage<Error = E>, impl CacheImpl<()>>,
 ) {
     unwrap!(storage.erase_all().await);
 
@@ -80,7 +77,7 @@ async fn run_queue<E: defmt::Format>(
 }
 
 async fn run_map<E: defmt::Format>(
-    storage: &mut MapStorage<u8, impl MultiwriteNorFlash<Error = E>, impl CacheImpl<u8>>,
+    storage: &mut MapStorage<u8, impl unified_storage::Storage<Error = E>, impl CacheImpl<u8>>,
 ) {
     unwrap!(storage.erase_all().await);
 
