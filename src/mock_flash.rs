@@ -18,6 +18,7 @@ enum Writable {
 }
 
 use Writable::*;
+use unified_storage::{Storage, StorageLayout, WriteBehavior};
 
 /// Base type for in memory flash that can be used for mocking.
 #[derive(Debug, Clone)]
@@ -126,7 +127,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
     /// - If true, the item is present and fine.
     /// - If false, the item is corrupt or erased.
     pub async fn get_item_presence(&mut self, target_item_address: u32) -> Option<bool> {
-        use crate::NorFlashExt;
+        use crate::StorageExt as _;
 
         if !Self::FULL_FLASH_RANGE.contains(&target_item_address) {
             return None;
@@ -134,20 +135,17 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
 
         let mut buf = [0; 1024 * 16];
 
-        let page_index =
-            crate::calculate_page_index::<Self>(Self::FULL_FLASH_RANGE, target_item_address);
+        let page_index = self.calculate_page_index(Self::FULL_FLASH_RANGE, target_item_address);
 
         let page_data_start =
-            crate::calculate_page_address::<Self>(Self::FULL_FLASH_RANGE, page_index)
-                + Self::WORD_SIZE as u32;
-        let page_data_end =
-            crate::calculate_page_end_address::<Self>(Self::FULL_FLASH_RANGE, page_index)
-                - Self::WORD_SIZE as u32;
+            self.calculate_page_address(Self::FULL_FLASH_RANGE, page_index) + BYTES_PER_WORD as u32;
+        let page_data_end = self.calculate_page_end_address(Self::FULL_FLASH_RANGE, page_index)
+            - BYTES_PER_WORD as u32;
 
         let mut found_item = None;
         let mut it = crate::item::ItemHeaderIter::new(page_data_start, page_data_end);
         while let (Some(header), item_address) = it.traverse(self, |_, _| false).await.unwrap() {
-            let next_item_address = header.next_item_address::<Self>(item_address);
+            let next_item_address = header.next_item_address(self, item_address);
 
             if (item_address..next_item_address).contains(&target_item_address) {
                 let maybe_item = header
@@ -293,6 +291,73 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
             }
         }
 
+        Ok(())
+    }
+}
+
+impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> Storage
+    for MockFlashBase<PAGES, BYTES_PER_WORD, PAGE_WORDS>
+{
+    type Error = MockFlashError;
+
+    fn uniform_layout(&self) -> bool {
+        true
+    }
+
+    fn layout(&self, addr: u64) -> Option<unified_storage::StorageLayout> {
+        if addr >= Storage::capacity(self) {
+            return None;
+        }
+
+        let behavior = match self.write_count_check {
+            WriteCountCheck::OnceOnly => WriteBehavior::Once,
+            WriteCountCheck::TwiceDifferent => WriteBehavior::TwiceAnd,
+            WriteCountCheck::Twice => WriteBehavior::TwiceAnd,
+            WriteCountCheck::TwiceWithZero => WriteBehavior::TwiceSecondZero,
+            WriteCountCheck::Disabled => WriteBehavior::InfiniteAnd,
+        };
+
+        Some(StorageLayout::Nor {
+            behavior,
+            min_write: BYTES_PER_WORD as u32,
+            sector: (PAGE_WORDS * BYTES_PER_WORD) as u32,
+        })
+    }
+
+    fn erase_value(&self) -> unified_storage::EraseValue {
+        unified_storage::EraseValue::AllOnes
+    }
+
+    fn capacity(&self) -> u64 {
+        Self::CAPACITY_BYTES as u64
+    }
+
+    async fn read(&mut self, offset: u64, bytes: &mut [u8]) -> Result<(), Self::Error> {
+        let offset = offset
+            .try_into()
+            .expect("offset fits in u32 for embedded-storage");
+
+        ReadNorFlash::read(self, offset, bytes).await
+    }
+
+    async fn erase(&mut self, offset: u64, length: u64) -> Result<(), Self::Error> {
+        let from = offset
+            .try_into()
+            .expect("offset fits in u32 for embedded-storage");
+        let to = (offset + length)
+            .try_into()
+            .expect("offset + length fits in u32 for embedded-storage");
+        NorFlash::erase(self, from, to).await
+    }
+
+    async fn write(&mut self, offset: u64, bytes: &[u8]) -> Result<(), Self::Error> {
+        let offset = offset
+            .try_into()
+            .expect("offset fits in u32 for embedded-storage");
+        NorFlash::write(self, offset, bytes).await
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
 }

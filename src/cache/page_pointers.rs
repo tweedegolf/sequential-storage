@@ -5,24 +5,24 @@ extern crate alloc;
 
 use core::{fmt::Debug, num::NonZeroU32, ops::Range};
 
-use embedded_storage_async::nor_flash::NorFlash;
+use unified_storage::Storage;
 
-use crate::{
-    NorFlashExt, PageState, calculate_page_address, calculate_page_index, item::ItemHeader,
-};
+use crate::{PageState, StorageExt, item::ItemHeader};
 
 pub(crate) trait SealedPagePointersCache {
     fn first_item_after_erased(&self, page_index: usize) -> Option<u32>;
     fn first_item_after_written(&self, page_index: usize) -> Option<u32>;
 
-    fn notice_item_written<S: NorFlash>(
+    fn notice_item_written<S: Storage>(
         &mut self,
+        flash: &S,
         flash_range: Range<u32>,
         item_address: u32,
         item_header: &ItemHeader,
     );
-    fn notice_item_erased<S: NorFlash>(
+    fn notice_item_erased<S: Storage>(
         &mut self,
+        flash: &S,
         flash_range: Range<u32>,
         item_address: u32,
         item_header: &ItemHeader,
@@ -84,24 +84,26 @@ impl<const PAGE_COUNT: usize> SealedPagePointersCache for ArrayPagePointers<PAGE
             .map(NonZeroU32::get)
     }
 
-    fn notice_item_written<S: NorFlash>(
+    fn notice_item_written<S: Storage>(
         &mut self,
+        flash: &S,
         flash_range: Range<u32>,
         item_address: u32,
         item_header: &ItemHeader,
     ) {
         self.as_tracked_mut()
-            .notice_item_written::<S>(flash_range, item_address, item_header);
+            .notice_item_written(flash, flash_range, item_address, item_header);
     }
 
-    fn notice_item_erased<S: NorFlash>(
+    fn notice_item_erased<S: Storage>(
         &mut self,
+        flash: &S,
         flash_range: Range<u32>,
         item_address: u32,
         item_header: &ItemHeader,
     ) {
         self.as_tracked_mut()
-            .notice_item_erased::<S>(flash_range, item_address, item_header);
+            .notice_item_erased(flash, flash_range, item_address, item_header);
     }
 
     fn notice_page_state(&mut self, page_index: usize, new_state: PageState) {
@@ -160,24 +162,26 @@ impl SealedPagePointersCache for HeapPagePointers {
             .map(NonZeroU32::get)
     }
 
-    fn notice_item_written<S: NorFlash>(
+    fn notice_item_written<S: Storage>(
         &mut self,
+        flash: &S,
         flash_range: Range<u32>,
         item_address: u32,
         item_header: &ItemHeader,
     ) {
         self.as_tracked()
-            .notice_item_written::<S>(flash_range, item_address, item_header);
+            .notice_item_written(flash, flash_range, item_address, item_header);
     }
 
-    fn notice_item_erased<S: NorFlash>(
+    fn notice_item_erased<S: Storage>(
         &mut self,
+        flash: &S,
         flash_range: Range<u32>,
         item_address: u32,
         item_header: &ItemHeader,
     ) {
         self.as_tracked()
-            .notice_item_erased::<S>(flash_range, item_address, item_header);
+            .notice_item_erased(flash, flash_range, item_address, item_header);
     }
 
     fn notice_page_state(&mut self, page_index: usize, new_state: PageState) {
@@ -215,15 +219,16 @@ impl SealedPagePointersCache for TrackedPagePointers<'_> {
             .map(NonZeroU32::get)
     }
 
-    fn notice_item_written<S: NorFlash>(
+    fn notice_item_written<S: Storage>(
         &mut self,
+        flash: &S,
         flash_range: Range<u32>,
         item_address: u32,
         item_header: &ItemHeader,
     ) {
-        let page_index = calculate_page_index::<S>(flash_range, item_address);
+        let page_index = flash.calculate_page_index(flash_range, item_address);
 
-        let next_item_address = item_header.next_item_address::<S>(item_address);
+        let next_item_address = item_header.next_item_address(flash, item_address);
 
         // We only care about the furthest written item, so discard if this is an earlier item
         if let Some(first_item_after_written) = self.first_item_after_written(page_index) {
@@ -237,23 +242,24 @@ impl SealedPagePointersCache for TrackedPagePointers<'_> {
         }
     }
 
-    fn notice_item_erased<S: NorFlash>(
+    fn notice_item_erased<S: Storage>(
         &mut self,
+        flash: &S,
         flash_range: Range<u32>,
         item_address: u32,
         item_header: &ItemHeader,
     ) {
-        let page_index = calculate_page_index::<S>(flash_range.clone(), item_address);
+        let page_index = flash.calculate_page_index(flash_range.clone(), item_address);
 
         // Either the item we point to or the first item on the page
         let next_unerased_item = self.first_item_after_erased(page_index).unwrap_or_else(|| {
-            calculate_page_address::<S>(flash_range, page_index) + S::WORD_SIZE as u32
+            flash.calculate_page_address(flash_range, page_index) + flash.word_size()
         });
 
         if item_address == next_unerased_item {
             if let Some(after_erased_pointer) = self.after_erased_pointers.get_mut(page_index) {
                 *after_erased_pointer =
-                    NonZeroU32::new(item_header.next_item_address::<S>(item_address));
+                    NonZeroU32::new(item_header.next_item_address(flash, item_address));
             }
         }
     }

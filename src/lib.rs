@@ -9,8 +9,8 @@ use core::{
     marker::PhantomData,
     ops::{Deref, DerefMut, Range},
 };
-use embedded_storage_async::nor_flash::NorFlash;
 use map::SerializationError;
+use unified_storage::Storage;
 
 #[cfg(feature = "alloc")]
 mod alloc_impl;
@@ -43,26 +43,32 @@ const MAX_WORD_SIZE: usize = 32;
 /// - queue: [`queue::QueueStorage::new`]
 ///
 /// You can [`Self::destroy`] this type to get back the flash and the cache.
-struct GenericStorage<S: NorFlash, C: CacheImpl<KEY>, KEY> {
+struct GenericStorage<S: Storage, C: CacheImpl<KEY>, KEY> {
     flash: S,
     flash_range: Range<u32>,
     cache: C,
     _phantom: PhantomData<KEY>,
 }
 
-impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
+impl<S: Storage, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
     /// Resets the flash in the entire given flash range.
     ///
     /// This is just a thin helper function as it just calls the flash's erase function.
     pub async fn erase_all(&mut self) -> Result<(), Error<S::Error>> {
         self.flash
-            .erase(self.flash_range.start, self.flash_range.end)
+            .erase(self.flash_range.start as u64, self.flash_range.len() as u64)
             .await
             .map_err(|e| Error::Storage {
                 value: e,
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
-            })
+            })?;
+        self.flash.flush().await.map_err(|e| Error::Storage {
+            value: e,
+            #[cfg(feature = "_test")]
+            backtrace: std::backtrace::Backtrace::capture(),
+        })?;
+        Ok(())
     }
 
     /// Get the minimal overhead size per stored item for the given flash type.
@@ -70,8 +76,8 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
     /// The associated data of each item is additionally padded to a full flash word size, but that's not part of this number.\
     /// This means the full item length is `returned number + (data length).next_multiple_of(S::WORD_SIZE)`.
     #[must_use]
-    pub const fn item_overhead_size() -> u32 {
-        item::ItemHeader::data_address::<S>(0)
+    pub fn item_overhead_size(&self) -> u32 {
+        item::ItemHeader::data_address(&self.flash, 0)
     }
 
     async fn try_general_repair(&mut self) -> Result<(), Error<S::Error>> {
@@ -136,7 +142,7 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
     }
 
     fn page_count(&self) -> NonZeroUsize {
-        let page_count = self.flash_range.len() / S::ERASE_SIZE;
+        let page_count = self.flash.page_count(self.flash_range.clone());
         // Do a max 1 on the page count to prevent a panic. We know it's never 0 because it's checked in the constructor, but the compiler doesn't know
         NonZeroUsize::new(page_count.max(1)).unwrap()
     }
@@ -195,22 +201,26 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
 
     /// Get the state of the page located at the given index
     async fn get_page_state(&mut self, page_index: usize) -> Result<PageState, Error<S::Error>> {
-        let page_address = calculate_page_address::<S>(self.flash_range.clone(), page_index);
+        let page_address =
+            self.flash
+                .calculate_page_address(self.flash_range.clone(), page_index) as u64;
         /// We only care about the data in the first byte to aid shutdown/cancellation.
         /// But we also don't want it to be too too definitive because we want to survive the occasional bitflip.
         /// So only half of the byte needs to be zero.
         const HALF_MARKER_BITS: u32 = 4;
 
+        // Enforced by the current tests.
         let mut buffer = [0; MAX_WORD_SIZE];
+        let read_size = self.flash.word_size() as usize;
         self.flash
-            .read(page_address, &mut buffer[..S::READ_SIZE])
+            .read(page_address, &mut buffer[..read_size])
             .await
             .map_err(|e| Error::Storage {
                 value: e,
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
             })?;
-        let start_marked = buffer[..S::READ_SIZE]
+        let start_marked = buffer[..read_size]
             .iter()
             .map(|marker_byte| marker_byte.count_zeros())
             .sum::<u32>()
@@ -218,8 +228,8 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
 
         self.flash
             .read(
-                page_address + (S::ERASE_SIZE - S::READ_SIZE) as u32,
-                &mut buffer[..S::READ_SIZE],
+                page_address + (self.flash.erase_size() - read_size as u32) as u64,
+                &mut buffer[..read_size],
             )
             .await
             .map_err(|e| Error::Storage {
@@ -227,7 +237,7 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
             })?;
-        let end_marked = buffer[..S::READ_SIZE]
+        let end_marked = buffer[..read_size]
             .iter()
             .map(|marker_byte| marker_byte.count_zeros())
             .sum::<u32>()
@@ -254,12 +264,18 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
         self.cache
             .notice_page_state(page_index, PageState::Open, true);
 
-        let page_address = calculate_page_address::<S>(self.flash_range.clone(), page_index);
-        let page_end_address =
-            calculate_page_end_address::<S>(self.flash_range.clone(), page_index);
+        let page_address = self
+            .flash
+            .calculate_page_address(self.flash_range.clone(), page_index);
+        let page_end_address = self
+            .flash
+            .calculate_page_end_address(self.flash_range.clone(), page_index);
 
         self.flash
-            .erase(page_address, page_end_address)
+            .erase(
+                page_address as u64,
+                (page_end_address - page_address) as u64,
+            )
             .await
             .map_err(|e| Error::Storage {
                 value: e,
@@ -282,12 +298,13 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
             .notice_page_state(page_index, PageState::Closed, true);
 
         let buffer = AlignedBuf([MARKER; MAX_WORD_SIZE]);
-        let page_end_address =
-            calculate_page_end_address::<S>(self.flash_range.clone(), page_index)
-                - S::WORD_SIZE as u32;
+        let page_end_address = self
+            .flash
+            .calculate_page_end_address(self.flash_range.clone(), page_index)
+            - self.flash.word_size();
         // Close the end marker
         self.flash
-            .write(page_end_address, &buffer[..S::WORD_SIZE])
+            .write(page_end_address as u64, &buffer[..self.flash.word_usize()])
             .await
             .map_err(|e| Error::Storage {
                 value: e,
@@ -317,10 +334,15 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
         self.cache.notice_page_state(page_index, new_state, true);
 
         let buffer = AlignedBuf([MARKER; MAX_WORD_SIZE]);
-        let page_start_address = calculate_page_address::<S>(self.flash_range.clone(), page_index);
+        let page_start_address = self
+            .flash
+            .calculate_page_address(self.flash_range.clone(), page_index);
         // Close the start marker
         self.flash
-            .write(page_start_address, &buffer[..S::WORD_SIZE])
+            .write(
+                page_start_address as u64,
+                &buffer[..self.flash.word_usize()],
+            )
             .await
             .map_err(|e| Error::Storage {
                 value: e,
@@ -334,7 +356,6 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
     #[cfg(any(test, feature = "std", fuzzing))]
     /// Print all items in flash to the returned string
     pub async fn print_items(&mut self) -> String {
-        use crate::NorFlashExt;
         use std::fmt::Write;
 
         let mut buf = [0; 1024 * 16];
@@ -353,18 +374,20 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
                 },
             )
             .unwrap();
-            let page_data_start =
-                crate::calculate_page_address::<S>(self.flash_range.clone(), page_index)
-                    + S::WORD_SIZE as u32;
-            let page_data_end =
-                crate::calculate_page_end_address::<S>(self.flash_range.clone(), page_index)
-                    - S::WORD_SIZE as u32;
+            let page_data_start = self
+                .flash
+                .calculate_page_address(self.flash_range.clone(), page_index)
+                + self.flash.word_size();
+            let page_data_end = self
+                .flash
+                .calculate_page_end_address(self.flash_range.clone(), page_index)
+                - self.flash.word_size();
 
             let mut it = crate::item::ItemHeaderIter::new(page_data_start, page_data_end);
             while let (Some(header), item_address) =
                 it.traverse(&mut self.flash, |_, _| false).await.unwrap()
             {
-                let next_item_address = header.next_item_address::<S>(item_address);
+                let next_item_address = header.next_item_address(&self.flash, item_address);
                 let maybe_item = match header
                     .read_item(&mut self.flash, &mut buf, item_address, page_data_end)
                     .await
@@ -411,11 +434,15 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
     }
 
     pub(crate) fn page_data_start_address(&self, page_index: usize) -> u32 {
-        calculate_page_address::<S>(self.flash_range.clone(), page_index) + S::WORD_SIZE as u32
+        self.flash
+            .calculate_page_address(self.flash_range(), page_index)
+            + self.flash.word_size()
     }
 
     pub(crate) fn page_data_end_address(&self, page_index: usize) -> u32 {
-        calculate_page_end_address::<S>(self.flash_range.clone(), page_index) - S::WORD_SIZE as u32
+        self.flash
+            .calculate_page_end_address(self.flash_range(), page_index)
+            - self.flash.word_size()
     }
 
     pub(crate) fn iter_page_items(&self, page_index: usize) -> item::ItemIter {
@@ -424,54 +451,11 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
             self.page_data_end_address(page_index),
         )
     }
-}
 
-/// Round up the the given number to align with the wordsize of the flash.
-/// If the number is already aligned, it is not changed.
-const fn round_up_to_alignment<S: NorFlash>(value: u32) -> u32 {
-    value.next_multiple_of(S::WORD_SIZE as u32)
-}
-
-/// Round up the the given number to align with the wordsize of the flash.
-/// If the number is already aligned, it is not changed.
-const fn round_up_to_alignment_usize<S: NorFlash>(value: usize) -> usize {
-    value.next_multiple_of(S::WORD_SIZE)
-}
-
-/// Round down the the given number to align with the wordsize of the flash.
-/// If the number is already aligned, it is not changed.
-const fn round_down_to_alignment<S: NorFlash>(value: u32) -> u32 {
-    let alignment = S::WORD_SIZE as u32;
-    (value / alignment) * alignment
-}
-
-/// Round down the the given number to align with the wordsize of the flash.
-/// If the number is already aligned, it is not changed.
-const fn round_down_to_alignment_usize<S: NorFlash>(value: usize) -> usize {
-    round_down_to_alignment::<S>(value as u32) as usize
-}
-
-/// Calculate the first address of the given page
-const fn calculate_page_address<S: NorFlash>(flash_range: Range<u32>, page_index: usize) -> u32 {
-    flash_range.start + (S::ERASE_SIZE * page_index) as u32
-}
-
-/// Calculate the last address (exclusive) of the given page
-const fn calculate_page_end_address<S: NorFlash>(
-    flash_range: Range<u32>,
-    page_index: usize,
-) -> u32 {
-    flash_range.start + (S::ERASE_SIZE * (page_index + 1)) as u32
-}
-
-/// Get the page index from any address located inside that page
-const fn calculate_page_index<S: NorFlash>(flash_range: Range<u32>, address: u32) -> usize {
-    (address - flash_range.start) as usize / S::ERASE_SIZE
-}
-
-const fn calculate_page_size<S: NorFlash>() -> usize {
-    // Page minus the two page status words
-    S::ERASE_SIZE - S::WORD_SIZE * 2
+    pub(crate) fn calculate_page_data_size(&self) -> usize {
+        // Page minus the two page status words
+        self.flash.erase_usize() - self.flash.word_usize() * 2
+    }
 }
 
 /// The marker being used for page states
@@ -531,6 +515,9 @@ pub enum Error<S> {
         /// Backtrace made at the construction of the error
         backtrace: std::backtrace::Backtrace,
     },
+    /// The Operation not supported by the storage. For example, the function requires InfiniteAnd
+    /// as write behaviour and the storage does not support this.
+    UnsupportedStorageOperation,
     /// The item cannot be stored anymore because the storage is full.
     FullStorage,
     /// It's been detected that the memory is likely corrupted.
@@ -601,6 +588,9 @@ where
             ),
             Error::SerializationError(value) => write!(f, "map value error: {value}"),
             Error::ItemTooBig => write!(f, "the item is too big to fit in the flash"),
+            Error::UnsupportedStorageOperation => {
+                write!(f, "the storage does not support the required operation")
+            }
         }
     }
 }
@@ -623,30 +613,113 @@ impl<const SIZE: usize> DerefMut for AlignedBuf<SIZE> {
     }
 }
 
-/// Extension trait to get the overall word size, which is the largest of the write and read word size
-trait NorFlashExt {
-    /// The largest of the write and read word size
-    const WORD_SIZE: usize;
+trait StorageExt {
+    fn word_size(&self) -> u32;
+
+    fn word_usize(&self) -> usize;
+
+    fn erase_size(&self) -> u32;
+    fn erase_usize(&self) -> usize;
+    /// Returns true if the storage supports [`WriteBehaviour::TwiceAnd`] (or better).
+    fn is_twiceand(&self) -> bool;
+
+    /// Round up the the given number to align with the wordsize of the storage.
+    /// If the number is already aligned, it is not changed.
+    fn round_up_to_alignment(&self, value: u32) -> u32;
+
+    /// Round up the the given number to align with the wordsize of the storage.
+    /// If the number is already aligned, it is not changed.
+    fn round_up_to_alignment_usize(&self, value: usize) -> usize;
+
+    /// Round down the the given number to align with the wordsize of the flash.
+    /// If the number is already aligned, it is not changed.
+    fn round_down_to_alignment(&self, value: u32) -> u32;
+
+    /// Round down the the given number to align with the wordsize of the flash.
+    /// If the number is already aligned, it is not changed.
+    fn round_down_to_alignment_usize(&self, value: usize) -> usize;
+
+    /// Calculate the first address of the given page
+    fn calculate_page_address(&self, flash_range: Range<u32>, page_index: usize) -> u32;
+
+    /// Get the page index from any address located inside that page
+    fn calculate_page_index(&self, flash_range: Range<u32>, address: u32) -> usize;
+
+    /// Calculate the last address (exclusive) of the given page
+    fn calculate_page_end_address(&self, flash_range: Range<u32>, page_index: usize) -> u32;
+
+    /// Returns the number of pages in the flash.
+    fn page_count(&self, flash_range: Range<u32>) -> usize;
 }
 
-impl<S: NorFlash> NorFlashExt for S {
-    const WORD_SIZE: usize = {
-        assert_read_write_sizes(Self::WRITE_SIZE, Self::READ_SIZE);
+impl<S: Storage> StorageExt for S {
+    fn word_size(&self) -> u32 {
+        assert!(self.uniform_layout());
+        let layout = self.layout(0).expect("no layout at address 0");
+        layout.min_write_size()
+    }
 
-        if Self::WRITE_SIZE > Self::READ_SIZE {
-            Self::WRITE_SIZE
-        } else {
-            Self::READ_SIZE
+    fn word_usize(&self) -> usize {
+        self.word_size() as usize
+    }
+
+    fn erase_size(&self) -> u32 {
+        assert!(self.uniform_layout());
+        let layout = self.layout(0).expect("no layout at address 0");
+        layout.erase_size()
+    }
+    fn erase_usize(&self) -> usize {
+        self.erase_size() as usize
+    }
+
+    fn is_twiceand(&self) -> bool {
+        let layout = self.layout(0).expect("no layout at address 0");
+        match layout {
+            unified_storage::StorageLayout::Nor {
+                behavior:
+                    unified_storage::WriteBehavior::TwiceAnd
+                    | unified_storage::WriteBehavior::InfiniteAnd,
+                ..
+            } => true,
+            unified_storage::StorageLayout::Nand { .. } => false,
+            unified_storage::StorageLayout::Block { .. } => false,
+            unified_storage::StorageLayout::Ram => true,
+            _ => false,
         }
-    };
-}
+    }
 
-#[track_caller]
-const fn assert_read_write_sizes(write_size: usize, read_size: usize) {
-    assert!(
-        write_size.is_multiple_of(read_size) || read_size.is_multiple_of(write_size),
-        "Only flash with read and write sizes that are multiple of each other are supported"
-    );
+    fn round_up_to_alignment(&self, value: u32) -> u32 {
+        value.next_multiple_of(self.word_size())
+    }
+
+    fn round_up_to_alignment_usize(&self, value: usize) -> usize {
+        value.next_multiple_of(self.word_size() as usize)
+    }
+
+    fn round_down_to_alignment(&self, value: u32) -> u32 {
+        let alignment = self.word_size();
+        (value / alignment) * alignment
+    }
+
+    fn round_down_to_alignment_usize(&self, value: usize) -> usize {
+        self.round_down_to_alignment(value as u32) as usize
+    }
+
+    fn calculate_page_address(&self, flash_range: Range<u32>, page_index: usize) -> u32 {
+        flash_range.start + (self.erase_size() * page_index as u32)
+    }
+
+    fn calculate_page_index(&self, flash_range: Range<u32>, address: u32) -> usize {
+        (address - flash_range.start) as usize / self.erase_size() as usize
+    }
+
+    fn calculate_page_end_address(&self, flash_range: Range<u32>, page_index: usize) -> u32 {
+        self.calculate_page_address(flash_range, page_index + 1)
+    }
+
+    fn page_count(&self, flash_range: Range<u32>) -> usize {
+        flash_range.len() / self.erase_usize()
+    }
 }
 
 macro_rules! run_with_auto_repair {
@@ -687,7 +760,7 @@ mod tests {
 
     async fn write_aligned(
         flash: &mut MockFlash,
-        offset: u32,
+        offset: u64,
         bytes: &[u8],
     ) -> Result<(), mock_flash::MockFlashError> {
         let mut buf = AlignedBuf([0; 256]);
@@ -725,7 +798,7 @@ mod tests {
             .unwrap();
 
         let mut storage = GenericStorage {
-            flash: flash,
+            flash,
             flash_range: 0x000..0x400,
             cache: Cache::new_uncached(),
             _phantom: PhantomData::<()>,
@@ -793,13 +866,5 @@ mod tests {
             storage.find_first_page(0, PageState::Closed).await.unwrap(),
             None
         );
-    }
-
-    #[test]
-    async fn read_write_sizes() {
-        assert_read_write_sizes(1, 1);
-        assert_read_write_sizes(1, 4);
-        assert_read_write_sizes(4, 4);
-        assert_read_write_sizes(4, 1);
     }
 }

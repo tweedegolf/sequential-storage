@@ -108,8 +108,14 @@ mod queue_tests {
 
     async fn run_test(cache: impl CacheImpl<()>) -> FlashStatsResult {
         let mut storage = QueueStorage::new(
-            mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true),
-            const { QueueConfig::new(0x00..0x400) },
+            QueueConfig::new(
+                mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(
+                    WriteCountCheck::Twice,
+                    None,
+                    true,
+                ),
+                0x00..0x400,
+            ),
             cache,
         );
         let mut data_buffer = AlignedBuf([0; 1024]);
@@ -294,8 +300,14 @@ mod map_tests {
 
     async fn run_test(cache: impl CacheImpl<u16>) -> FlashStatsResult {
         let mut storage = MapStorage::new(
-            mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(WriteCountCheck::Twice, None, true),
-            const { MapConfig::new(0x00..0x400) },
+            MapConfig::new(
+                mock_flash::MockFlashBase::<NUM_PAGES, 1, 256>::new(
+                    WriteCountCheck::Twice,
+                    None,
+                    true,
+                ),
+                0x00..0x400,
+            ),
             cache,
         );
         let mut data_buffer = AlignedBuf([0; 128]);

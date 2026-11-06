@@ -24,13 +24,12 @@
 use core::num::{NonZero, NonZeroU32};
 use core::ops::Range;
 
-use embedded_storage_async::nor_flash::{MultiwriteNorFlash, NorFlash};
+use unified_storage::Storage;
 
+use crate::StorageExt;
 use crate::{
-    AlignedBuf, Error, GenericStorage, MAX_WORD_SIZE, NorFlashExt, PageState,
+    AlignedBuf, Error, GenericStorage, MAX_WORD_SIZE, PageState,
     cache::{CacheImpl, SealedCacheImpl},
-    calculate_page_index, round_down_to_alignment, round_down_to_alignment_usize,
-    round_up_to_alignment, round_up_to_alignment_usize,
 };
 
 #[derive(Debug, Clone)]
@@ -50,13 +49,13 @@ impl ItemHeader {
     /// Read the header from the flash at the given address.
     ///
     /// If the item doesn't exist or doesn't fit between the address and the end address, none is returned.
-    pub(crate) async fn read_new<S: NorFlash>(
+    pub(crate) async fn read_new<S: Storage>(
         flash: &mut S,
         address: u32,
         end_address: u32,
     ) -> Result<Option<Self>, Error<S::Error>> {
         let mut buffer = [0; MAX_WORD_SIZE];
-        let header_slice_len = round_up_to_alignment_usize::<S>(Self::LENGTH);
+        let header_slice_len = flash.round_up_to_alignment_usize(Self::LENGTH);
 
         if address + header_slice_len as u32 > end_address {
             return Ok(None);
@@ -65,7 +64,7 @@ impl ItemHeader {
         let mut retry = false;
         loop {
             flash
-                .read(address, &mut buffer[..header_slice_len])
+                .read(address as u64, &mut buffer[..header_slice_len])
                 .await
                 .map_err(|e| Error::Storage {
                     value: e,
@@ -106,7 +105,7 @@ impl ItemHeader {
             },
         };
 
-        if header.next_item_address::<S>(address) > end_address {
+        if header.next_item_address(flash, address) > end_address {
             // We have a header here that's claims it's larger than is possible
             // This is never written. So either it's a bug or there's a CRC collision
             // Let's assume the latter
@@ -119,7 +118,7 @@ impl ItemHeader {
         Ok(Some(header))
     }
 
-    pub(crate) async fn read_item<'d, S: NorFlash>(
+    pub(crate) async fn read_item<'d, S: Storage>(
         self,
         flash: &mut S,
         data_buffer: &'d mut [u8],
@@ -129,8 +128,8 @@ impl ItemHeader {
         match self.crc {
             None => Ok(MaybeItem::Erased(self, data_buffer)),
             Some(header_crc) => {
-                let data_address = ItemHeader::data_address::<S>(address);
-                let read_len = round_up_to_alignment_usize::<S>(self.length as usize);
+                let data_address = ItemHeader::data_address(flash, address);
+                let read_len = flash.round_up_to_alignment_usize(self.length as usize);
                 if data_address + read_len as u32 > end_address {
                     return Ok(MaybeItem::Corrupted(self, data_buffer));
                 }
@@ -142,7 +141,7 @@ impl ItemHeader {
                 loop {
                     if read_len != 0 {
                         flash
-                            .read(data_address, &mut data_buffer[..read_len])
+                            .read(data_address as u64, &mut data_buffer[..read_len])
                             .await
                             .map_err(|e| Error::Storage {
                                 value: e,
@@ -171,7 +170,7 @@ impl ItemHeader {
         }
     }
 
-    async fn write<S: NorFlash>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
+    async fn write<S: Storage>(&self, flash: &mut S, address: u32) -> Result<(), Error<S::Error>> {
         let mut buffer = AlignedBuf([0xFF; MAX_WORD_SIZE]);
 
         buffer[Self::DATA_CRC_FIELD]
@@ -182,8 +181,8 @@ impl ItemHeader {
 
         flash
             .write(
-                address,
-                &buffer[..round_up_to_alignment_usize::<S>(Self::LENGTH)],
+                address as u64,
+                &buffer[..flash.round_up_to_alignment_usize(Self::LENGTH)],
             )
             .await
             .map_err(|e| Error::Storage {
@@ -191,38 +190,50 @@ impl ItemHeader {
                 #[cfg(feature = "_test")]
                 backtrace: std::backtrace::Backtrace::capture(),
             })
+        // Intentionally not flushed here, callers must flush the write.
     }
 
     /// Erase this item by setting the crc to none and overwriting the header with it
-    pub(crate) async fn erase_data<S: MultiwriteNorFlash>(
+    pub(crate) async fn erase_data<S: Storage>(
         mut self,
         flash: &mut S,
         flash_range: Range<u32>,
         cache: &mut impl SealedCacheImpl,
         address: u32,
     ) -> Result<Self, Error<S::Error>> {
-        self.crc = None;
-        cache.notice_item_erased::<S>(flash_range.clone(), address, &self);
-        self.write(flash, address).await?;
-        Ok(self)
+        // TODO: TwiceAnd as restriction is only necessary when the write size is more than 4 bytes,
+        // with less than 4 bytes, TwiceSecondZero is sufficient.
+        if flash.is_twiceand() {
+            self.crc = None;
+            cache.notice_item_erased(flash, flash_range.clone(), address, &self);
+            self.write(flash, address).await?;
+            flash.flush().await.map_err(|e| Error::Storage {
+                value: e,
+                #[cfg(feature = "_test")]
+                backtrace: std::backtrace::Backtrace::capture(),
+            })?;
+            Ok(self)
+        } else {
+            Err(Error::UnsupportedStorageOperation)
+        }
     }
 
     /// Get the address of the start of the data for this item
-    pub(crate) const fn data_address<S: NorFlash>(address: u32) -> u32 {
-        address + round_up_to_alignment::<S>(Self::LENGTH as u32)
+    pub(crate) fn data_address<S: Storage>(flash: &S, address: u32) -> u32 {
+        address + flash.round_up_to_alignment(Self::LENGTH as u32)
     }
 
     /// Get the location of the next item in flash
-    pub(crate) const fn next_item_address<S: NorFlash>(&self, address: u32) -> u32 {
-        let data_address = ItemHeader::data_address::<S>(address);
-        data_address + round_up_to_alignment::<S>(self.length as u32)
+    pub(crate) fn next_item_address<S: Storage>(&self, flash: &S, address: u32) -> u32 {
+        let data_address = ItemHeader::data_address(flash, address);
+        data_address + flash.round_up_to_alignment(self.length as u32)
     }
 
     /// Calculates the amount of bytes available for data.
     /// Essentially, it's the given amount minus the header and minus some alignment padding.
-    pub(crate) const fn available_data_bytes<S: NorFlash>(total_available: u32) -> Option<u32> {
-        let data_start = Self::data_address::<S>(0);
-        let data_end = round_down_to_alignment::<S>(total_available);
+    pub(crate) fn available_data_bytes<S: Storage>(flash: &S, total_available: u32) -> Option<u32> {
+        let data_start = Self::data_address(flash, 0);
+        let data_end = flash.round_down_to_alignment(total_available);
 
         data_end.checked_sub(data_start)
     }
@@ -263,7 +274,7 @@ impl<'d> Item<'d> {
         (self.header, self.item_data_buffer)
     }
 
-    pub(crate) async fn write_new<S: NorFlash>(
+    pub(crate) async fn write_new<S: Storage>(
         flash: &mut S,
         flash_range: Range<u32>,
         cache: &mut impl SealedCacheImpl,
@@ -280,7 +291,7 @@ impl<'d> Item<'d> {
         Ok(header)
     }
 
-    async fn write_raw<S: NorFlash>(
+    async fn write_raw<S: Storage>(
         flash: &mut S,
         flash_range: Range<u32>,
         cache: &mut impl SealedCacheImpl,
@@ -288,11 +299,11 @@ impl<'d> Item<'d> {
         data: &[u8],
         address: u32,
     ) -> Result<(), Error<S::Error>> {
-        cache.notice_item_written::<S>(flash_range, address, header);
+        cache.notice_item_written(flash, flash_range, address, header);
         header.write(flash, address).await?;
 
         let Some((data_block, data_left)) =
-            data.split_at_checked(round_down_to_alignment_usize::<S>(data.len()))
+            data.split_at_checked(flash.round_down_to_alignment_usize(data.len()))
         else {
             debug_assert!(false);
             return Err(Error::LogicBug {
@@ -301,10 +312,10 @@ impl<'d> Item<'d> {
             });
         };
 
-        let data_address = ItemHeader::data_address::<S>(address);
+        let data_address = ItemHeader::data_address(flash, address);
         if !data_block.is_empty() {
             flash
-                .write(data_address, data_block)
+                .write(data_address as u64, data_block)
                 .await
                 .map_err(|e| Error::Storage {
                     value: e,
@@ -316,7 +327,7 @@ impl<'d> Item<'d> {
         if !data_left.is_empty() {
             let mut buffer = AlignedBuf([0; MAX_WORD_SIZE]);
 
-            let extend_len = round_up_to_alignment_usize::<S>(data_left.len());
+            let extend_len = flash.round_up_to_alignment_usize(data_left.len());
 
             if extend_len > buffer.len() {
                 debug_assert!(false);
@@ -329,7 +340,7 @@ impl<'d> Item<'d> {
             buffer[..data_left.len()].copy_from_slice(data_left);
             flash
                 .write(
-                    data_address + data_block.len() as u32,
+                    (data_address + data_block.len() as u32) as u64,
                     &buffer[..extend_len],
                 )
                 .await
@@ -340,10 +351,17 @@ impl<'d> Item<'d> {
                 })?;
         }
 
+        // Flush to guarantee written data
+        flash.flush().await.map_err(|e| Error::Storage {
+            value: e,
+            #[cfg(feature = "_test")]
+            backtrace: std::backtrace::Backtrace::capture(),
+        })?;
+
         Ok(())
     }
 
-    pub(crate) async fn write<S: NorFlash>(
+    pub(crate) async fn write<S: Storage>(
         &self,
         flash: &mut S,
         flash_range: Range<u32>,
@@ -486,7 +504,7 @@ fn crc32_with_initial(data: &[u8], initial: u32) -> u32 {
     !crc
 }
 
-impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
+impl<S: Storage, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
     /// Scans through the items to find the first spot that is free to store a new item.
     ///
     /// - `end_address` is exclusive.
@@ -496,7 +514,9 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
         end_address: u32,
         data_length: u32,
     ) -> Result<Option<u32>, Error<S::Error>> {
-        let page_index = calculate_page_index::<S>(self.flash_range.clone(), start_address);
+        let page_index = self
+            .flash
+            .calculate_page_index(self.flash_range.clone(), start_address);
 
         let free_item_address = match self.cache.first_item_after_written(page_index) {
             Some(free_item_address) => free_item_address,
@@ -515,7 +535,7 @@ impl<S: NorFlash, C: CacheImpl<KEY>, KEY> GenericStorage<S, C, KEY> {
         };
 
         if let Some(available) =
-            ItemHeader::available_data_bytes::<S>(end_address - free_item_address)
+            ItemHeader::available_data_bytes(&self.flash, end_address - free_item_address)
         {
             if available >= data_length {
                 Ok(Some(free_item_address))
@@ -581,7 +601,7 @@ impl ItemIter {
         }
     }
 
-    pub(crate) async fn next<'d, S: NorFlash>(
+    pub(crate) async fn next<'d, S: Storage>(
         &mut self,
         flash: &mut S,
         data_buffer: &'d mut [u8],
@@ -619,7 +639,7 @@ impl ItemHeaderIter {
     }
 
     /// Fetch next item
-    pub(crate) async fn next<S: NorFlash>(
+    pub(crate) async fn next<S: Storage>(
         &mut self,
         flash: &mut S,
     ) -> Result<(Option<ItemHeader>, u32), Error<S::Error>> {
@@ -630,7 +650,7 @@ impl ItemHeaderIter {
     /// the element is skipped and traversal continues.
     ///
     /// If the end of the headers is reached, a `None` item header is returned.
-    pub(crate) async fn traverse<S: NorFlash>(
+    pub(crate) async fn traverse<S: Storage>(
         &mut self,
         flash: &mut S,
         callback: impl Fn(&ItemHeader, u32) -> bool,
@@ -638,7 +658,7 @@ impl ItemHeaderIter {
         loop {
             match ItemHeader::read_new(flash, self.current_address, self.end_address).await {
                 Ok(Some(header)) => {
-                    let next_address = header.next_item_address::<S>(self.current_address);
+                    let next_address = header.next_item_address(flash, self.current_address);
                     if callback(&header, self.current_address) {
                         self.current_address = next_address;
                     } else {
@@ -651,7 +671,7 @@ impl ItemHeaderIter {
                     return Ok((None, self.current_address));
                 }
                 Err(Error::Corrupted { .. }) => {
-                    self.current_address += S::WORD_SIZE as u32;
+                    self.current_address += flash.word_size();
                 }
                 Err(e) => return Err(e),
             }
