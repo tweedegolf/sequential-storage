@@ -650,23 +650,26 @@ const fn assert_read_write_sizes(write_size: usize, read_size: usize) {
 }
 
 macro_rules! run_with_auto_repair {
-    (function = $function:expr, repair = $repair_function:expr) => {
-        match $function {
-            Err(Error::Corrupted {
-                #[cfg(feature = "_test")]
-                    backtrace: _backtrace,
-                ..
-            }) => {
-                #[cfg(all(feature = "_test", fuzzing))]
-                eprintln!(
-                    "### Encountered corruption! Repairing now. Originated from:\n{_backtrace:#}"
-                );
-                $repair_function;
-                $function
+    (function = $function:expr, repair = $repair_function:expr) => {{
+        let mut repaired = false;
+        loop {
+            match $function {
+                Err(Error::Corrupted {
+                    #[cfg(feature = "_test")]
+                        backtrace: _backtrace,
+                    ..
+                }) if !repaired => {
+                    #[cfg(all(feature = "_test", fuzzing))]
+                    eprintln!(
+                        "### Encountered corruption! Repairing now. Originated from:\n{_backtrace:#}"
+                    );
+                    repaired = true;
+                    $repair_function;
+                }
+                val => break val,
             }
-            val => val,
         }
-    };
+    }};
 }
 
 pub(crate) use run_with_auto_repair;
