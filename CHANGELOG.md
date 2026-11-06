@@ -5,6 +5,7 @@
 ## Unreleased
 
 - `sequential_storage::Error` now implements `Clone`
+- Cache types can now be passed by mutable reference (`&mut Cache`), so a cache can be borrowed instead of moved into the storage
 
 ## 8.0.2 - 01-10-26
 
