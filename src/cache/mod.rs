@@ -3,7 +3,7 @@
 use core::marker::PhantomData;
 use core::{fmt::Debug, ops::Range};
 
-use embedded_storage_async::nor_flash::NorFlash;
+use unified_storage::Storage;
 
 use crate::cache::key_pointers::KeyPointersCache;
 use crate::cache::page_pointers::SealedPagePointersCache;
@@ -44,15 +44,17 @@ pub(crate) trait SealedCacheImpl {
     /// Get the cached address of the first free unwritten item in the requested page.
     fn first_item_after_written(&mut self, page_index: usize) -> Option<u32>;
     /// Let the cache know that an item has been written to flash
-    fn notice_item_written<S: NorFlash>(
+    fn notice_item_written<S: Storage>(
         &mut self,
+        flash: &S,
         flash_range: Range<u32>,
         item_address: u32,
         item_header: &ItemHeader,
     );
     /// Let the cache know that an item has been erased from flash
-    fn notice_item_erased<S: NorFlash>(
+    fn notice_item_erased<S: Storage>(
         &mut self,
+        flash: &S,
         flash_range: Range<u32>,
         item_address: u32,
         item_header: &ItemHeader,
@@ -177,27 +179,29 @@ impl<PAGE: PageStatesCache, POINTERS: PagePointersCache, KEYS: KeyPointersCache<
     }
 
     /// Let the cache know that an item has been written to flash
-    fn notice_item_written<S: NorFlash>(
+    fn notice_item_written<S: Storage>(
         &mut self,
+        flash: &S,
         flash_range: Range<u32>,
         item_address: u32,
         item_header: &ItemHeader,
     ) {
         self.mark_dirty();
         self.page_pointers
-            .notice_item_written::<S>(flash_range, item_address, item_header);
+            .notice_item_written(flash, flash_range, item_address, item_header);
     }
 
     /// Let the cache know that an item has been erased from flash
-    fn notice_item_erased<S: NorFlash>(
+    fn notice_item_erased<S: Storage>(
         &mut self,
+        flash: &S,
         flash_range: Range<u32>,
         item_address: u32,
         item_header: &ItemHeader,
     ) {
         self.mark_dirty();
         self.page_pointers
-            .notice_item_erased::<S>(flash_range, item_address, item_header);
+            .notice_item_erased(flash, flash_range, item_address, item_header);
     }
 
     fn invalidate_cache_state(&mut self) {
@@ -353,15 +357,17 @@ impl SealedPagePointersCache for Uncached {
     fn first_item_after_written(&self, _page_index: usize) -> Option<u32> {
         None
     }
-    fn notice_item_written<S: NorFlash>(
+    fn notice_item_written<S: Storage>(
         &mut self,
+        _flash: &S,
         _flash_range: Range<u32>,
         _item_address: u32,
         _item_header: &ItemHeader,
     ) {
     }
-    fn notice_item_erased<S: NorFlash>(
+    fn notice_item_erased<S: Storage>(
         &mut self,
+        _flash: &S,
         _flash_range: Range<u32>,
         _item_address: u32,
         _item_header: &ItemHeader,
