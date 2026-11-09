@@ -6,6 +6,7 @@
 
 - `sequential_storage::Error` now implements `Clone`
 - Cache types can now be passed by mutable reference (`&mut Cache`), so a cache can be borrowed instead of moved into the storage
+- `Cache::new` can now be called in const contexts
 
 ## 8.0.2 - 01-10-26
 
